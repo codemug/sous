@@ -15,19 +15,25 @@ import (
 )
 
 type Server struct {
-	mgr  *deploy.Manager
-	cat  *catalog.Catalog
-	tpl  *template.Template
+	mgr *deploy.Manager
+	cat *catalog.Catalog
+	tpl *template.Template
+
 	pool float64
-	mux  *http.ServeMux
+	// hubDir is the HuggingFace cache under the model directory. The larder
+	// scans it per request: the disk is the source of truth, and caching it
+	// would drift from reality the first time anything is deleted by hand.
+	hubDir string
+
+	mux *http.ServeMux
 }
 
-func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64) (http.Handler, error) {
+func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir string) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, mux: http.NewServeMux()}
+	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir, mux: http.NewServeMux()}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -38,7 +44,10 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64) (http.Handler, 
 	s.mux.HandleFunc("GET /api/plan/{id}", s.plan)
 	s.mux.HandleFunc("POST /api/deploy/{id}", s.deploy)
 	s.mux.HandleFunc("POST /api/undeploy/{id}", s.undeploy)
+	s.mux.HandleFunc("GET /api/larder", s.listLarder)
+	s.mux.HandleFunc("POST /api/larder/delete", s.deleteWeights)
 	s.mux.HandleFunc("GET /deployments", s.pageDeployments)
+	s.mux.HandleFunc("GET /larder", s.pageLarder)
 	s.mux.HandleFunc("GET /", s.pageCatalog)
 	return s.mux, nil
 }

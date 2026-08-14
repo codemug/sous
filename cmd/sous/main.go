@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/codemug/sous/internal/capacity"
 	"github.com/codemug/sous/internal/catalog"
@@ -70,7 +71,9 @@ func main() {
 		DropCaches: dropCaches,
 	}
 
-	h, err := httpapi.New(mgr, cat, mem.TotalGiB)
+	// The larder scans MODEL_DIR/hub, which is where huggingface_hub
+	// places snapshots under the HF_HOME bind mount.
+	h, err := httpapi.New(mgr, cat, mem.TotalGiB, filepath.Join(cfg.ModelDir, "hub"))
 	if err != nil {
 		log.Fatalf("http: %v", err)
 	}

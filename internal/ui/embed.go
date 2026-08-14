@@ -21,5 +21,11 @@ func Templates() (*template.Template, error) {
 			}
 			return fmtGiB(f)
 		},
+		// gibOf converts measured bytes for display. The larder measures in
+		// bytes because that is what the filesystem reports; every number in
+		// this project is quoted in GiB.
+		"gibOf": func(b int64) float64 {
+			return float64(b) / (1024 * 1024 * 1024)
+		},
 	}).ParseFS(files, "templates/*.html")
 }

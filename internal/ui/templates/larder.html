@@ -1,0 +1,54 @@
+{{define "larder"}}{{template "head" .}}
+<p class="note">What is actually on disk, reconciled against the catalog. Sizes are measured
+by walking the tree, not read from a model card — the card describes the repo,
+the disk holds what landed. On this fleet that distinction was worth 206 GB.</p>
+
+{{if .Message}}<p class="note{{if .IsError}} warn{{end}}">{{.Message}}</p>{{end}}
+
+<p class="note"><strong>{{.LarderTotal}}</strong> on disk ·
+<strong>{{.Reclaimable}}</strong> reclaimable without force</p>
+
+<div class="wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Repository</th><th class="n">Size</th><th>State</th>
+      <th>Referenced by</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Larder}}
+    <tr>
+      <td><strong>{{.Repo}}</strong></td>
+      <td class="n">{{printf "%.2f GiB" (gibOf .Bytes)}}</td>
+      <td>
+        {{if eq .State "referenced"}}<span class="tag t-kind">in use</span>
+        {{else if eq .State "protected"}}<span class="tag t-arch">rollback</span>
+        {{else}}<span class="tag" style="color:var(--warn)">stale</span>{{end}}
+      </td>
+      <td class="sub">
+        {{if .ReferencedBy}}{{range .ReferencedBy}}{{.}} {{end}}{{else}}—{{end}}
+      </td>
+      <td>
+        {{if eq .State "referenced"}}
+          <span class="sub">protected</span>
+        {{else if eq .State "protected"}}
+          <form method="post" action="/api/larder/delete?repo={{.Repo}}&amp;force=true"
+                style="margin:0"
+                onsubmit="return confirm('These are rollback weights. Deleting them turns a redeploy into a re-download during an outage. Continue?')">
+            <button type="submit">Force delete</button>
+          </form>
+        {{else}}
+          <form method="post" action="/api/larder/delete?repo={{.Repo}}" style="margin:0">
+            <button type="submit">Delete</button>
+          </form>
+        {{end}}
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="5" class="sub">Nothing downloaded yet.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{template "foot" .}}{{end}}

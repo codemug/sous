@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +49,31 @@ func (f *fakeRuntime) Running(context.Context) ([]string, error) { return nil, n
 
 func newTestServer(t *testing.T) http.Handler {
 	t.Helper()
+	return newServerWithHub(t, t.TempDir())
+}
+
+// newServerWithHub seeds a fake HuggingFace cache: one repo a recipe uses and
+// one nothing references, which is the shape the larder has to tell apart.
+func newTestServerWithHub(t *testing.T) http.Handler {
+	t.Helper()
+	hub := t.TempDir()
+	for _, name := range []string{
+		"models--Inferact--Qwen3.8-27B-NVFP4",
+		"models--Kwaipilot--KAT-Coder-V2.5-Dev",
+	} {
+		d := filepath.Join(hub, name, "snapshots", "abc")
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "w.bin"), make([]byte, 4096), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return newServerWithHub(t, hub)
+}
+
+func newServerWithHub(t *testing.T, hub string) http.Handler {
+	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +90,7 @@ func newTestServer(t *testing.T) http.Handler {
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	h, err := New(m, c, 121.6)
+	h, err := New(m, c, 121.6, hub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,5 +249,83 @@ func TestHealthz(t *testing.T) {
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d", rr.Code)
+	}
+}
+
+// ---------- larder ----------
+
+func TestLarderAPIListsEntriesAndReclaimable(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/larder", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["entries"] == nil || got["reclaimable_bytes"] == nil || got["total_bytes"] == nil {
+		t.Fatalf("larder response missing fields: %v", got)
+	}
+	// Only the unreferenced repo is reclaimable, so it must be less than total.
+	if got["reclaimable_bytes"].(float64) >= got["total_bytes"].(float64) {
+		t.Fatalf("referenced weights counted as reclaimable: %v", got)
+	}
+}
+
+// The weights qwen38 uses must not be deletable while a recipe names them.
+func TestLarderDeleteRefusesReferencedOverAPI(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/larder/delete?repo=Inferact%2FQwen3.8-27B-NVFP4", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("want 409 for a referenced repo, got %d: %s", rr.Code, rr.Body)
+	}
+	var got map[string]string
+	json.Unmarshal(rr.Body.Bytes(), &got)
+	if got["reason"] == "" {
+		t.Fatal("a guard must say why over the API too")
+	}
+}
+
+func TestLarderDeleteStaleSucceeds(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/larder/delete?repo=Kwaipilot%2FKAT-Coder-V2.5-Dev", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("stale weights should delete: %d %s", rr.Code, rr.Body)
+	}
+	var got map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &got)
+	if got["freed_bytes"] == nil {
+		t.Fatal("must report bytes freed")
+	}
+}
+
+func TestLarderDeleteRejectsTraversal(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/larder/delete?repo=..%2F..%2Fetc&force=true", nil))
+	if rr.Code < 400 {
+		t.Fatalf("accepted a traversal repo id: %d", rr.Code)
+	}
+}
+
+func TestLarderPageRenders(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/larder", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"reclaimable", "KAT-Coder", "stale", "in use"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("larder page missing %q", want)
+		}
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/codemug/sous/internal/deploy"
+	"github.com/codemug/sous/internal/larder"
 	"github.com/codemug/sous/internal/recipe"
 )
 
@@ -16,8 +18,100 @@ type pageData struct {
 	DeployCount int
 	Recipes     []recipe.Recipe
 	Deployments []deploy.Record
+	Larder      []larder.Entry
+	LarderTotal string
+	Reclaimable string
 	Message     string
 	IsError     bool
+}
+
+// larderView gathers what the larder needs: the catalog to know what is
+// referenced, and the deployment list so a running model's weights can never
+// read as stale even mid-edit.
+func (s *Server) larderView() ([]larder.Entry, error) {
+	recipes, err := s.cat.List()
+	if err != nil {
+		return nil, err
+	}
+	deployed := []string{}
+	if ds, err := s.mgr.List(); err == nil {
+		for _, d := range ds {
+			deployed = append(deployed, d.RecipeID)
+		}
+	}
+	return larder.Scan(s.hubDir, recipes, deployed)
+}
+
+// humanBytes renders at GiB, which is the unit every measurement in this
+// project is quoted in.
+func humanBytes(n int64) string {
+	const gib = 1024 * 1024 * 1024
+	if n >= gib {
+		return strconv.FormatFloat(float64(n)/gib, 'f', 2, 64) + " GiB"
+	}
+	return strconv.FormatFloat(float64(n)/(1024*1024), 'f', 1, 64) + " MiB"
+}
+
+func (s *Server) listLarder(w http.ResponseWriter, _ *http.Request) {
+	entries, err := s.larderView()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries":           entries,
+		"total_bytes":       larder.Total(entries),
+		"reclaimable_bytes": larder.Reclaimable(entries),
+	})
+}
+
+func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	force := r.URL.Query().Get("force") == "true"
+
+	entries, err := s.larderView()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	freed, err := larder.Delete(s.hubDir, repo, entries, force)
+	if err != nil {
+		var ge *larder.GuardError
+		if errors.As(err, &ge) {
+			if wantsHTML(r) {
+				s.redirect(w, r, "/larder", ge.Error(), true)
+				return
+			}
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": ge.Error(), "repo": ge.Repo, "reason": ge.Reason,
+			})
+			return
+		}
+		if wantsHTML(r) {
+			s.redirect(w, r, "/larder", err.Error(), true)
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if wantsHTML(r) {
+		s.redirect(w, r, "/larder", "freed "+humanBytes(freed), false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"freed_bytes": freed})
+}
+
+func (s *Server) pageLarder(w http.ResponseWriter, r *http.Request) {
+	s.page(w, r, "larder", "Larder", func(d *pageData) error {
+		entries, err := s.larderView()
+		if err != nil {
+			return err
+		}
+		d.Larder = entries
+		d.LarderTotal = humanBytes(larder.Total(entries))
+		d.Reclaimable = humanBytes(larder.Reclaimable(entries))
+		return nil
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
