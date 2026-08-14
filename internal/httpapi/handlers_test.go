@@ -1,0 +1,226 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/codemug/sous/internal/capacity"
+	"github.com/codemug/sous/internal/catalog"
+	"github.com/codemug/sous/internal/deploy"
+	"github.com/codemug/sous/internal/engine"
+	"github.com/codemug/sous/internal/ports"
+	"github.com/codemug/sous/internal/store"
+)
+
+type fakeRuntime struct {
+	mu      sync.Mutex
+	running map[string]bool
+}
+
+func (f *fakeRuntime) Start(_ context.Context, s engine.Spec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.running[s.Name] = true
+	return "cid-" + s.Name, nil
+}
+func (f *fakeRuntime) Stop(_ context.Context, n string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.running, n)
+	return nil
+}
+func (f *fakeRuntime) Logs(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(
+		"INFO Model loading took 24.87 GiB memory and 162.6 seconds\n" +
+			"INFO Available KV cache memory: 45.67 GiB\n" +
+			"INFO GPU KV cache size: 352,000 tokens\n" +
+			"INFO Using FLASHINFER attention backend\n" +
+			"INFO Profiling CUDA graph memory: PIECEWISE=7 (largest=32)\n")), nil
+}
+func (f *fakeRuntime) Running(context.Context) ([]string, error) { return nil, nil }
+
+func newTestServer(t *testing.T) http.Handler {
+	t.Helper()
+	s, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := catalog.New(s)
+	if _, err := c.SeedIfEmpty(); err != nil {
+		t.Fatal(err)
+	}
+	m := &deploy.Manager{
+		Store: s, Catalog: c, Runtime: &fakeRuntime{running: map[string]bool{}},
+		Planner:    capacity.Planner{PoolGiB: 121.6, ReserveGiB: 24, WarnFreeGiB: 12},
+		Ports:      ports.Allocator{Low: 41300, High: 41400},
+		BindHost:   "127.0.0.1",
+		ModelDir:   "/models",
+		DropCaches: func() error { return nil },
+	}
+	h, err := New(m, c, 121.6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func TestListRecipesReturnsSeeds(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/recipes", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got) < 8 {
+		t.Fatalf("want at least 8 seeded recipes, got %d", len(got))
+	}
+}
+
+func TestPlanReportsMarginNotJustBoolean(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/plan/qwen38", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["margin_gib"]; !ok {
+		t.Fatalf("plan must report a margin, got %v", got)
+	}
+}
+
+func TestDeployRejectsUnknownRecipe(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/nosuchmodel", nil))
+	if rr.Code < 400 {
+		t.Fatalf("want 4xx for an unknown recipe, got %d", rr.Code)
+	}
+}
+
+func TestDeployRejectsTraversalID(t *testing.T) {
+	h := newTestServer(t)
+	for _, bad := range []string{"..%2Fescape", "a%2Fb", "Qwen38"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/"+bad, nil))
+		if rr.Code < 400 {
+			t.Fatalf("accepted dangerous id %q with status %d", bad, rr.Code)
+		}
+	}
+}
+
+// A capacity refusal is a 409 carrying the margin, not a flat 500.
+func TestCapacityRefusalIsConflictWithMargin(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/qwen38", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first deploy: %d %s", rr.Code, rr.Body)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/qwen36", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("want 409 for a capacity refusal, got %d: %s", rr.Code, rr.Body)
+	}
+	var got map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &got)
+	if got["must_free"] == nil {
+		t.Fatalf("refusal must name what to free: %v", got)
+	}
+}
+
+func TestDeployThenListShowsIt(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/kokoro", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", rr.Code, rr.Body)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/deployments", nil))
+	var got []map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got) != 1 {
+		t.Fatalf("want 1 deployment, got %d", len(got))
+	}
+	if got[0]["host_port"] == nil {
+		t.Fatal("deployment must report its allocated port")
+	}
+}
+
+func TestCatalogPageRenders(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"qwen38", "kokoro", "Sous", "CPU only"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("catalog page missing %q", want)
+		}
+	}
+}
+
+func TestDeploymentsPageRenders(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/deployments", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), "Nothing deployed") {
+		t.Fatal("empty state not rendered")
+	}
+}
+
+// The measured backend and graph mode must reach the page: they are the
+// evidence for a throughput change that produces no error.
+func TestDeploymentsPageShowsBackendAndGraphs(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/qwen38", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", rr.Code, rr.Body)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/deployments", nil))
+	body := rr.Body.String()
+	for _, want := range []string{"FLASHINFER", "PIECEWISE", "136"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("deployments page missing %q", want)
+		}
+	}
+}
+
+func TestUnknownPathIs404(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/nope", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rr.Code)
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+}

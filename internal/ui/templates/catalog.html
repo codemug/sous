@@ -1,0 +1,41 @@
+{{define "catalog"}}{{template "head" .}}
+<p class="note">Recipes are portable: model, image, flags, and the reasoning behind them.
+Nothing machine-specific lives here — measured footprints belong to a deployment,
+because 24.87 GiB and 136 KiB/token are facts about this box, not about the model.</p>
+
+{{if .Message}}<p class="note{{if .IsError}} warn{{end}}">{{.Message}}</p>{{end}}
+
+<div class="wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Recipe</th><th>Kind</th><th>Modality</th>
+      <th class="n">Declared</th><th>State</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Recipes}}
+    <tr>
+      <td>
+        <strong>{{.ID}}</strong>
+        {{if .Model}}<br><span class="sub">{{.Model}}</span>{{end}}
+      </td>
+      <td><span class="tag t-kind">{{.Kind}}</span></td>
+      <td>{{.Modality}}</td>
+      <td class="n">
+        {{if .Declared.TotalGiB}}{{printf "%.2f GiB" .Declared.TotalGiB}}{{else}}CPU only{{end}}
+      </td>
+      <td>{{if .Archived}}<span class="tag t-arch">archived</span>{{end}}</td>
+      <td>
+        {{if not .Archived}}
+        <form method="post" action="/api/deploy/{{.ID}}" style="margin:0">
+          <button type="submit">Deploy</button>
+        </form>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{template "foot" .}}{{end}}

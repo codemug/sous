@@ -1,0 +1,207 @@
+// Package deploy coordinates everything else. It is the only package that
+// knows the ordering rules, and those rules are not stylistic:
+//
+//   - loads are SERIALISED, because two vLLM processes memory-profiling the
+//     same unified pool concurrently is a documented crash on this hardware:
+//     "Error in memory profiling ... other processes sharing the same container
+//     release GPU memory while vLLM is profiling";
+//   - page cache is DROPPED before every start, because vLLM sizes KV from
+//     CUDA-reported free memory and the kernel does not count reclaimable page
+//     cache as free, so 25-35 GiB of just-read safetensors looks like memory
+//     that is gone. This node has OOM'd on a SMALLER model for that reason;
+//   - an existing container is STOPPED before its replacement starts, because
+//     the outgoing one holds both the port and the memory the incoming one
+//     needs, and the resulting errors name the wrong model.
+package deploy
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/codemug/sous/internal/capacity"
+	"github.com/codemug/sous/internal/catalog"
+	"github.com/codemug/sous/internal/engine"
+	"github.com/codemug/sous/internal/observe"
+	"github.com/codemug/sous/internal/ports"
+	"github.com/codemug/sous/internal/recipe"
+	"github.com/codemug/sous/internal/store"
+)
+
+type Runtime interface {
+	Start(ctx context.Context, spec engine.Spec) (containerID string, err error)
+	Stop(ctx context.Context, name string) error
+	Logs(ctx context.Context, name string) (io.ReadCloser, error)
+	Running(ctx context.Context) ([]string, error)
+}
+
+// CapacityError is distinct so callers can render the margin and the way out
+// rather than a flat failure.
+type CapacityError struct {
+	RecipeID string
+	Result   capacity.Result
+}
+
+func (e *CapacityError) Error() string {
+	return fmt.Sprintf("%s does not fit: short by %.1f GiB; free one of %v",
+		e.RecipeID, -e.Result.MarginGiB, e.Result.MustFree)
+}
+
+type Manager struct {
+	Store    *store.Store
+	Catalog  *catalog.Catalog
+	Runtime  Runtime
+	Planner  capacity.Planner
+	Ports    ports.Allocator
+	BindHost string
+	ModelDir string
+
+	// DropCaches is injectable so tests do not need root and so the reason it
+	// exists stays visible at the call site.
+	DropCaches func() error
+
+	mu sync.Mutex // serialises loads; see the package comment
+}
+
+func (m *Manager) Deploy(ctx context.Context, id string, wantPort int, force bool) (Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	r, err := m.Catalog.Get(id)
+	if err != nil {
+		return Record{}, err
+	}
+
+	resident, err := m.residentExcept(id)
+	if err != nil {
+		return Record{}, err
+	}
+	plan := m.Planner.Plan(resident, capacity.Entry{ID: r.ID, GiB: m.footprint(r)})
+	if !plan.Fits && !force {
+		return Record{}, &CapacityError{RecipeID: id, Result: plan}
+	}
+
+	port := wantPort
+	if port == 0 {
+		if port, err = m.Ports.Free(m.BindHost); err != nil {
+			return Record{}, err
+		}
+	} else if !m.Ports.IsFree(m.BindHost, port) {
+		return Record{}, fmt.Errorf("deploy %s: port %d is already in use", id, port)
+	}
+
+	spec, err := engine.BuildSpec(r, port, m.ModelDir)
+	if err != nil {
+		return Record{}, err
+	}
+
+	// Stop first. Always. A profile or a marker file cannot be relied on to
+	// have stopped anything.
+	var prev Record
+	if err := m.Store.ReadYAML(store.KindDeployment, id, &prev); err == nil {
+		if err := m.Runtime.Stop(ctx, spec.Name); err != nil {
+			return Record{}, fmt.Errorf("deploy %s: stopping the previous container: %w", id, err)
+		}
+	}
+
+	if m.DropCaches != nil {
+		if err := m.DropCaches(); err != nil {
+			return Record{}, fmt.Errorf("deploy %s: dropping page cache: %w", id, err)
+		}
+	}
+
+	cid, err := m.Runtime.Start(ctx, spec)
+	if err != nil {
+		return Record{}, fmt.Errorf("deploy %s: %w", id, err)
+	}
+
+	rec := Record{RecipeID: id, HostPort: port, ContainerID: cid, StartedAt: time.Now()}
+	if rc, err := m.Runtime.Logs(ctx, spec.Name); err == nil {
+		rec.Observation = observe.ParseBootLog(id, rc)
+		rc.Close()
+		// Observations are node-local and never written back into the recipe.
+		_ = m.Store.WriteYAML(store.KindObservation, id, rec.Observation)
+	}
+	if err := m.Store.WriteYAML(store.KindDeployment, id, rec); err != nil {
+		return Record{}, err
+	}
+	return rec, nil
+}
+
+func (m *Manager) Undeploy(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !recipe.ValidID(id) {
+		return fmt.Errorf("undeploy: invalid id %q", id)
+	}
+	if err := m.Runtime.Stop(ctx, "sous-"+id); err != nil {
+		return err
+	}
+	return m.Store.Delete(store.KindDeployment, id)
+}
+
+// Plan answers "would this fit" without touching a container, so the UI can
+// show a margin before anything irreversible happens.
+func (m *Manager) Plan(id string) (capacity.Result, error) {
+	r, err := m.Catalog.Get(id)
+	if err != nil {
+		return capacity.Result{}, err
+	}
+	resident, err := m.residentExcept(id)
+	if err != nil {
+		return capacity.Result{}, err
+	}
+	return m.Planner.Plan(resident, capacity.Entry{ID: r.ID, GiB: m.footprint(r)}), nil
+}
+
+func (m *Manager) List() ([]Record, error) {
+	names, err := m.Store.List(store.KindDeployment)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Record, 0, len(names))
+	for _, n := range names {
+		var rec Record
+		if err := m.Store.ReadYAML(store.KindDeployment, n, &rec); err != nil {
+			continue
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+// footprint prefers measured truth over the author's estimate. This is the
+// entire reason observations are written back after a load.
+func (m *Manager) footprint(r recipe.Recipe) float64 {
+	var o observe.Observation
+	if err := m.Store.ReadYAML(store.KindObservation, r.ID, &o); err == nil {
+		if total := o.WeightsGiB + o.KVGiB; total > 0 {
+			return total
+		}
+	}
+	return r.Declared.TotalGiB()
+}
+
+// residentExcept omits id, because a redeploy replaces itself rather than
+// adding to the pool. Counting it twice would refuse every redeploy of a model
+// large enough to matter.
+func (m *Manager) residentExcept(id string) ([]capacity.Entry, error) {
+	names, err := m.Store.List(store.KindDeployment)
+	if err != nil {
+		return nil, err
+	}
+	var out []capacity.Entry
+	for _, n := range names {
+		if n == id {
+			continue
+		}
+		r, err := m.Catalog.Get(n)
+		if err != nil {
+			continue
+		}
+		out = append(out, capacity.Entry{ID: n, GiB: m.footprint(r)})
+	}
+	return out, nil
+}
