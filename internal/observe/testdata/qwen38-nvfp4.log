@@ -1,0 +1,12 @@
+INFO 08-14 20:40:16 [utils.py:233] non-default args: {'model_tag': 'Inferact/Qwen3.8-27B-NVFP4', 'enable_auto_tool_choice': True}
+INFO 08-14 20:40:24 [model.py:554] Resolved architecture: Qwen3_5ForConditionalGeneration
+INFO 08-14 20:40:29 [model.py:554] Resolved architecture: Qwen3_5MTP
+WARNING 08-14 20:40:29 [speculative.py:532] Enabling num_speculative_tokens > 1 will run multiple times of forward on same MTP layer
+INFO 08-14 20:43:55 [gpu_model_runner.py:4854] Model loading took 24.87 GiB memory and 162.617841 seconds
+INFO 08-14 20:45:12 [__init__.py:1] Using FLASHINFER attention backend out of potential backends: ['FLASHINFER', 'TRITON_ATTN']
+WARNING 08-14 20:45:34 [compilation.py:1369] CUDAGraphMode.FULL_AND_PIECEWISE is not supported with spec-decode for attention backend FlashInferBackend; setting cudagraph_mode=PIECEWISE
+INFO 08-14 20:45:34 [gpu_model_runner.py:5924] Profiling CUDA graph memory: PIECEWISE=7 (largest=32)
+INFO 08-14 20:45:36 [gpu_worker.py:440] Available KV cache memory: 45.67 GiB
+INFO 08-14 20:45:36 [kv_cache_utils.py:1337] GPU KV cache size: 352,000 tokens
+INFO 08-14 20:45:36 [kv_cache_utils.py:1342] Maximum concurrency for 262,144 tokens per request: 4.55x
+INFO:     Application startup complete.
