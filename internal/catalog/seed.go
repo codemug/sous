@@ -26,6 +26,16 @@ func Seeds() []recipe.Recipe {
 				"tool-call-parser":   "qwen3_coder",
 				"speculative-config": `{"method":"mtp","num_speculative_tokens":3}`,
 			},
+			Env: map[string]string{
+				// sm_121a is what GB10's Blackwell actually reports, and some
+				// kernels gate on this list at JIT/Triton compile time. Omitting
+				// them does not fail loudly - the model starts and behaves
+				// differently, which is worse.
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
 			Notes: "Dense 27B but HYBRID: 48 Gated DeltaNet + 16 full-attention layers\n" +
 				"(full_attention_interval 4). The full-attention geometry is heavier than\n" +
 				"the 35B MoE it replaced - 16 layers x 4 KV heads vs 10 x 2 - so KV costs\n" +
@@ -57,6 +67,16 @@ func Seeds() []recipe.Recipe {
 				"tool-call-parser":   "qwen3_coder",
 				"speculative-config": `{"method":"mtp","num_speculative_tokens":2}`,
 			},
+			Env: map[string]string{
+				// sm_121a is what GB10's Blackwell actually reports, and some
+				// kernels gate on this list at JIT/Triton compile time. Omitting
+				// them does not fail loudly - the model starts and behaves
+				// differently, which is worse.
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
 			Notes: "MoE, ~3B active per token: 60.6 tok/s, roughly 4x qwen38 on prose.\n" +
 				"Decode is bandwidth-bound and this reads far fewer bytes per token.\n" +
 				"88.3 KiB/token KV, 308,736 tokens at the 26 GiB pin. MTP acceptance\n" +
@@ -77,6 +97,16 @@ func Seeds() []recipe.Recipe {
 				"enable-auto-tool-choice": true, "tool-call-parser": "qwen3_coder",
 				"speculative-config": `{"method":"mtp","num_speculative_tokens":3}`,
 			},
+			Env: map[string]string{
+				// sm_121a is what GB10's Blackwell actually reports, and some
+				// kernels gate on this list at JIT/Triton compile time. Omitting
+				// them does not fail loudly - the model starts and behaves
+				// differently, which is worse.
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
 			Notes: "SUPERSEDED by qwen38 (NVFP4). Kept as evidence, not nostalgia.\n" +
 				"21.91 structured / 13.83 prose tok/s, 273 KiB/token, 238,400 tokens.\n" +
 				"Chose FLASH_ATTN from four candidates and captured FULL CUDA graphs\n" +
@@ -96,6 +126,16 @@ func Seeds() []recipe.Recipe {
 				"max-model-len": 262144, "max-num-seqs": 4, "kv-cache-dtype": "fp8",
 				"mamba-cache-mode": "align", "reasoning-parser": "nemotron_v3",
 				"enable-auto-tool-choice": true, "tool-call-parser": "qwen3_coder",
+			},
+			Env: map[string]string{
+				// sm_121a is what GB10's Blackwell actually reports, and some
+				// kernels gate on this list at JIT/Triton compile time. Omitting
+				// them does not fail loudly - the model starts and behaves
+				// differently, which is worse.
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
 			Notes: "78-79 tok/s single-stream, flat across 20 / 1.5k / 9k context.\n\n" +
 				"The DSpark drafter is a 48% LOSS on this box and must not be re-added\n" +
@@ -118,6 +158,12 @@ func Seeds() []recipe.Recipe {
 				"trust-remote-code": true, "reasoning-parser": "nemotron_v3",
 				"enable-auto-tool-choice": true, "tool-call-parser": "qwen3_coder",
 			},
+			Env: map[string]string{
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
 			Notes: "RETIRED 2026-08-14. Used 25.6 GiB to do ASR that a 1.19 GiB model does\n" +
 				"better and faster - a 21x memory saving for equal transcription quality.\n\n" +
 				"Needs the GCC 12 image: the stock vllm image ships g++ 11.4, which\n" +
@@ -133,6 +179,11 @@ func Seeds() []recipe.Recipe {
 			Entrypoint: []string{"python3", "-m", "uvicorn", "app:app",
 				"--host", "0.0.0.0", "--port", "8000"},
 			Declared: recipe.Footprint{WeightsGiB: 1.19},
+			Env: map[string]string{
+				"ASR_MODEL": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+				"ASR_DEVICE": "cuda",
+				"HF_HOME":    "/root/.cache/huggingface",
+			},
 			Notes: "0.42s mean for ~3.7s clips (RTF 0.11), 0.0% WER, 35 languages.\n\n" +
 				"A hand-written FastAPI service because vLLM registers every ASR\n" +
 				"architecture but ships NO transcription entrypoint - the modules under\n" +
@@ -149,6 +200,7 @@ func Seeds() []recipe.Recipe {
 			ID: "kokoro", Kind: recipe.KindContainer, Modality: recipe.ModalityTTS,
 			Image:    "ghcr.io/remsky/kokoro-fastapi-cpu:latest",
 			Declared: recipe.Footprint{},
+			Env:      map[string]string{"HF_HOME": "/root/.cache/huggingface"},
 			Notes: "CPU BY DESIGN and costs zero GPU - that is a choice, not a limitation.\n" +
 				"Keeping TTS off the GPU leaves the ~273 GB/s of memory bandwidth for the\n" +
 				"LLM, which is what decode is actually bound by. Co-resident GPU models\n" +
