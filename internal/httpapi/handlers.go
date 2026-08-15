@@ -176,7 +176,22 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "true"
-	rec, err := s.mgr.Deploy(r.Context(), v, 0, force)
+
+	// An explicit port is what makes ADOPTION possible: a service already
+	// serving on :8000 with clients pointed at it cannot be migrated to Sous
+	// if Sous insists on allocating a fresh port. 0 means "pick a free one",
+	// which stays the default.
+	port := 0
+	if p := r.URL.Query().Get("port"); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			writeErr(w, http.StatusBadRequest, "port must be 1-65535")
+			return
+		}
+		port = n
+	}
+
+	rec, err := s.mgr.Deploy(r.Context(), v, port, force)
 	if err != nil {
 		// A capacity refusal is not a server fault and must carry the margin
 		// and the way out, not just a failure.
