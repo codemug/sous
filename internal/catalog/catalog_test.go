@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/codemug/sous/internal/recipe"
@@ -107,12 +108,36 @@ func TestSeedsCoverEveryKindAndModality(t *testing.T) {
 	}
 }
 
-// Kokoro is CPU-only. A capacity model that assumes every recipe has weights is
-// wrong for it, so the seed must record zero rather than a guess.
-func TestKokoroSeedDeclaresZeroGPU(t *testing.T) {
+// A CPU-only recipe declaring zero is a real answer, not a missing value, and
+// the capacity model must accept it. whisper is the remaining example - kokoro
+// moved to the GPU on 2026-08-16 and now declares 3 GiB.
+func TestZeroGPUIsAcceptedForCPUOnlyRecipes(t *testing.T) {
+	found := false
 	for _, r := range Seeds() {
-		if r.ID == "kokoro" && r.Declared.TotalGiB() != 0 {
-			t.Fatalf("kokoro must declare 0 GiB, got %.2f", r.Declared.TotalGiB())
+		if r.ID == "whisper" {
+			found = true
+			if r.Declared.TotalGiB() != 0 {
+				t.Fatalf("whisper is CPU-only, want 0 GiB, got %.2f", r.Declared.TotalGiB())
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a CPU-only seed to exercise the zero case")
+	}
+}
+
+// If a recipe declares GPU weights it must actually be a GPU service - a
+// footprint that disagrees with reality makes every capacity decision wrong.
+func TestKokoroDeclaresItsGPUFootprint(t *testing.T) {
+	for _, r := range Seeds() {
+		if r.ID != "kokoro" {
+			continue
+		}
+		if r.Declared.WeightsGiB < 2 {
+			t.Fatalf("kokoro runs on the GPU and measured 3 GiB; declared %.2f", r.Declared.WeightsGiB)
+		}
+		if !strings.Contains(r.Image, "gpu") {
+			t.Fatalf("declared a GPU footprint but the image is %q", r.Image)
 		}
 	}
 }

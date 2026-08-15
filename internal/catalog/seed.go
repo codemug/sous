@@ -198,14 +198,22 @@ func Seeds() []recipe.Recipe {
 		},
 		{
 			ID: "kokoro", Kind: recipe.KindContainer, Modality: recipe.ModalityTTS,
-			Image:    "ghcr.io/remsky/kokoro-fastapi-cpu:latest",
-			Declared: recipe.Footprint{},
+			Image:    "ghcr.io/remsky/kokoro-fastapi-gpu:latest",
+			Declared: recipe.Footprint{WeightsGiB: 3.0},
 			Env:      map[string]string{"HF_HOME": "/root/.cache/huggingface"},
-			Notes: "CPU BY DESIGN and costs zero GPU - that is a choice, not a limitation.\n" +
-				"Keeping TTS off the GPU leaves the ~273 GB/s of memory bandwidth for the\n" +
-				"LLM, which is what decode is actually bound by. Co-resident GPU models\n" +
-				"split that bandwidth negative-sum.\n\n" +
-				"0.40x realtime, 68 voices. arm64 manifest verified before deploying.",
+			Notes: "ON THE GPU since 2026-08-16, after measuring. Was CPU-only, and the\n" +
+				"argument for that was inherited rather than checked:\n\n" +
+				"  CPU  1194 / 1131 / 1391 ms   GPU  202 / 201 / 193 / 198 / 194 ms\n\n" +
+				"~6x faster for 3 GiB. TTS had been the largest single component of the\n" +
+				"voice loop - larger than ASR (~440 ms) and the LLM (~260 ms) combined.\n\n" +
+				"The old reasoning was 'keeping TTS off the GPU leaves the bandwidth for\n" +
+				"the LLM'. True when a 25.6 GiB Omni was co-resident; false here. Kokoro\n" +
+				"is 82M parameters reading ~0.16 GB per forward against qwen38's 24.87 GB\n" +
+				"- under 1% of this box's ~273 GB/s.\n\n" +
+				"arm64 confirmed in the manifest AND at runtime ('Model warmed up on\n" +
+				"cuda: kokoro_v1' on GB10). The second check is not optional: GPU whisper\n" +
+				"reported the GPU as visible, silently ran on CPU, and was slower.\n\n" +
+				"68 voices. Revert by pinning the -cpu tag; it still has an arm64 image.",
 		},
 		{
 			ID: "whisper", Kind: recipe.KindContainer, Modality: recipe.ModalityASR,
