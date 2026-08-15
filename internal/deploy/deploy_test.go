@@ -14,6 +14,7 @@ import (
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/ports"
+	"github.com/codemug/sous/internal/recipe"
 	"github.com/codemug/sous/internal/store"
 )
 
@@ -235,18 +236,34 @@ func TestObservationWrittenAfterDeploy(t *testing.T) {
 
 // Capacity must prefer measured truth over the author's estimate once it
 // exists, which is the whole point of writing observations back.
+// Self-contained: it saves its own recipe rather than leaning on a seed's
+// declared value. The previous version asserted kokoro declared 0 GiB, which
+// was true until kokoro moved to the GPU - a test that breaks because an
+// unrelated recipe changed is testing the catalog, not the behaviour.
 func TestFootprintPrefersObservation(t *testing.T) {
 	m := newManager(t, newFake())
-	r, _ := m.Catalog.Get("kokoro")
-	if got := m.footprint(r); got != 0 {
-		t.Fatalf("declared footprint should be 0 for kokoro, got %.2f", got)
+
+	r := recipe.Recipe{
+		ID: "fixture", Kind: recipe.KindContainer, Modality: recipe.ModalityText,
+		Image:    "example:1",
+		Declared: recipe.Footprint{WeightsGiB: 2, KVGiB: 1}, // declared 3.0
 	}
-	if err := m.Store.WriteYAML(store.KindObservation, "kokoro",
+	if err := m.Catalog.Save(r); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := m.footprint(r); got != 3.0 {
+		t.Fatalf("with no observation, want the declared 3.0, got %.2f", got)
+	}
+
+	// Once measured, truth wins over the estimate - the whole point of
+	// writing observations back.
+	if err := m.Store.WriteYAML(store.KindObservation, "fixture",
 		map[string]any{"weights_gib": 3.5, "kv_gib": 1.5}); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.footprint(r); got != 5.0 {
-		t.Fatalf("want measured 5.0, got %.2f", got)
+		t.Fatalf("want the measured 5.0, got %.2f", got)
 	}
 }
 
