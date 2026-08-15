@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" role="img" aria-label="Sous — recipes for local inference. A memory pool bar showing 24.87 GiB of weights, 45.67 GiB of KV cache, overhead, and free memory within a 121.6 GiB pool.">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0E1418"/>
+      <stop offset="1" stop-color="#151D22"/>
+    </linearGradient>
+    <linearGradient id="weights" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E0B14A"/>
+      <stop offset="1" stop-color="#C9922B"/>
+    </linearGradient>
+    <linearGradient id="kv" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#57C6B2"/>
+      <stop offset="1" stop-color="#2E9584"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="340" fill="url(#ground)"/>
+
+  <!-- hairline grid, faint, suggesting an instrument readout -->
+  <g stroke="#1E2A31" stroke-width="1">
+    <line x1="0" y1="84" x2="1280" y2="84"/>
+    <line x1="0" y1="256" x2="1280" y2="256"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="80" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="76" font-weight="600" letter-spacing="-2" fill="#E4EAE6">sous</text>
+
+  <!-- tagline -->
+  <text x="82" y="172" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="19" letter-spacing="3" fill="#4FB9A6">RECIPES FOR LOCAL INFERENCE</text>
+
+  <text x="82" y="204" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="15" fill="#8C9AA2">One node. One GPU pool. One thing that owns it.</text>
+
+  <!-- the memory pool: the actual problem sous exists to solve -->
+  <g transform="translate(80, 236)">
+    <text x="0" y="-8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" letter-spacing="2" fill="#6E7C84">121.6 GiB UNIFIED, NO DISCRETE VRAM</text>
+
+    <rect x="0" y="0" width="1120" height="34" rx="2" fill="#111A1F" stroke="#2A363D"/>
+
+    <!-- weights 24.87 -> 229px -->
+    <rect x="1" y="1" width="229" height="32" fill="url(#weights)"/>
+    <text x="14" y="22" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="12" font-weight="600" fill="#131A22">24.87 weights</text>
+
+    <!-- kv 45.67 -> 420px -->
+    <rect x="230" y="1" width="420" height="32" fill="url(#kv)"/>
+    <text x="244" y="22" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="12" font-weight="600" fill="#0B1614">45.67 KV cache</text>
+
+    <!-- reserve 24 -> 221px -->
+    <rect x="650" y="1" width="221" height="32" fill="#39464E"/>
+    <text x="664" y="22" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="12" font-weight="600" fill="#B9C6CD">24 reserve</text>
+
+    <!-- free -->
+    <rect x="871" y="1" width="248" height="32" fill="#1B252B"/>
+    <text x="885" y="22" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="12" fill="#7E8C94">27 free</text>
+  </g>
+
+  <!-- measured, not declared -->
+  <text x="80" y="308" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12" fill="#5F6D75">every figure measured on the node, never declared</text>
+</svg>

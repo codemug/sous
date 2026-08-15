@@ -1,93 +1,137 @@
-# Sous
+<div align="center">
 
-A recipe manager for local inference. One node, one GPU pool, one thing that
-owns it.
+![Sous](docs/banner.svg)
 
-Sous stores **recipes** — complete, portable answers to "how do I serve this
-model" — checks whether one fits in the memory pool before starting it, deploys
-it through the Docker Engine API on a port allocated at deploy time, and makes
-failure legible when it happens anyway.
+**Recipes for local inference.** Store a model's full serving configuration, check whether it
+fits before you start it, deploy it on a free port, and see what it actually did.
 
-Built for a single NVIDIA GB10 (DGX Spark class) with 121.6 GiB of unified
-memory and no discrete VRAM, which is the constraint that shapes every design
-decision here.
+[![build](https://github.com/codemug/sous/actions/workflows/build.yml/badge.svg)](https://github.com/codemug/sous/actions/workflows/build.yml)
+[![Go](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![image](https://img.shields.io/badge/ghcr.io-codemug%2Fsous-2496ED?logo=docker&logoColor=white)](https://github.com/codemug/sous/pkgs/container/sous)
+[![arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4FB9A6)](https://github.com/codemug/sous/pkgs/container/sous)
 
-## Why it exists
+</div>
 
-Managing models on a box like this by hand goes wrong in ways that are not
-obvious and not documented:
+---
 
-- **`--gpu-memory-utilization` is a startup gate, not a budget.** It is checked
-  against *free* memory, so a model that fits perfectly refuses to start
-  because another one is resident.
-- **KV cost per token differs 20× between models.** 88.3 KiB/token for a
-  35B MoE, 273 for a "smaller" 27B dense hybrid, ~4.3 for a Mamba model.
-  "Give it more KV" means something different every time.
-- **Page cache is not counted as free.** Loading 30 GB of weights leaves 30 GB
-  of stale cache behind, and the next model sizes its cache against a lie.
-- **Two models profiling memory concurrently is a documented crash.**
+## The problem
 
-Sous encodes all of that as rules the machine follows rather than facts a human
-has to remember.
+Running two or three models on one box goes wrong in ways that are not obvious, not
+documented, and not the same twice:
+
+- **`--gpu-memory-utilization` is a startup gate, not a budget.** It is checked against *free*
+  memory, so a model that fits perfectly refuses to start because another one is resident.
+- **KV cost per token differs 20× between models.** 88 KiB/token for a 35B MoE, 273 for a
+  "smaller" 27B dense hybrid, ~4 for a Mamba model. "Give it more KV" means something
+  different every time.
+- **Page cache is not counted as free.** Loading 30 GB of weights leaves 30 GB of stale cache
+  behind, so the next model sizes its cache against a lie — and OOMs on a *smaller* model.
+- **Two models memory-profiling at once is a documented crash.**
+
+None of that is in a README you can find. It gets learned by losing an evening to it.
+
+Sous encodes those as rules the machine follows, so you stop being the thing that remembers.
+
+## What it does
+
+```
+                 PUT /api/desired  {models: [qwen38, asr, kokoro]}
+                                │
+  ┌─────────────────────────────▼──────────────────────────────┐
+  │  catalog     recipes: model, image, flags, and the WHY      │
+  │  capacity    does it fit, and by how much — never a boolean │
+  │  ports       allocated at deploy time, proven by binding    │
+  │  reconciler  stop before start · drop caches · serialise    │
+  │  observe     boot log → measured truth, written back        │
+  │  larder      weights on disk, reconciled and reclaimable    │
+  └─────────────────────────────┬──────────────────────────────┘
+                                │ Docker Engine API
+                    qwen38 :8000 · asr :8006 · kokoro :8004
+```
 
 ## Concepts
 
 | Term | Meaning |
 |---|---|
-| **recipe** | Portable: model, image, kind, flags, and the reasoning in `notes` |
+| **recipe** | A portable answer to "how do I serve this model" — model, image, kind, flags, notes |
 | **source** | A git repo of recipes, mirrored read-only |
-| **overlay** | Your edits to a source recipe, as a sparse patch |
-| **deployment** | A recipe plus what this node granted it: port, container |
+| **overlay** | Your local edits to a source recipe, as a sparse patch |
+| **deployment** | A recipe plus what this node granted it: host port, container |
 | **larder** | Downloaded weights on disk |
-| **observation** | What the boot log actually reported — node-local, never in a recipe |
+| **observation** | What the boot log actually reported — node-local, never inside a recipe |
 
-A recipe declares a `kind`, which changes its shape rather than just labelling
-it:
+A recipe declares a `kind`, and that changes its *shape*, not just a label:
 
-- `vllm` — image plus serve flags
-- `transformers` — a build context and an explicit entrypoint
-- `container` — a third-party image, used as published
+- **`vllm`** — image plus serve flags
+- **`transformers`** — a build context and an explicit entrypoint
+- **`container`** — a third-party image, used exactly as published
 
-That matters because not everything is a language model. A CPU-only TTS service
-costs zero GPU, and a capacity model that assumes every entry has weights *and*
-a KV cache is wrong for it.
+That matters because not everything is a language model. A CPU-only TTS service costs zero
+GPU, and a capacity model assuming every entry has weights *and* a KV cache is simply wrong
+for it.
+
+## Quickstart
+
+```bash
+docker run -d --name sous \
+  --privileged \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/sous:/var/lib/sous \
+  -v /models:/models \
+  ghcr.io/codemug/sous:latest \
+    -listen 10.0.0.5:8090 \
+    -models /models
+```
+
+Then open `http://10.0.0.5:8090`. The catalog seeds itself on first run.
+
+**`-listen` is required and refuses `0.0.0.0`.** Sous creates and destroys containers, which
+makes it root-equivalent on its node; the network boundary is the mitigation, so binding
+everything would remove the only protection it has.
+
+**Why `--privileged`:** Sous drops page cache before every model start, and `/proc/sys` is
+read-only inside Docker. Without it, the next model sizes its KV cache against memory the
+kernel is holding — a real OOM, not a theoretical one. If that trade is unacceptable in your
+environment, run the binary under systemd instead; it needs no container.
+
+**Mount the model cache at the same path inside and out.** Sous hands paths to the Docker
+daemon, and the daemon resolves them on the *host*.
 
 ## Design decisions worth knowing
 
-**No ports in a recipe.** Not host, not container. Placement is decided at
-deploy time against the real host, with an actual bind test — because a process
-outside Sous can hold a port, and checking only your own records cannot see
-that.
+**No ports in a recipe.** Not host, not container. Placement is decided at deploy time against
+the real host with an actual bind test — because a process outside Sous can hold a port, and
+checking only your own records cannot see that.
 
-**Measured values never live in a recipe.** `24.87 GiB of weights` and
-`136 KiB/token` are facts about *one box running one engine build*, not about
-the model. They live in `observations/`, which is also what lets recipes be
-distributed without shipping lies.
+**Measured values never live in a recipe.** `24.87 GiB of weights` and `136 KiB/token` are
+facts about *one box running one engine build*, not about the model. They live in
+`observations/`, which is exactly what lets recipes be shared without shipping lies.
 
-**Docker Engine API, not Compose.** Every Compose trap this was built against
-is a property of Compose semantics rather than of containers: a service
-archived behind `profiles:` keeps running, teardown fails when the file uses
-`${VAR:?}` guards, and `up -d` will not rebuild after a Dockerfile change. Sous
-still writes a compose file per deployment into `exports/`, never used to
-deploy, purely so a broken Sous can be worked around by hand.
+**Docker Engine API, not Compose.** Every Compose trap this was built against is a property of
+Compose semantics rather than of containers: a service archived behind `profiles:` keeps
+running, teardown fails when the file uses `${VAR:?}` guards, and `up -d` will not rebuild
+after a Dockerfile change. Sous still writes a compose file per deployment into `exports/` —
+never used to deploy — purely so a broken Sous can be worked around by hand.
 
-**Capacity returns a margin, never a boolean.** A 2 GiB pass and a 30 GiB pass
-call for different decisions.
+**Capacity returns a margin, never a boolean.** A 2 GiB pass and a 30 GiB pass call for
+different decisions, and a bare "yes" hides which one you have.
 
-**Force distinguishes policy from safety.** It overrides a judgement you may
-disagree with — deleting rollback weights — and never overrides a guard that
-protects something in use.
+**Force separates policy from safety.** It overrides a judgement you may disagree with —
+deleting rollback weights — and never overrides a guard protecting something in use.
 
-## Running it
+## Recipes are distributable
 
-```
-sous -listen 100.x.y.z:8090 -models /path/to/model/cache -data /var/lib/sous
-```
+A **source** is a git repo of recipe YAML, mirrored read-only. Your edits live as sparse
+**overlays** carrying the upstream sha they were written against, which gives a fetch all
+three sides of a real merge instead of last-write-wins.
 
-`-listen` is required and refuses `0.0.0.0`. Sous generates container
-configuration and runs it, which makes it root-equivalent on its node by
-construction; the network boundary is the mitigation, so binding everything
-would remove it.
+The merge is **field-level, not line-level**, and that is what makes overlays tractable here:
+a recipe is a flat `args` map and a few scalars, so upstream raising `max-model-len` while you
+overrode `gpu-memory-utilization` merges silently and you keep the improvement. Only a
+collision on the *same key* needs a human, and it renders as a table — not a text conflict.
+
+Fetch is explicit and **never deploys anything**.
 
 ## Layout
 
@@ -96,9 +140,9 @@ internal/recipe      the portable schema and its validation
 internal/catalog     recipes, sources, overlays, effective resolution
 internal/capacity    does it fit, and by how much
 internal/ports       deploy-time allocation, verified by binding
-internal/engine      recipe -> container spec, and the Docker client
+internal/engine      recipe → container spec, and the Docker client
 internal/deploy      the ordering rules: serialise, drop caches, stop-then-start
-internal/observe     boot log -> measured truth
+internal/observe     boot log → measured truth
 internal/larder      weights on disk, reconciled and reclaimable
 internal/sources     read-only git mirrors
 internal/overlay     sparse patches and a field-level three-way merge
@@ -107,11 +151,26 @@ internal/httpapi     JSON API and the server-rendered UI
 
 ## Tests
 
-```
+```bash
 go test ./...
 ```
 
-The interesting ones assert behaviour that is expensive to relearn: that a
-redeploy stops the old container *before* starting the new one, that page cache
-is dropped before anything starts, that `352,000 tokens` does not parse as 352,
-and that `PIECEWISE` stays distinguishable from `FULL_AND_PIECEWISE`.
+The interesting ones assert behaviour that is expensive to relearn: that a redeploy stops the
+old container *before* starting the new one, that page cache is dropped before anything
+starts, that `352,000 tokens` does not parse as `352`, and that `PIECEWISE` stays
+distinguishable from `FULL_AND_PIECEWISE` — because that distinction is the entire explanation
+for a throughput difference that produces no error message.
+
+## Status
+
+Works, and runs the node it was written for: a single NVIDIA GB10 with 121.6 GiB of unified
+memory and no discrete VRAM, which is the constraint that shaped every decision here.
+
+The capacity reserve is calibrated on five measured combinations and is the weakest
+quantitative part of the design — deliberately conservative, so it will sometimes refuse a set
+that would in fact fit. `force` is the escape hatch; accumulating observations is how it gets
+better.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
