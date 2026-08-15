@@ -1,0 +1,72 @@
+name: build
+
+# Sous deploys to asus-gx10, which is aarch64, while development happens on
+# x86. Publishing a multi-arch image means the fleet's compose file names one
+# tag and the right binary lands on whichever node pulls it.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      # The fleet target is aarch64 and the CI runner is not, so a
+      # cross-compile check here catches an arch-specific break before it
+      # reaches a node rather than after.
+      - name: Cross-compile for the deployment target
+        run: GOOS=linux GOARCH=arm64 go build ./...
+
+  image:
+    needs: test
+    # Pull requests get built and tested but not published: a fork should not
+    # be able to push an image the fleet would then pull.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # sha tags are what the fleet should pin to. `latest` exists for
+          # convenience and is deliberately not what a node tracks.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=semver,pattern={{version}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
