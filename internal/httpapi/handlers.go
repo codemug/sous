@@ -3,12 +3,13 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/catalog"
+	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/larder"
 	"github.com/codemug/sous/internal/recipe"
 	"github.com/codemug/sous/internal/sources"
@@ -146,6 +147,34 @@ func (s *Server) listRecipes(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rs)
+}
+
+// syncRecipes brings the catalog on disk up to date with the seeds compiled
+// into the running binary.
+//
+// This is reachable over HTTP because the alternative was not. Correcting a
+// seeded recipe on a node meant deleting files there by hand, which needs shell
+// access to a box that may deliberately not grant it - and a node whose whole
+// point is being driven remotely should not need a login to accept a recipe its
+// own binary already carries.
+//
+// Without force, recipes an operator has edited are reported as kept and left
+// exactly as they are.
+func (s *Server) syncRecipes(w http.ResponseWriter, r *http.Request) {
+	force := r.URL.Query().Get("force") == "true"
+
+	res, err := s.cat.SyncSeeds(force)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if wantsHTML(r) {
+		s.redirect(w, r, "/", fmt.Sprintf(
+			"catalog sync: %d added, %d updated, %d kept, %d already current",
+			len(res.Added), len(res.Updated), len(res.Kept), len(res.Current)), false)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) listDeployments(w http.ResponseWriter, _ *http.Request) {

@@ -26,10 +26,14 @@ const (
 	// Overlays are stored flat as "<source>--<recipe>" rather than nested, so
 	// the store's single-segment name guard keeps applying unchanged.
 	KindOverlay Kind = "overlays"
+	// SeedMarks record the exact content Sous last wrote for a seeded recipe.
+	// Without them an upgrade cannot tell a recipe it wrote itself from one an
+	// operator edited, and so can only ever refuse to touch either.
+	KindSeedMark Kind = "seedmarks"
 )
 
 var allKinds = []Kind{KindRecipe, KindObservation, KindDeployment,
-	KindExport, KindSource, KindOverlay}
+	KindExport, KindSource, KindOverlay, KindSeedMark}
 
 type Store struct{ root string }
 

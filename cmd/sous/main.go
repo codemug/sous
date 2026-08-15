@@ -39,6 +39,20 @@ func main() {
 		log.Printf("seeded %d measured recipes", n)
 	}
 
+	// Then bring an already-seeded install up to date. SeedIfEmpty alone meant
+	// a recipe added or corrected in a new release never reached a node that
+	// had been seeded once - the fix shipped and stayed in the binary. This
+	// adds what is missing and replaces only what Sous itself wrote and nobody
+	// has since edited, so upgrading cannot silently undo a tuned recipe.
+	sync, err := cat.SyncSeeds(false)
+	if err != nil {
+		log.Fatalf("syncing the catalog: %v", err)
+	}
+	if len(sync.Added) > 0 || len(sync.Updated) > 0 || len(sync.Kept) > 0 {
+		log.Printf("catalog sync: added %v, updated %v, kept (edited locally) %v",
+			sync.Added, sync.Updated, sync.Kept)
+	}
+
 	// Read the real pool. gx10 reports 121.6 GiB, not the nominal 128, and
 	// planning against the nominal figure over-commits by 6 GiB before
 	// anything is deployed.

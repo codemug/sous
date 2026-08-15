@@ -46,6 +46,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	s.mux.HandleFunc("GET /api/recipes", s.listRecipes)
+	s.mux.HandleFunc("POST /api/recipes/sync", s.syncRecipes)
 	s.mux.HandleFunc("GET /api/deployments", s.listDeployments)
 	s.mux.HandleFunc("GET /api/plan/{id}", s.plan)
 	s.mux.HandleFunc("POST /api/deploy/{id}", s.deploy)

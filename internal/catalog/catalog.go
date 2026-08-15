@@ -48,6 +48,10 @@ func (c *Catalog) List() ([]recipe.Recipe, error) {
 
 // SeedIfEmpty writes the measured catalog on first run and does nothing after,
 // so an operator's edits are never overwritten by a restart.
+//
+// Each seed is recorded with a provenance mark as it is written. That is what
+// lets SyncSeeds later tell a recipe nobody has touched from one the operator
+// has tuned, and update only the former.
 func (c *Catalog) SeedIfEmpty() (int, error) {
 	names, err := c.s.List(store.KindRecipe)
 	if err != nil {
@@ -58,7 +62,11 @@ func (c *Catalog) SeedIfEmpty() (int, error) {
 	}
 	n := 0
 	for _, r := range Seeds() {
-		if err := c.Save(r); err != nil {
+		d, err := digestOf(r)
+		if err != nil {
+			return n, err
+		}
+		if err := c.saveSeed(r, d); err != nil {
 			return n, err
 		}
 		n++
