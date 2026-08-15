@@ -90,7 +90,7 @@ func newServerWithHub(t *testing.T, hub string) http.Handler {
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	h, err := New(m, c, 121.6, hub)
+	h, err := New(m, c, 121.6, hub, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,5 +327,81 @@ func TestLarderPageRenders(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("larder page missing %q", want)
 		}
+	}
+}
+
+// ---------- sources ----------
+
+func TestSourcesPageRendersEmptyState(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/sources", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), "No sources configured") {
+		t.Fatal("empty state not rendered")
+	}
+	// The page must state the guarantee, since it is the whole safety story.
+	if !strings.Contains(rr.Body.String(), "never deploys") {
+		t.Fatal("the page must say a fetch does not deploy")
+	}
+}
+
+func TestAddSourceThenList(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/sources?name=community&url=https://example.invalid/r.git", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("add: %d %s", rr.Code, rr.Body)
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/sources", nil))
+	var got []map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got) != 1 || got[0]["name"] != "community" {
+		t.Fatalf("source not stored: %v", got)
+	}
+	// An unspecified ref must default rather than producing an unusable source.
+	if got[0]["ref"] != "main" {
+		t.Fatalf("ref should default to main, got %v", got[0]["ref"])
+	}
+}
+
+func TestAddSourceRequiresURL(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/sources?name=x", nil))
+	if rr.Code < 400 {
+		t.Fatalf("accepted a source with no URL: %d", rr.Code)
+	}
+}
+
+// A source that cannot be reached must report per-source rather than failing
+// the whole fetch, and must never take down the catalog.
+func TestFetchReportsPerSourceErrors(t *testing.T) {
+	h := newTestServer(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/sources?name=broken&url=/nonexistent/repo", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatal("add failed")
+	}
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/sources/fetch", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("fetch should report, not fail: %d %s", rr.Code, rr.Body)
+	}
+	var got []map[string]any
+	json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got) != 1 || got[0]["error"] == nil {
+		t.Fatalf("a broken source must report its error: %v", got)
+	}
+	// And the catalog must still serve.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatal("a broken source took down the catalog page")
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
+	"github.com/codemug/sous/internal/sources"
 	"github.com/codemug/sous/internal/ui"
 )
 
@@ -25,15 +26,20 @@ type Server struct {
 	// would drift from reality the first time anything is deleted by hand.
 	hubDir string
 
+	// src mirrors recipe repositories. Fetch is always explicit: nothing is
+	// pulled on a timer and nothing is ever deployed by a fetch.
+	src *sources.Manager
+
 	mux *http.ServeMux
 }
 
-func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir string) (http.Handler, error) {
+func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sourcesDir string) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir, mux: http.NewServeMux()}
+	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir,
+		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -46,6 +52,10 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir string) 
 	s.mux.HandleFunc("POST /api/undeploy/{id}", s.undeploy)
 	s.mux.HandleFunc("GET /api/larder", s.listLarder)
 	s.mux.HandleFunc("POST /api/larder/delete", s.deleteWeights)
+	s.mux.HandleFunc("GET /api/sources", s.listSources)
+	s.mux.HandleFunc("POST /api/sources", s.addSource)
+	s.mux.HandleFunc("POST /api/sources/fetch", s.fetchSources)
+	s.mux.HandleFunc("GET /sources", s.pageSources)
 	s.mux.HandleFunc("GET /deployments", s.pageDeployments)
 	s.mux.HandleFunc("GET /larder", s.pageLarder)
 	s.mux.HandleFunc("GET /", s.pageCatalog)

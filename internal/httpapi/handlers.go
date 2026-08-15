@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/codemug/sous/internal/deploy"
+	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/larder"
 	"github.com/codemug/sous/internal/recipe"
+	"github.com/codemug/sous/internal/sources"
 )
 
 type pageData struct {
@@ -21,6 +24,8 @@ type pageData struct {
 	Larder      []larder.Entry
 	LarderTotal string
 	Reclaimable string
+	Sources     []sources.Source
+	Resolved    []catalog.Resolved
 	Message     string
 	IsError     bool
 }
@@ -272,4 +277,89 @@ func (s *Server) pageCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pageDeployments(w http.ResponseWriter, r *http.Request) {
 	s.page(w, r, "deployments", "Deployments", nil)
+}
+
+// ---------- sources ----------
+
+func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
+	srcs, err := s.cat.Sources()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, srcs)
+}
+
+func (s *Server) addSource(w http.ResponseWriter, r *http.Request) {
+	src := sources.Source{
+		Name: r.URL.Query().Get("name"),
+		URL:  r.URL.Query().Get("url"),
+		Ref:  r.URL.Query().Get("ref"),
+	}
+	if src.Ref == "" {
+		src.Ref = "main"
+	}
+	if err := s.cat.SaveSource(src); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if wantsHTML(r) {
+		s.redirect(w, r, "/sources", "added "+src.Name, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, src)
+}
+
+// fetchSources updates every mirror and reports what moved. It deploys
+// nothing: updating what is on offer and changing what is running are separate
+// acts, and conflating them is how a fetch silently alters a live model.
+func (s *Server) fetchSources(w http.ResponseWriter, r *http.Request) {
+	srcs, err := s.cat.Sources()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type result struct {
+		Name    string `json:"name"`
+		OldSHA  string `json:"old_sha,omitempty"`
+		NewSHA  string `json:"new_sha,omitempty"`
+		Changed bool   `json:"changed"`
+		Error   string `json:"error,omitempty"`
+	}
+	out := make([]result, 0, len(srcs))
+	for _, src := range srcs {
+		res := result{Name: src.Name, OldSHA: src.LastSHA}
+		sha, err := s.src.Fetch(r.Context(), src)
+		if err != nil {
+			res.Error = err.Error()
+			out = append(out, res)
+			continue
+		}
+		res.NewSHA = sha
+		res.Changed = sha != src.LastSHA
+		src.LastSHA = sha
+		src.LastFetched = time.Now()
+		_ = s.cat.SaveSource(src)
+		out = append(out, res)
+	}
+	if wantsHTML(r) {
+		s.redirect(w, r, "/sources", "fetched "+strconv.Itoa(len(out))+" source(s)", false)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) pageSources(w http.ResponseWriter, r *http.Request) {
+	s.page(w, r, "sources", "Sources", func(d *pageData) error {
+		srcs, err := s.cat.Sources()
+		if err != nil {
+			return err
+		}
+		d.Sources = srcs
+		res, err := s.cat.Effective(s.src)
+		if err == nil {
+			d.Resolved = res
+		}
+		return nil
+	})
 }

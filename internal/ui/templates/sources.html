@@ -1,0 +1,65 @@
+{{define "sources"}}{{template "head" .}}
+<p class="note">Recipe repositories, mirrored read-only. Sous never writes into a mirror, so a
+fetch is always a clean fast-forward and your edits live as overlays instead.
+<strong>Fetch never deploys anything</strong> — updating what is on offer and
+changing what is running are separate acts.</p>
+
+{{if .Message}}<p class="note{{if .IsError}} warn{{end}}">{{.Message}}</p>{{end}}
+
+<div class="wrap">
+<table>
+  <thead>
+    <tr><th>Source</th><th>URL</th><th>Ref</th><th>Head</th><th>Last fetched</th></tr>
+  </thead>
+  <tbody>
+  {{range .Sources}}
+    <tr>
+      <td><strong>{{.Name}}</strong></td>
+      <td class="sub">{{.URL}}</td>
+      <td>{{.Ref}}</td>
+      <td class="sub">{{if .LastSHA}}{{slice .LastSHA 0 7}}{{else}}never fetched{{end}}</td>
+      <td class="sub">{{if .LastFetched.IsZero}}—{{else}}{{.LastFetched.Format "2006-01-02 15:04"}}{{end}}</td>
+    </tr>
+  {{else}}
+    <tr><td colspan="5" class="sub">No sources configured.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+
+{{if .Sources}}
+<form method="post" action="/api/sources/fetch" style="margin:1rem 0">
+  <button type="submit">Fetch all</button>
+</form>
+{{end}}
+
+<h2 style="font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:2rem 0 .6rem">
+  Effective catalog</h2>
+<p class="note">What is actually on offer: local recipes plus every source recipe with its
+overlay applied. A local recipe shadows a source one of the same id, and both
+are shown — silently replacing would make a fetch look like it did nothing when
+it had in fact delivered a change.</p>
+
+<div class="wrap">
+<table>
+  <thead>
+    <tr><th>Recipe</th><th>Origin</th><th>State</th></tr>
+  </thead>
+  <tbody>
+  {{range .Resolved}}
+    <tr>
+      <td><strong>{{.ID}}</strong></td>
+      <td>{{if .Source}}<span class="tag t-kind">{{.Source}}</span>{{else}}<span class="tag t-arch">local</span>{{end}}</td>
+      <td class="sub">
+        {{if .Overlaid}}<span class="tag t-kind">overlaid</span>{{end}}
+        {{if .Shadowed}}<span class="tag" style="color:var(--warn)">shadowed by local</span>{{end}}
+        {{if .ShadowsID}}<span class="tag" style="color:var(--warn)">shadows {{.ShadowsID}}</span>{{end}}
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="3" class="sub">Nothing resolved.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{template "foot" .}}{{end}}

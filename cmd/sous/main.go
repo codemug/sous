@@ -73,7 +73,8 @@ func main() {
 
 	// The larder scans MODEL_DIR/hub, which is where huggingface_hub
 	// places snapshots under the HF_HOME bind mount.
-	h, err := httpapi.New(mgr, cat, mem.TotalGiB, filepath.Join(cfg.ModelDir, "hub"))
+	h, err := httpapi.New(mgr, cat, mem.TotalGiB,
+		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"))
 	if err != nil {
 		log.Fatalf("http: %v", err)
 	}

@@ -22,9 +22,14 @@ const (
 	KindObservation Kind = "observations"
 	KindDeployment  Kind = "deployments"
 	KindExport      Kind = "exports"
+	KindSource      Kind = "sources"
+	// Overlays are stored flat as "<source>--<recipe>" rather than nested, so
+	// the store's single-segment name guard keeps applying unchanged.
+	KindOverlay Kind = "overlays"
 )
 
-var allKinds = []Kind{KindRecipe, KindObservation, KindDeployment, KindExport}
+var allKinds = []Kind{KindRecipe, KindObservation, KindDeployment,
+	KindExport, KindSource, KindOverlay}
 
 type Store struct{ root string }
 
