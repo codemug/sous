@@ -54,12 +54,19 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          # sha tags are what the fleet should pin to. `latest` exists for
-          # convenience and is deliberately not what a node tracks.
+          # WHAT A DEPLOYMENT SHOULD PIN: a semver tag (0.1.0). It is
+          # immutable, it maps to a GitHub release you can read, and it makes
+          # "what is running" answerable from the compose file alone.
+          #
+          # major.minor (0.1) exists for tracking patches without editing a
+          # marker. sha tags are the escape hatch for bisecting a regression.
+          # `latest` is convenience only and is deliberately NOT what a node
+          # tracks - a moving tag turns "redeploy" into an unrepeatable event.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
             type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - uses: docker/build-push-action@v6
         with:
@@ -70,3 +77,47 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # A tag should produce something a human can read, not just a moving image.
+  # Deployments pin a version; this is where you find out what that version
+  # changed.
+  release:
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Notes from the commits since the previous tag, so the release says
+          # what actually changed rather than repeating the tag name.
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..${TAG}"
+          else
+            RANGE="${TAG}"
+          fi
+
+          {
+            echo "## Container image"
+            echo
+            echo '```'
+            echo "ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}"
+            echo '```'
+            echo
+            echo "linux/amd64 and linux/arm64."
+            echo
+            echo "## Changes"
+            echo
+            git log --no-merges --pretty='- %s' $RANGE
+          } > notes.md
+
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
