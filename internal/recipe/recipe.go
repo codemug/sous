@@ -27,35 +27,35 @@ const (
 // Footprint is a DECLARED estimate. Truth arrives in an observe.Observation
 // after a successful load, and capacity prefers that when it exists.
 type Footprint struct {
-	WeightsGiB float64 `yaml:"weights_gib"`
-	KVGiB      float64 `yaml:"kv_gib"`
+	WeightsGiB float64 `yaml:"weights_gib" json:"weights_gib"`
+	KVGiB      float64 `yaml:"kv_gib" json:"kv_gib"`
 }
 
 func (f Footprint) TotalGiB() float64 { return f.WeightsGiB + f.KVGiB }
 
 type Recipe struct {
-	ID       string   `yaml:"id"`
-	Kind     Kind     `yaml:"kind"`
-	Modality Modality `yaml:"modality"`
-	Model    string   `yaml:"model,omitempty"`
-	Image    string   `yaml:"image"`
-	ServedAs []string `yaml:"served_as,omitempty"`
+	ID       string   `yaml:"id" json:"id"`
+	Kind     Kind     `yaml:"kind" json:"kind"`
+	Modality Modality `yaml:"modality" json:"modality"`
+	Model    string   `yaml:"model,omitempty" json:"model,omitempty"`
+	Image    string   `yaml:"image" json:"image"`
+	ServedAs []string `yaml:"served_as,omitempty" json:"served_as,omitempty"`
 
 	// Build and Entrypoint apply to KindTransformers. The entrypoint override
 	// is mandatory there: the vLLM base image sets ENTRYPOINT ["vllm","serve"],
 	// which turns a derived service's command into arguments to vLLM. That cost
 	// 46 crash loops before it was found, and a Dockerfile ENTRYPOINT [] did
 	// not survive the rebuild.
-	Build      string   `yaml:"build,omitempty"`
-	Entrypoint []string `yaml:"entrypoint,omitempty"`
+	Build      string   `yaml:"build,omitempty" json:"build,omitempty"`
+	Entrypoint []string `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 
-	Declared Footprint         `yaml:"declared"`
-	Args     map[string]any    `yaml:"args,omitempty"`
-	Env      map[string]string `yaml:"env,omitempty"`
-	Notes    string            `yaml:"notes,omitempty"`
+	Declared Footprint         `yaml:"declared" json:"declared"`
+	Args     map[string]any    `yaml:"args,omitempty" json:"args,omitempty"`
+	Env      map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Notes    string            `yaml:"notes,omitempty" json:"notes,omitempty"`
 
 	// Archived keeps a recipe in the catalog without offering it for service.
 	// Negative results are worth keeping: they stop someone re-deriving why a
 	// configuration lost.
-	Archived bool `yaml:"archived,omitempty"`
+	Archived bool `yaml:"archived,omitempty" json:"archived,omitempty"`
 }
