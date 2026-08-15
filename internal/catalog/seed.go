@@ -117,8 +117,8 @@ func Seeds() []recipe.Recipe {
 		},
 		{
 			ID: "nemotron35", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
-			Model: "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
-			Image: "vllm/vllm-openai:v0.27.1-aarch64",
+			Model:    "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+			Image:    "vllm/vllm-openai:v0.27.1-aarch64",
 			ServedAs: []string{"nemotron"}, Archived: true,
 			Declared: recipe.Footprint{WeightsGiB: 17.86, KVGiB: 4},
 			Args: map[string]any{
@@ -147,9 +147,61 @@ func Seeds() []recipe.Recipe {
 				"set, and --help does not.",
 		},
 		{
+			ID: "qwen3-omni", Kind: recipe.KindVLLM, Modality: recipe.ModalityOmni,
+			Model:    "YihongJin/Qwen3-Omni-30B-A3B-Instruct-NVFP4-W4A4-full-thinker-awqclip",
+			Image:    "vllm/vllm-omni:v0.27.0rc1-aarch64",
+			ServedAs: []string{"qwen3omni"},
+			Declared: recipe.Footprint{WeightsGiB: 25.7, KVGiB: 8},
+			Args: map[string]any{
+				// --omni is what activates the Talker stage. Without it this
+				// loads as a text model with the speech path inert, which is
+				// exactly the audio-in-only shape that made `omni` below
+				// pointless here.
+				"omni": true, "gpu-memory-utilization": 0.55,
+				"max-model-len": 32768,
+			},
+			Env: map[string]string{
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
+			Notes: "UNPROVEN AS OF 2026-08-16. Staged, not yet booted. The declared\n" +
+				"footprint is arithmetic, not measurement: weights_gib is the repo size\n" +
+				"and kv_gib is extrapolated from the 35B-A3B sibling's measured 88.3\n" +
+				"KiB/token. Replace both from the boot log before trusting a capacity\n" +
+				"plan built on them.\n\n" +
+				"WHAT IT BUYS: real speech OUTPUT. The cascade it would replace (asr ->\n" +
+				"qwen38 -> kokoro) runs ~0.5s and discards prosody at the text boundary.\n" +
+				"This emits audio directly, which is what ChatGPT's voice mode does.\n\n" +
+				"NOT the mistake `omni` below made. That checkpoint was audio-IN only and\n" +
+				"still needed separate TTS, so it spent 25.6 GiB doing ASR badly. This one\n" +
+				"carries the speech stack - verified in the safetensors index, not assumed:\n" +
+				"thinker 75,615 / talker 8,037 / code2wav 230, where the talker and\n" +
+				"code2wav counts are IDENTICAL to the bf16 original. The quantiser touched\n" +
+				"only the MoE thinker.\n\n" +
+				"QUANT SELECTION IS LOAD-BEARING. Sibling repos named -talker-safe and\n" +
+				"-text-only exist because naive quantisation BREAKS speech output. This\n" +
+				"build excludes code2wav*, talker*, thinker.audio_tower*, thinker.lm_head\n" +
+				"and thinker.visual* from quantisation, so the whole speech path stays\n" +
+				"full precision. -talker-safe reaches the same place at 46.3 GiB by\n" +
+				"leaving more in bf16; no reason to pay that.\n\n" +
+				"NVFP4 over the same-sized AWQ-4bit build on purpose: AWQ-Marlin on sm_121\n" +
+				"is unproven on GB10, while NVFP4 is what qwen38 already runs in\n" +
+				"production. Prefer the format with evidence behind it.\n\n" +
+				"THE OPEN RISK: vllm-omni documents no quantisation support for the omni\n" +
+				"pipeline. A partially-quantised checkpoint driving a multi-stage\n" +
+				"thinker -> talker -> code2wav pipeline is the real unknown, and only a\n" +
+				"boot answers it.\n\n" +
+				"Request audio with {\"modalities\": [\"audio\"]}; --speaker selects the\n" +
+				"voice (chelsie, ethan). 30B-A3B is MoE at ~3B active per token - the same\n" +
+				"class as qwen36, which measured 60.6 tok/s here - so expect it to beat\n" +
+				"dense qwen38 on speed and possibly lose on hard reasoning.",
+		},
+		{
 			ID: "omni", Kind: recipe.KindVLLM, Modality: recipe.ModalityOmni,
-			Model: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
-			Image: "fleet/vllm-omni-gcc12:v0.27.1-aarch64",
+			Model:    "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+			Image:    "fleet/vllm-omni-gcc12:v0.27.1-aarch64",
 			ServedAs: []string{"omni"}, Archived: true,
 			Declared: recipe.Footprint{WeightsGiB: 21.59, KVGiB: 4},
 			Args: map[string]any{
@@ -180,7 +232,7 @@ func Seeds() []recipe.Recipe {
 				"--host", "0.0.0.0", "--port", "8000"},
 			Declared: recipe.Footprint{WeightsGiB: 1.19},
 			Env: map[string]string{
-				"ASR_MODEL": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+				"ASR_MODEL":  "nvidia/nemotron-3.5-asr-streaming-0.6b",
 				"ASR_DEVICE": "cuda",
 				"HF_HOME":    "/root/.cache/huggingface",
 			},

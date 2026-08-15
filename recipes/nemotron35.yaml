@@ -18,6 +18,11 @@ args:
     max-num-seqs: 4
     reasoning-parser: nemotron_v3
     tool-call-parser: qwen3_coder
+env:
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
 notes: |-
     78-79 tok/s single-stream, flat across 20 / 1.5k / 9k context.
 

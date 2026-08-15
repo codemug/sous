@@ -16,34 +16,31 @@ env:
     CUTE_DSL_ARCH: sm_121a
     HF_HOME: /root/.cache/huggingface
     TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
 notes: |-
-    UNPROVEN AS OF 2026-08-16. Staged, not yet booted. The declared footprint
-    is arithmetic from the checkpoint, not a measurement: weights_gib is the
-    repo size and kv_gib is a guess from the 35B-A3B sibling that measured
-    88.3 KiB/token. Replace both from the boot log before trusting a capacity
+    UNPROVEN AS OF 2026-08-16. Staged, not yet booted. The declared
+    footprint is arithmetic, not measurement: weights_gib is the repo size
+    and kv_gib is extrapolated from the 35B-A3B sibling's measured 88.3
+    KiB/token. Replace both from the boot log before trusting a capacity
     plan built on them.
 
-    WHAT IT BUYS: real speech OUTPUT. The cascade it would replace (asr :8006
-    -> qwen38 :8000 -> kokoro :8004) runs ~0.5s and throws away prosody at the
-    text boundary. This emits audio directly via a Talker stage, which is what
-    ChatGPT's voice mode does.
+    WHAT IT BUYS: real speech OUTPUT. The cascade it would replace (asr ->
+    qwen38 -> kokoro) runs ~0.5s and discards prosody at the text boundary.
+    This emits audio directly, which is what ChatGPT's voice mode does.
 
-    NOT the Nemotron Omni mistake. That checkpoint was audio-IN only and still
-    needed a separate TTS, so it spent 25.6 GiB to do ASR badly. This one
-    carries the speech stack, verified in the safetensors index rather than
-    assumed:
+    NOT the mistake `omni` below made. That checkpoint was audio-IN only and
+    still needed separate TTS, so it spent 25.6 GiB doing ASR badly. This one
+    carries the speech stack - verified in the safetensors index, not assumed:
+    thinker 75,615 / talker 8,037 / code2wav 230, where the talker and
+    code2wav counts are IDENTICAL to the bf16 original. The quantiser touched
+    only the MoE thinker.
 
-      thinker 75,615   talker 8,037   code2wav 230
-
-    The talker and code2wav counts are IDENTICAL to the bf16 original - the
-    quantiser touched only the MoE thinker.
-
-    QUANT SELECTION IS LOAD-BEARING. Sibling repos named `-talker-safe` and
-    `-text-only` exist because naive quantisation breaks speech output. This
+    QUANT SELECTION IS LOAD-BEARING. Sibling repos named -talker-safe and
+    -text-only exist because naive quantisation BREAKS speech output. This
     build excludes code2wav*, talker*, thinker.audio_tower*, thinker.lm_head
-    and thinker.visual* from quantisation, so the whole speech path stays full
-    precision. `-talker-safe` reaches the same place at 46.3 GiB by leaving
-    more in bf16; there is no reason to pay that.
+    and thinker.visual* from quantisation, so the whole speech path stays
+    full precision. -talker-safe reaches the same place at 46.3 GiB by
+    leaving more in bf16; no reason to pay that.
 
     NVFP4 over the same-sized AWQ-4bit build on purpose: AWQ-Marlin on sm_121
     is unproven on GB10, while NVFP4 is what qwen38 already runs in
@@ -51,17 +48,10 @@ notes: |-
 
     THE OPEN RISK: vllm-omni documents no quantisation support for the omni
     pipeline. A partially-quantised checkpoint driving a multi-stage
-    thinker -> talker -> code2wav pipeline is the actual unknown here, and only
-    a boot answers it.
+    thinker -> talker -> code2wav pipeline is the real unknown, and only a
+    boot answers it.
 
-    --omni is the flag that activates the Talker. Without it this loads as a
-    text model with the speech stage inert - the exact audio-in-only shape
-    that made Nemotron Omni pointless. Request audio with
-    {"modalities": ["audio"]}; --speaker selects the voice (chelsie, ethan).
-
-    30B-A3B is MoE at ~3B active per token, the same class as qwen3.6 which
-    measured 60.6 tok/s here, so expect it to beat dense qwen38 on speed and
-    possibly lose on hard reasoning. That trade is the thing to measure, and
-    it is why this is staged as a replacement trial rather than a co-tenant:
-    25.7 GiB does not fit in the ~27 GiB margin qwen38 leaves once KV is
-    accounted for.
+    Request audio with {"modalities": ["audio"]}; --speaker selects the
+    voice (chelsie, ethan). 30B-A3B is MoE at ~3B active per token - the same
+    class as qwen36, which measured 60.6 tok/s here - so expect it to beat
+    dense qwen38 on speed and possibly lose on hard reasoning.

@@ -21,6 +21,11 @@ args:
     speculative-config: '{"method":"mtp","num_speculative_tokens":3}'
     tensor-parallel-size: 1
     tool-call-parser: qwen3_coder
+env:
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
 notes: |-
     Dense 27B but HYBRID: 48 Gated DeltaNet + 16 full-attention layers
     (full_attention_interval 4). The full-attention geometry is heavier than

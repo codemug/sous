@@ -21,6 +21,11 @@ args:
     speculative-config: '{"method":"mtp","num_speculative_tokens":2}'
     tensor-parallel-size: 1
     tool-call-parser: qwen3_coder
+env:
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
 notes: |-
     MoE, ~3B active per token: 60.6 tok/s, roughly 4x qwen38 on prose.
     Decode is bandwidth-bound and this reads far fewer bytes per token.

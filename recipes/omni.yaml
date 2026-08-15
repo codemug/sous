@@ -18,6 +18,11 @@ args:
     reasoning-parser: nemotron_v3
     tool-call-parser: qwen3_coder
     trust-remote-code: true
+env:
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
 notes: |-
     RETIRED 2026-08-14. Used 25.6 GiB to do ASR that a 1.19 GiB model does
     better and faster - a 21x memory saving for equal transcription quality.

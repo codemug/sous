@@ -16,6 +16,10 @@ entrypoint:
 declared:
     weights_gib: 1.19
     kv_gib: 0
+env:
+    ASR_DEVICE: cuda
+    ASR_MODEL: nvidia/nemotron-3.5-asr-streaming-0.6b
+    HF_HOME: /root/.cache/huggingface
 notes: |-
     0.42s mean for ~3.7s clips (RTF 0.11), 0.0% WER, 35 languages.
 
