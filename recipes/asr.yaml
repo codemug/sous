@@ -1,0 +1,33 @@
+id: asr
+kind: transformers
+modality: asr
+model: nvidia/nemotron-3.5-asr-streaming-0.6b
+image: fleet/nemotron-asr:0.6b
+build: stacks/nemotron-asr
+entrypoint:
+    - python3
+    - -m
+    - uvicorn
+    - app:app
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+declared:
+    weights_gib: 1.19
+    kv_gib: 0
+notes: |-
+    0.42s mean for ~3.7s clips (RTF 0.11), 0.0% WER, 35 languages.
+
+    A hand-written FastAPI service because vLLM registers every ASR
+    architecture but ships NO transcription entrypoint - the modules under
+    vllm.entrypoints.openai are api_server, chat_completion, cli_args,
+    completion, dp_supervisor, engine, models, parser, responses, run_batch.
+    Nothing audio-shaped.
+
+    The entrypoint override MUST be at container level. The vLLM base image
+    sets ENTRYPOINT ["vllm","serve"], turning CMD into arguments to vLLM;
+    a Dockerfile ENTRYPOINT [] did not survive the rebuild. 46 crash loops.
+
+    The processor rejects any sample rate but 16 kHz outright rather than
+    resampling, so the service resamples before calling it.

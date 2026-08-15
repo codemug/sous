@@ -1,0 +1,14 @@
+id: kokoro
+kind: container
+modality: tts
+image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+declared:
+    weights_gib: 0
+    kv_gib: 0
+notes: |-
+    CPU BY DESIGN and costs zero GPU - that is a choice, not a limitation.
+    Keeping TTS off the GPU leaves the ~273 GB/s of memory bandwidth for the
+    LLM, which is what decode is actually bound by. Co-resident GPU models
+    split that bandwidth negative-sum.
+
+    0.40x realtime, 68 voices. arm64 manifest verified before deploying.

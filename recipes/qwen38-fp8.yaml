@@ -1,0 +1,30 @@
+id: qwen38-fp8
+kind: vllm
+modality: text
+model: Qwen/Qwen3.8-27B-FP8
+image: vllm/vllm-openai@sha256:d5a8e53ad2534e24b99ba1a2e3f183a213adc0da48ed83166cb75534a5903a17
+served_as:
+    - qwen38
+declared:
+    weights_gib: 28.95
+    kv_gib: 62.03
+args:
+    enable-auto-tool-choice: true
+    enable-prefix-caching: true
+    gpu-memory-utilization: 0.8
+    kv-cache-dtype: auto
+    max-model-len: 131072
+    max-num-seqs: 4
+    reasoning-parser: qwen3
+    speculative-config: '{"method":"mtp","num_speculative_tokens":3}'
+    tool-call-parser: qwen3_coder
+notes: |-
+    SUPERSEDED by qwen38 (NVFP4). Kept as evidence, not nostalgia.
+    21.91 structured / 13.83 prose tok/s, 273 KiB/token, 238,400 tokens.
+    Chose FLASH_ATTN from four candidates and captured FULL CUDA graphs
+    (PIECEWISE=5, FULL=3), which the NVFP4 build does not - and NVFP4 still
+    won on throughput. That comparison is the reason to keep this entry.
+
+    util 0.80 left the box at 113/121 GiB with 4.2 GiB of swap engaged: a
+    fraction taken at its word rather than a budget that was needed.
+archived: true

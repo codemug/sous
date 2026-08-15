@@ -1,0 +1,32 @@
+id: nemotron35
+kind: vllm
+modality: text
+model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+image: vllm/vllm-openai:v0.27.1-aarch64
+served_as:
+    - nemotron
+declared:
+    weights_gib: 17.86
+    kv_gib: 4
+args:
+    enable-auto-tool-choice: true
+    gpu-memory-utilization: 0.38
+    kv-cache-dtype: fp8
+    kv-cache-memory-bytes: 4294967296
+    mamba-cache-mode: align
+    max-model-len: 262144
+    max-num-seqs: 4
+    reasoning-parser: nemotron_v3
+    tool-call-parser: qwen3_coder
+notes: |-
+    78-79 tok/s single-stream, flat across 20 / 1.5k / 9k context.
+
+    The DSpark drafter is a 48% LOSS on this box and must not be re-added
+    without re-measuring. Acceptance was fine at 45.6% and 1.37 tokens per
+    draft; the cost was elsewhere - enabling speculation downgraded CUDA
+    graphs FULL -> PIECEWISE under FlashInfer, and at max-num-seqs 4 the
+    per-token graph overhead exceeded what speculation saved.
+
+    reasoning-parser nemotron_v3, not nemotron: the KeyError lists the valid
+    set, and --help does not.
+archived: true

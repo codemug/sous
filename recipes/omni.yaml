@@ -1,0 +1,30 @@
+id: omni
+kind: vllm
+modality: omni
+model: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+image: fleet/vllm-omni-gcc12:v0.27.1-aarch64
+served_as:
+    - omni
+declared:
+    weights_gib: 21.59
+    kv_gib: 4
+args:
+    enable-auto-tool-choice: true
+    gpu-memory-utilization: 0.45
+    kv-cache-dtype: fp8
+    kv-cache-memory-bytes: 4294967296
+    max-model-len: 131072
+    max-num-seqs: 4
+    reasoning-parser: nemotron_v3
+    tool-call-parser: qwen3_coder
+    trust-remote-code: true
+notes: |-
+    RETIRED 2026-08-14. Used 25.6 GiB to do ASR that a 1.19 GiB model does
+    better and faster - a 21x memory saving for equal transcription quality.
+
+    Needs the GCC 12 image: the stock vllm image ships g++ 11.4, which
+    rejects the ARMv9 -march that torch inductor emits on GB10. The failure
+    presents as a per-modality processor error and MIGRATES when you suppress
+    one modality, which sends you chasing the wrong thing entirely. Look for
+    CppCompileError first.
+archived: true

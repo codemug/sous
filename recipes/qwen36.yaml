@@ -1,0 +1,32 @@
+id: qwen36
+kind: vllm
+modality: text
+model: Qwen/Qwen3.6-35B-A3B-FP8
+image: vllm/vllm-openai@sha256:d5a8e53ad2534e24b99ba1a2e3f183a213adc0da48ed83166cb75534a5903a17
+served_as:
+    - qwen
+declared:
+    weights_gib: 35.02
+    kv_gib: 26
+args:
+    enable-auto-tool-choice: true
+    enable-prefix-caching: true
+    gpu-memory-utilization: 0.46
+    kv-cache-dtype: auto
+    kv-cache-memory-bytes: 27917287424
+    max-model-len: 262144
+    max-num-batched-tokens: 8192
+    max-num-seqs: 4
+    reasoning-parser: qwen3
+    speculative-config: '{"method":"mtp","num_speculative_tokens":2}'
+    tensor-parallel-size: 1
+    tool-call-parser: qwen3_coder
+notes: |-
+    MoE, ~3B active per token: 60.6 tok/s, roughly 4x qwen38 on prose.
+    Decode is bandwidth-bound and this reads far fewer bytes per token.
+    88.3 KiB/token KV, 308,736 tokens at the 26 GiB pin. MTP acceptance
+    81.7%, 1.63 accepted per draft.
+
+    tool-call-parser is load-bearing: without it tool calls silently stop
+    working while the model still answers, which reads as the model getting
+    dumber rather than as a configuration error.

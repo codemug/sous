@@ -1,0 +1,43 @@
+id: qwen38
+kind: vllm
+modality: text
+model: Inferact/Qwen3.8-27B-NVFP4
+image: vllm/vllm-openai@sha256:d5a8e53ad2534e24b99ba1a2e3f183a213adc0da48ed83166cb75534a5903a17
+served_as:
+    - qwen38
+    - qwen
+declared:
+    weights_gib: 24.87
+    kv_gib: 45.67
+args:
+    enable-auto-tool-choice: true
+    enable-prefix-caching: true
+    gpu-memory-utilization: 0.62
+    kv-cache-dtype: fp8
+    max-model-len: 262144
+    max-num-batched-tokens: 8192
+    max-num-seqs: 4
+    reasoning-parser: qwen3
+    speculative-config: '{"method":"mtp","num_speculative_tokens":3}'
+    tensor-parallel-size: 1
+    tool-call-parser: qwen3_coder
+notes: |-
+    Dense 27B but HYBRID: 48 Gated DeltaNet + 16 full-attention layers
+    (full_attention_interval 4). The full-attention geometry is heavier than
+    the 35B MoE it replaced - 16 layers x 4 KV heads vs 10 x 2 - so KV costs
+    ~3.1x per token DESPITE the smaller parameter count. '27B dense is
+    cheaper' is exactly backwards here.
+
+    MTP ships in the checkpoint (mtp_num_hidden_layers 1) and is load-bearing:
+    +123% over no speculation, where the same flag buys qwen3.6 only +13%.
+    The dense model is more bandwidth-bound, so amortising the weight read
+    across accepted tokens is worth more. k=3 beats k=2 but the gain is
+    workload-dependent: +19.6% on structured output, +0.4% on prose.
+
+    fp8 KV halves KV to 136 KiB/token AND silently changes the attention
+    backend: candidates drop from four to two, FlashInfer is chosen over
+    FLASH_ATTN, and FlashInfer with spec-decode forces CUDA graphs off
+    FULL_AND_PIECEWISE. Measured anyway and NVFP4 still wins.
+
+    PINNED DIGEST, not a tag: vLLM 0.27.1 crashes FP8 checkpoints on GB10 in
+    deepgemm with 'Unknown SF transformation'.
