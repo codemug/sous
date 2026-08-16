@@ -149,54 +149,77 @@ func Seeds() []recipe.Recipe {
 		{
 			ID: "qwen3-omni", Kind: recipe.KindVLLM, Modality: recipe.ModalityOmni,
 			Model:    "YihongJin/Qwen3-Omni-30B-A3B-Instruct-NVFP4-W4A4-full-thinker-awqclip",
-			Image:    "vllm/vllm-omni:v0.27.0rc1-aarch64",
+			Image:    "vllm/vllm-omni:nightly-61a678bd2671237fda844c5c88ff51614bc7c579",
 			ServedAs: []string{"qwen3omni"},
-			Declared: recipe.Footprint{WeightsGiB: 25.7, KVGiB: 8},
+			Declared: recipe.Footprint{WeightsGiB: 19.53, KVGiB: 11.28},
 			Args: map[string]any{
 				// --omni is what activates the Talker stage. Without it this
 				// loads as a text model with the speech path inert, which is
 				// exactly the audio-in-only shape that made `omni` below
 				// pointless here.
-				"omni": true, "gpu-memory-utilization": 0.55,
-				"max-model-len": 32768,
+				"omni": true,
+				// PER-STAGE, because a single --gpu-memory-utilization is
+				// applied to EVERY stage independently. At 0.55 stage 0 alone
+				// took 66.89 GiB and starved the talker.
+				//
+				// devices:"0" is REQUIRED, not tuning. Without it stage 1
+				// spawns with no GPU at all: vllm_omni's device-placement
+				// helper disables itself because upstream vLLM removed
+				// set_device_control_env_var, and api_server.py blanks
+				// CUDA_VISIBLE_DEVICES - which CDI never sets - so the child
+				// inherits "".
+				"stage-overrides": `{"0":{"gpu_memory_utilization":0.30,"devices":"0"},` +
+					`"1":{"gpu_memory_utilization":0.20,"devices":"0","enforce_eager":true},` +
+					`"2":{"gpu_memory_utilization":0.10,"devices":"0","enforce_eager":true}}`,
+				"gpu-memory-utilization": 0.30,
+				"max-model-len":          32768,
 			},
 			Env: map[string]string{
 				"TORCH_CUDA_ARCH_LIST": "12.1a",
 				"CUTE_DSL_ARCH":        "sm_121a",
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
+				// Explicit because CDI injects devices rather than
+				// enumerating them, so this is otherwise unset - and
+				// api_server.py restores the SAVED value after blanking it.
+				"CUDA_VISIBLE_DEVICES": "0",
 			},
-			Notes: "UNPROVEN AS OF 2026-08-16. Staged, not yet booted. The declared\n" +
-				"footprint is arithmetic, not measurement: weights_gib is the repo size\n" +
-				"and kv_gib is extrapolated from the 35B-A3B sibling's measured 88.3\n" +
-				"KiB/token. Replace both from the boot log before trusting a capacity\n" +
-				"plan built on them.\n\n" +
-				"WHAT IT BUYS: real speech OUTPUT. The cascade it would replace (asr ->\n" +
-				"qwen38 -> kokoro) runs ~0.5s and discards prosody at the text boundary.\n" +
-				"This emits audio directly, which is what ChatGPT's voice mode does.\n\n" +
+			Notes: "MEASURED WORKING 2026-08-16. Serves on :8010 and emits real speech:\n" +
+				"24 kHz mono 16-bit WAV, 7.82s of audio generated in 2.77s - faster than\n" +
+				"realtime. Voices chelsie and ethan both confirmed.\n\n" +
+				"TEXT IS SLOW: 7.6-8.2 tok/s, against qwen38's 23.97 structured / 14.85\n" +
+				"prose. The earlier note here predicted a 30B-A3B MoE would BEAT dense\n" +
+				"qwen38 because it activates ~3B per token. That was WRONG - stages 1 and\n" +
+				"2 stay resident and run eager, and that is the cost. This is a voice\n" +
+				"model that thinks adequately, not a faster qwen38.\n\n" +
+				"Footprint is now measured, not arithmetic: 19.53 GiB weights and 11.28\n" +
+				"GiB KV for stage 0 at gpu_memory_utilization 0.30.\n\n" +
+				"IMAGE SELECTION IS BY VERSION PAIRING, NOT RECENCY - two windows were\n" +
+				"burned learning this. vllm_omni and the vLLM packaged beside it must\n" +
+				"agree, and version.py warns on EVERY boot when they do not:\n" +
+				"  v0.27.0rc1-aarch64  ImportError on MistralToolCall, dead at import\n" +
+				"  rc2 nightlies       omni 0.27.0rc2 calling a vLLM 0.26.0 API that does\n" +
+				"                      not exist (MultiModalConfig.mm_hasher_algorithm)\n" +
+				"  THIS ONE            vLLM 0.26.0 + omni 0.26.1, self-consistent\n\n" +
+				"WHAT IT BUYS: real speech OUTPUT. The cascade it replaces (asr -> qwen38\n" +
+				"-> kokoro) runs ~0.5s and discards prosody at the text boundary.\n\n" +
 				"NOT the mistake `omni` below made. That checkpoint was audio-IN only and\n" +
-				"still needed separate TTS, so it spent 25.6 GiB doing ASR badly. This one\n" +
-				"carries the speech stack - verified in the safetensors index, not assumed:\n" +
-				"thinker 75,615 / talker 8,037 / code2wav 230, where the talker and\n" +
-				"code2wav counts are IDENTICAL to the bf16 original. The quantiser touched\n" +
-				"only the MoE thinker.\n\n" +
+				"still needed separate TTS. This one carries the speech stack - verified\n" +
+				"in the safetensors index: thinker 75,615 / talker 8,037 / code2wav 230,\n" +
+				"where talker and code2wav are IDENTICAL to the bf16 original.\n\n" +
 				"QUANT SELECTION IS LOAD-BEARING. Sibling repos named -talker-safe and\n" +
 				"-text-only exist because naive quantisation BREAKS speech output. This\n" +
-				"build excludes code2wav*, talker*, thinker.audio_tower*, thinker.lm_head\n" +
-				"and thinker.visual* from quantisation, so the whole speech path stays\n" +
-				"full precision. -talker-safe reaches the same place at 46.3 GiB by\n" +
-				"leaving more in bf16; no reason to pay that.\n\n" +
-				"NVFP4 over the same-sized AWQ-4bit build on purpose: AWQ-Marlin on sm_121\n" +
-				"is unproven on GB10, while NVFP4 is what qwen38 already runs in\n" +
-				"production. Prefer the format with evidence behind it.\n\n" +
-				"THE OPEN RISK: vllm-omni documents no quantisation support for the omni\n" +
-				"pipeline. A partially-quantised checkpoint driving a multi-stage\n" +
-				"thinker -> talker -> code2wav pipeline is the real unknown, and only a\n" +
-				"boot answers it.\n\n" +
-				"Request audio with {\"modalities\": [\"audio\"]}; --speaker selects the\n" +
-				"voice (chelsie, ethan). 30B-A3B is MoE at ~3B active per token - the same\n" +
-				"class as qwen36, which measured 60.6 tok/s here - so expect it to beat\n" +
-				"dense qwen38 on speed and possibly lose on hard reasoning.",
+				"build leaves code2wav*, talker*, thinker.audio_tower*, thinker.lm_head\n" +
+				"and thinker.visual* unquantised, and it demonstrably speaks.\n\n" +
+				"NVFP4 W4A4 IS PROVEN ON GB10 by this deployment: ModelOpt NVFP4 accepted,\n" +
+				"FlashInferCutlassNvFp4LinearKernel and FLASHINFER_CUTLASS MoE backend\n" +
+				"selected, 1759 weights loaded. sm_121 was never the obstacle.\n\n" +
+				"Request audio with {\"modalities\": [\"audio\"]} and an audio block\n" +
+				"selecting the voice. Returns base64 WAV in message.audio.data.\n\n" +
+				"METHOD NOTE: the two windows spent guessing cost real downtime, while\n" +
+				"everything that actually solved this - the --stage-overrides syntax, the\n" +
+				"device-placement bug, devices:\"0\" - came from running throwaway\n" +
+				"containers against the image, which costs nothing. Ask the image first.",
 		},
 		{
 			ID: "omni", Kind: recipe.KindVLLM, Modality: recipe.ModalityOmni,

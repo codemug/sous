@@ -2,56 +2,66 @@ id: qwen3-omni
 kind: vllm
 modality: omni
 model: YihongJin/Qwen3-Omni-30B-A3B-Instruct-NVFP4-W4A4-full-thinker-awqclip
-image: vllm/vllm-omni:v0.27.0rc1-aarch64
+image: vllm/vllm-omni:nightly-61a678bd2671237fda844c5c88ff51614bc7c579
 served_as:
     - qwen3omni
 declared:
-    weights_gib: 25.7
-    kv_gib: 8
+    weights_gib: 19.53
+    kv_gib: 11.28
 args:
-    gpu-memory-utilization: 0.55
+    gpu-memory-utilization: 0.3
     max-model-len: 32768
     omni: true
+    stage-overrides: '{"0":{"gpu_memory_utilization":0.30,"devices":"0"},"1":{"gpu_memory_utilization":0.20,"devices":"0","enforce_eager":true},"2":{"gpu_memory_utilization":0.10,"devices":"0","enforce_eager":true}}'
 env:
+    CUDA_VISIBLE_DEVICES: "0"
     CUTE_DSL_ARCH: sm_121a
     HF_HOME: /root/.cache/huggingface
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
 notes: |-
-    UNPROVEN AS OF 2026-08-16. Staged, not yet booted. The declared
-    footprint is arithmetic, not measurement: weights_gib is the repo size
-    and kv_gib is extrapolated from the 35B-A3B sibling's measured 88.3
-    KiB/token. Replace both from the boot log before trusting a capacity
-    plan built on them.
+    MEASURED WORKING 2026-08-16. Serves on :8010 and emits real speech:
+    24 kHz mono 16-bit WAV, 7.82s of audio generated in 2.77s - faster than
+    realtime. Voices chelsie and ethan both confirmed.
 
-    WHAT IT BUYS: real speech OUTPUT. The cascade it would replace (asr ->
-    qwen38 -> kokoro) runs ~0.5s and discards prosody at the text boundary.
-    This emits audio directly, which is what ChatGPT's voice mode does.
+    TEXT IS SLOW: 7.6-8.2 tok/s, against qwen38's 23.97 structured / 14.85
+    prose. The earlier note here predicted a 30B-A3B MoE would BEAT dense
+    qwen38 because it activates ~3B per token. That was WRONG - stages 1 and
+    2 stay resident and run eager, and that is the cost. This is a voice
+    model that thinks adequately, not a faster qwen38.
+
+    Footprint is now measured, not arithmetic: 19.53 GiB weights and 11.28
+    GiB KV for stage 0 at gpu_memory_utilization 0.30.
+
+    IMAGE SELECTION IS BY VERSION PAIRING, NOT RECENCY - two windows were
+    burned learning this. vllm_omni and the vLLM packaged beside it must
+    agree, and version.py warns on EVERY boot when they do not:
+      v0.27.0rc1-aarch64  ImportError on MistralToolCall, dead at import
+      rc2 nightlies       omni 0.27.0rc2 calling a vLLM 0.26.0 API that does
+                          not exist (MultiModalConfig.mm_hasher_algorithm)
+      THIS ONE            vLLM 0.26.0 + omni 0.26.1, self-consistent
+
+    WHAT IT BUYS: real speech OUTPUT. The cascade it replaces (asr -> qwen38
+    -> kokoro) runs ~0.5s and discards prosody at the text boundary.
 
     NOT the mistake `omni` below made. That checkpoint was audio-IN only and
-    still needed separate TTS, so it spent 25.6 GiB doing ASR badly. This one
-    carries the speech stack - verified in the safetensors index, not assumed:
-    thinker 75,615 / talker 8,037 / code2wav 230, where the talker and
-    code2wav counts are IDENTICAL to the bf16 original. The quantiser touched
-    only the MoE thinker.
+    still needed separate TTS. This one carries the speech stack - verified
+    in the safetensors index: thinker 75,615 / talker 8,037 / code2wav 230,
+    where talker and code2wav are IDENTICAL to the bf16 original.
 
     QUANT SELECTION IS LOAD-BEARING. Sibling repos named -talker-safe and
     -text-only exist because naive quantisation BREAKS speech output. This
-    build excludes code2wav*, talker*, thinker.audio_tower*, thinker.lm_head
-    and thinker.visual* from quantisation, so the whole speech path stays
-    full precision. -talker-safe reaches the same place at 46.3 GiB by
-    leaving more in bf16; no reason to pay that.
+    build leaves code2wav*, talker*, thinker.audio_tower*, thinker.lm_head
+    and thinker.visual* unquantised, and it demonstrably speaks.
 
-    NVFP4 over the same-sized AWQ-4bit build on purpose: AWQ-Marlin on sm_121
-    is unproven on GB10, while NVFP4 is what qwen38 already runs in
-    production. Prefer the format with evidence behind it.
+    NVFP4 W4A4 IS PROVEN ON GB10 by this deployment: ModelOpt NVFP4 accepted,
+    FlashInferCutlassNvFp4LinearKernel and FLASHINFER_CUTLASS MoE backend
+    selected, 1759 weights loaded. sm_121 was never the obstacle.
 
-    THE OPEN RISK: vllm-omni documents no quantisation support for the omni
-    pipeline. A partially-quantised checkpoint driving a multi-stage
-    thinker -> talker -> code2wav pipeline is the real unknown, and only a
-    boot answers it.
+    Request audio with {"modalities": ["audio"]} and an audio block
+    selecting the voice. Returns base64 WAV in message.audio.data.
 
-    Request audio with {"modalities": ["audio"]}; --speaker selects the
-    voice (chelsie, ethan). 30B-A3B is MoE at ~3B active per token - the same
-    class as qwen36, which measured 60.6 tok/s here - so expect it to beat
-    dense qwen38 on speed and possibly lose on hard reasoning.
+    METHOD NOTE: the two windows spent guessing cost real downtime, while
+    everything that actually solved this - the --stage-overrides syntax, the
+    device-placement bug, devices:"0" - came from running throwaway
+    containers against the image, which costs nothing. Ask the image first.
