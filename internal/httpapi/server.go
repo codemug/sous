@@ -54,6 +54,8 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	s.mux.HandleFunc("DELETE /api/recipes/{id}", s.deleteRecipe)
 	s.mux.HandleFunc("POST /api/recipes/{id}/diff", s.diffRecipe)
 	s.mux.HandleFunc("GET /api/deployments", s.listDeployments)
+	s.mux.HandleFunc("GET /api/status", s.status)
+	s.mux.HandleFunc("GET /api/logs/{id}", s.logs)
 	s.mux.HandleFunc("GET /api/plan/{id}", s.plan)
 	s.mux.HandleFunc("POST /api/deploy/{id}", s.deploy)
 	s.mux.HandleFunc("POST /api/undeploy/{id}", s.undeploy)

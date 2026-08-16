@@ -40,7 +40,7 @@ func BuildSpec(r recipe.Recipe, hostPort int, modelDir string) (Spec, error) {
 		return Spec{}, err
 	}
 	s := Spec{
-		Name:          "sous-" + r.ID,
+		Name:          ContainerName(r.ID),
 		Image:         r.Image,
 		HostPort:      hostPort,
 		ContainerPort: containerPort,
@@ -103,3 +103,13 @@ func renderArgs(args map[string]any) []string {
 	}
 	return out
 }
+
+// ContainerName is the container a recipe runs as.
+//
+// The "sous-" prefix is load-bearing, not cosmetic: Running() lists containers
+// by filtering on it, so anything not carrying it is invisible to Sous and
+// anything carrying it is assumed to be Sous's. It was written out by hand in
+// three places before this existed, and a status view comparing a name built
+// one way against a list built another is exactly the bug that produces a
+// dashboard reporting healthy models as dead.
+func ContainerName(recipeID string) string { return "sous-" + recipeID }

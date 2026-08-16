@@ -46,7 +46,22 @@ func (f *fakeRuntime) Logs(context.Context, string) (io.ReadCloser, error) {
 			"INFO Using FLASHINFER attention backend\n" +
 			"INFO Profiling CUDA graph memory: PIECEWISE=7 (largest=32)\n")), nil
 }
-func (f *fakeRuntime) Running(context.Context) ([]string, error) { return nil, nil }
+
+// Running reports what Start/Stop actually recorded.
+//
+// It used to return nil unconditionally, which was harmless while nothing read
+// it - and became a lie the moment /api/status did. A drift test against that
+// fake passed vacuously: every model looked dead, so "detects a dead
+// container" could not fail.
+func (f *fakeRuntime) Running(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.running))
+	for n := range f.running {
+		out = append(out, n)
+	}
+	return out, nil
+}
 
 func newTestServer(t *testing.T) http.Handler {
 	t.Helper()
@@ -73,7 +88,20 @@ func newTestServerWithHub(t *testing.T) http.Handler {
 	return newServerWithHub(t, hub)
 }
 
+// newTestServerWithRuntime hands back the fake runtime as well, so a test can
+// make a container vanish behind Sous's back - which is what the drift
+// detection in /api/status exists to catch.
+func newTestServerWithRuntime(t *testing.T) (http.Handler, *fakeRuntime) {
+	t.Helper()
+	rt := &fakeRuntime{running: map[string]bool{}}
+	return buildServer(t, t.TempDir(), rt), rt
+}
+
 func newServerWithHub(t *testing.T, hub string) http.Handler {
+	return buildServer(t, hub, &fakeRuntime{running: map[string]bool{}})
+}
+
+func buildServer(t *testing.T, hub string, rt *fakeRuntime) http.Handler {
 	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
@@ -84,7 +112,7 @@ func newServerWithHub(t *testing.T, hub string) http.Handler {
 		t.Fatal(err)
 	}
 	m := &deploy.Manager{
-		Store: s, Catalog: c, Runtime: &fakeRuntime{running: map[string]bool{}},
+		Store: s, Catalog: c, Runtime: rt,
 		Planner:    capacity.Planner{PoolGiB: 121.6, ReserveGiB: 24, WarnFreeGiB: 12},
 		Ports:      ports.Allocator{Low: 41300, High: 41400},
 		BindHost:   "127.0.0.1",

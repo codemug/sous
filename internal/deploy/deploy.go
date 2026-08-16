@@ -136,7 +136,7 @@ func (m *Manager) Undeploy(ctx context.Context, id string) error {
 	if !recipe.ValidID(id) {
 		return fmt.Errorf("undeploy: invalid id %q", id)
 	}
-	if err := m.Runtime.Stop(ctx, "sous-"+id); err != nil {
+	if err := m.Runtime.Stop(ctx, engine.ContainerName(id)); err != nil {
 		return err
 	}
 	return m.Store.Delete(store.KindDeployment, id)
