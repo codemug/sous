@@ -9,10 +9,12 @@ declared:
     weights_gib: 19.53
     kv_gib: 11.28
 args:
+    enable-auto-tool-choice: true
     gpu-memory-utilization: 0.3
     max-model-len: 32768
     omni: true
     stage-overrides: '{"0":{"gpu_memory_utilization":0.30,"devices":"0"},"1":{"gpu_memory_utilization":0.20,"devices":"0","enforce_eager":true},"2":{"gpu_memory_utilization":0.10,"devices":"0","enforce_eager":true}}'
+    tool-call-parser: hermes
 env:
     CUDA_VISIBLE_DEVICES: "0"
     CUTE_DSL_ARCH: sm_121a
@@ -65,3 +67,30 @@ notes: |-
     everything that actually solved this - the --stage-overrides syntax, the
     device-placement bug, devices:"0" - came from running throwaway
     containers against the image, which costs nothing. Ask the image first.
+
+    VOICES - exactly three, from talker_config.speaker_id: chelsie (2301),
+    ethan (2302), aiden (2303). Same as upstream Qwen, so quantising the
+    thinker cost no voices.
+
+    LANGUAGES: 119 text, 19 speech IN, only 10 speech OUT. Arabic and Urdu
+    are input-only - it understands them and is not documented to speak them.
+    Speech out: English, Chinese, French, German, Russian, Italian, Spanish,
+    Portuguese, Japanese, Korean.
+
+    IT FAILS SILENTLY, WHICH IS THE MOST IMPORTANT THING TO KNOW. Every
+    out-of-range request returns plausible audio instead of an error, so a
+    client MUST validate before sending:
+      - an unknown voice name returns audio in a fallback voice, no error
+      - an unsupported output language returns audio anyway
+      - modalities ["text","audio"] returns text and DROPS the audio
+      - requesting audio SUPPRESSES tool calls: same prompt and tools that
+        yield finish_reason tool_calls in text mode return finish_reason
+        stop with audio and no tool_calls
+
+    So a voice agent on this model is necessarily TWO-PHASE: a text pass to
+    settle tool calls, then a second request for the spoken answer. That is
+    an extra round trip per turn and there is no flag that avoids it.
+
+    MEASURED: voice-in understood correctly; tool calls fire from spoken
+    input (get_weather, get_current_time, calculate all verified); audio
+    generation runs ~2.5x realtime across all three voices.

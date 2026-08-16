@@ -173,6 +173,15 @@ func Seeds() []recipe.Recipe {
 					`"2":{"gpu_memory_utilization":0.10,"devices":"0","enforce_eager":true}}`,
 				"gpu-memory-utilization": 0.30,
 				"max-model-len":          32768,
+				// hermes, NOT the qwen3_coder every other recipe here uses.
+				// Read from this checkpoint's chat_template.jinja, which asks
+				// for JSON inside <tool_call> tags. qwen3_coder expects
+				// <function=name><parameter=x>. Both emit <tool_call>, so the
+				// tag alone does not identify the format - and the wrong
+				// parser fails SILENTLY, delivering the call as text in
+				// content.
+				"enable-auto-tool-choice": true,
+				"tool-call-parser":        "hermes",
 			},
 			Env: map[string]string{
 				"TORCH_CUDA_ARCH_LIST": "12.1a",
@@ -219,7 +228,29 @@ func Seeds() []recipe.Recipe {
 				"METHOD NOTE: the two windows spent guessing cost real downtime, while\n" +
 				"everything that actually solved this - the --stage-overrides syntax, the\n" +
 				"device-placement bug, devices:\"0\" - came from running throwaway\n" +
-				"containers against the image, which costs nothing. Ask the image first.",
+				"containers against the image, which costs nothing. Ask the image first.\n\n" +
+				"VOICES - exactly three, from talker_config.speaker_id: chelsie (2301),\n" +
+				"ethan (2302), aiden (2303). Same as upstream Qwen, so quantising the\n" +
+				"thinker cost no voices.\n\n" +
+				"LANGUAGES: 119 text, 19 speech IN, only 10 speech OUT. Arabic and Urdu\n" +
+				"are input-only - it understands them and is not documented to speak them.\n" +
+				"Speech out: English, Chinese, French, German, Russian, Italian, Spanish,\n" +
+				"Portuguese, Japanese, Korean.\n\n" +
+				"IT FAILS SILENTLY, WHICH IS THE MOST IMPORTANT THING TO KNOW. Every\n" +
+				"out-of-range request returns plausible audio instead of an error, so a\n" +
+				"client MUST validate before sending:\n" +
+				"  - an unknown voice name returns audio in a fallback voice, no error\n" +
+				"  - an unsupported output language returns audio anyway\n" +
+				"  - modalities [\"text\",\"audio\"] returns text and DROPS the audio\n" +
+				"  - requesting audio SUPPRESSES tool calls: same prompt and tools that\n" +
+				"    yield finish_reason tool_calls in text mode return finish_reason\n" +
+				"    stop with audio and no tool_calls\n\n" +
+				"So a voice agent on this model is necessarily TWO-PHASE: a text pass to\n" +
+				"settle tool calls, then a second request for the spoken answer. That is\n" +
+				"an extra round trip per turn and there is no flag that avoids it.\n\n" +
+				"MEASURED: voice-in understood correctly; tool calls fire from spoken\n" +
+				"input (get_weather, get_current_time, calculate all verified); audio\n" +
+				"generation runs ~2.5x realtime across all three voices.",
 		},
 		{
 			ID: "omni", Kind: recipe.KindVLLM, Modality: recipe.ModalityOmni,
