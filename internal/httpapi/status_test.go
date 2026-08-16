@@ -151,3 +151,52 @@ func TestLastLinesReturnsTheEndNotTheStart(t *testing.T) {
 		t.Errorf("lastLines(nil) = %q", none)
 	}
 }
+
+func TestNodePageRenders(t *testing.T) {
+	h := newTestServer(t)
+	rr := send(t, h, http.MethodGet, "/", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"Node", "pool-bar", "GiB free", "Sous"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("node page missing %q", want)
+		}
+	}
+	// An idle node must say so rather than render an empty bar with no
+	// explanation.
+	if !strings.Contains(body, "Nothing deployed") {
+		t.Error("idle node page has no empty state")
+	}
+}
+
+// "GET /" is a catch-all in Go's ServeMux. Without a guard, every mistyped URL
+// renders the dashboard with a 200 and a typo becomes indistinguishable from a
+// working call.
+func TestNodePageDoesNotSwallowUnknownPaths(t *testing.T) {
+	h := newTestServer(t)
+	for _, p := range []string{"/nope", "/api/nope", "/catalogue"} {
+		if rr := send(t, h, http.MethodGet, p, "", ""); rr.Code != http.StatusNotFound {
+			t.Errorf("%s got %d, want 404", p, rr.Code)
+		}
+	}
+}
+
+func TestNodePageDrawsSegmentsToScale(t *testing.T) {
+	h := newTestServer(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+	if !strings.Contains(body, "qwen38") {
+		t.Error("deployed model absent from the pool diagram")
+	}
+	// The segment must carry a computed width, or the bar is decorative.
+	if !strings.Contains(body, "style=\"width:") {
+		t.Error("no segment widths rendered; the diagram is not drawn to scale")
+	}
+	if !strings.Contains(body, "chip is-running") {
+		t.Error("running state not encoded on the model card")
+	}
+}

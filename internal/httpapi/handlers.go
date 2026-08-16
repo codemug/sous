@@ -29,6 +29,7 @@ type pageData struct {
 	Resolved    []catalog.Resolved
 	Message     string
 	IsError     bool
+	Node        *NodeStatus
 }
 
 // larderView gathers what the larder needs: the catalog to know what is
@@ -305,10 +306,6 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, name, title string
 }
 
 func (s *Server) pageCatalog(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 	s.page(w, r, "catalog", "Catalog", func(d *pageData) error {
 		rs, err := s.cat.List()
 		if err != nil {

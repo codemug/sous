@@ -223,7 +223,7 @@ func TestDeployThenListShowsIt(t *testing.T) {
 func TestCatalogPageRenders(t *testing.T) {
 	h := newTestServer(t)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/catalog", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rr.Code, rr.Body)
 	}

@@ -66,10 +66,20 @@ type NodeStatus struct {
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	recipes, err := s.cat.List()
+	out, err := s.nodeStatus(r)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// nodeStatus is shared by the JSON endpoint and the Node page, so the number
+// the dashboard draws and the number a script reads can never disagree.
+func (s *Server) nodeStatus(r *http.Request) (NodeStatus, error) {
+	recipes, err := s.cat.List()
+	if err != nil {
+		return NodeStatus{}, err
 	}
 	byID := map[string]int{} // id -> index
 	for i, rec := range recipes {
@@ -78,8 +88,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 
 	ds, err := s.mgr.List()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return NodeStatus{}, err
 	}
 
 	// One call, not one per model: asking the runtime per deployment turns a
@@ -145,8 +154,28 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		out.CommittedGiB += max(m.ObservedGiB, m.DeclaredGiB)
 	}
 	out.MarginGiB = s.pool - out.ReserveGiB - out.CommittedGiB
+	return out, nil
+}
 
-	writeJSON(w, http.StatusOK, out)
+// pageNode renders the Node dashboard.
+func (s *Server) pageNode(w http.ResponseWriter, r *http.Request) {
+	// "GET /" is a CATCH-ALL in Go's ServeMux: without this guard every
+	// unmatched path renders the dashboard with a 200, so a typo'd URL and a
+	// working one are indistinguishable, and a mistyped API call looks like it
+	// succeeded. This guard moved here with the route; pageCatalog used to own
+	// it.
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	s.page(w, r, "node", "Node", func(d *pageData) error {
+		n, err := s.nodeStatus(r)
+		if err != nil {
+			return err
+		}
+		d.Node = &n
+		return nil
+	})
 }
 
 // logs returns a container's recent output.

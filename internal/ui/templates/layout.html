@@ -5,65 +5,241 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sous — {{.Title}}</title>
 <style>
-  :root{
-    --ground:#f2f4f1; --surface:#fbfcfa; --surface-2:#e9ece7;
-    --ink:#141c22; --ink-soft:#4e5a62; --ink-faint:#7c8890;
-    --rule:#d2d7d0; --accent:#0e6257; --warn:#8f3618; --gold:#8a6714;
-    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+/* Hallmark · macrostructure: Map/Diagram · genre: modern-minimal · theme: Cobalt
+ * tone: technical/utilitarian · anchor hue: electric cobalt oklch(58% 0.20 256)
+ * axes: paper=cool-light · display=grotesk-sans(system) · accent=cool
+ * nav: N9 edge-aligned · pre-emit critique: P5 H5 E4 S5 R5 V4
+ *
+ * NO WEBFONT LINK, deliberately. Cobalt specifies Space Grotesk + Inter +
+ * JetBrains Mono from a CDN. This panel is tailnet-only and runs on a node
+ * whose uplink drops roughly one connection in ten; a font that arrives
+ * sometimes is worse than one that never arrives, because the layout shifts
+ * under the operator mid-read. System stacks carry the roles instead. The
+ * discipline is Cobalt's; the exact faces are not.
+ *
+ * WHY Map/Diagram AND NOT A CARD GRID: this node has ONE pool and every model
+ * competes for a share of it. A grid of equal cards hides that; a proportional
+ * bar states it. The pool IS the page's organising element.
+ */
+
+:root{
+  /* Cool engineered paper, never #fff. Ink is cool charcoal, never #000. */
+  --paper:      oklch(98.5% 0.004 250);
+  --paper-2:    oklch(96.5% 0.005 250);
+  --paper-3:    oklch(93.5% 0.006 252);
+  --ink:        oklch(24%   0.02  258);
+  --ink-body:   oklch(34%   0.018 257);
+  --ink-mute:   oklch(52%   0.014 255);
+  --ink-faint:  oklch(64%   0.012 255);
+  --rule:       oklch(89%   0.008 252);
+  --rule-firm:  oklch(80%   0.010 252);
+
+  /* ONE signal, under 5% of any viewport: active nav, primary button, focus
+   * ring, a running model's segment. Never a flood. */
+  --accent:     oklch(58%   0.20  256);
+  --accent-ink: oklch(46%   0.18  256);
+  --accent-wash:oklch(95%   0.03  256);
+
+  /* Semantic state kept SEPARATE from the accent, so "running" never reads as
+   * "selected". Drift is amber not red: a record whose container vanished is a
+   * fault to investigate, not an outage in progress. */
+  --ok:         oklch(52%   0.13  158);
+  --ok-wash:    oklch(95%   0.03  158);
+  --drift:      oklch(62%   0.15   62);
+  --drift-wash: oklch(96%   0.04   72);
+  --graphite:   oklch(22%   0.016 260);
+
+  --font-display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body:    ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --space-2xs:.25rem; --space-xs:.5rem;  --space-sm:.75rem;
+  --space-md:1rem;    --space-lg:1.5rem; --space-xl:2rem;
+  --space-2xl:3rem;
+
+  --text-xs:.6875rem; --text-sm:.8125rem; --text-md:.9375rem;
+  --text-lg:1.125rem; --text-xl:1.5rem;   --text-2xl:2rem;
+
+  --radius-sm:6px; --radius-md:10px;
+  --ease-out:cubic-bezier(.2,.8,.3,1);
+  --dur-fast:120ms;
+}
+
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:      oklch(16%   0.014 260);
+    --paper-2:    oklch(19.5% 0.015 260);
+    --paper-3:    oklch(24%   0.016 260);
+    --ink:        oklch(94%   0.008 250);
+    --ink-body:   oklch(84%   0.010 252);
+    --ink-mute:   oklch(66%   0.012 254);
+    --ink-faint:  oklch(54%   0.012 255);
+    --rule:       oklch(29%   0.014 258);
+    --rule-firm:  oklch(38%   0.016 258);
+    --accent:     oklch(70%   0.17  256);
+    --accent-ink: oklch(80%   0.14  256);
+    --accent-wash:oklch(28%   0.06  256);
+    --ok:         oklch(70%   0.15  158);
+    --ok-wash:    oklch(26%   0.05  158);
+    --drift:      oklch(76%   0.14   68);
+    --drift-wash: oklch(28%   0.06   68);
+    --graphite:   oklch(13%   0.012 260);
   }
-  @media (prefers-color-scheme:dark){
-    :root{
-      --ground:#0e1418; --surface:#151d22; --surface-2:#1d262c;
-      --ink:#e4eae6; --ink-soft:#9daab0; --ink-faint:#75838a;
-      --rule:#28333a; --accent:#4fb9a6; --warn:#e07a54; --gold:#d2a63f;
-    }
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--ground);color:var(--ink);
-       font-family:var(--mono);font-size:14px;line-height:1.55}
-  header{border-bottom:1px solid var(--rule);padding:1rem 1.5rem;
-         display:flex;gap:1.5rem;align-items:baseline;flex-wrap:wrap}
-  header h1{font-size:1rem;margin:0;letter-spacing:.16em;text-transform:uppercase}
-  header a{color:var(--ink-soft);text-decoration:none;font-size:.8rem;
-           letter-spacing:.08em;text-transform:uppercase}
-  header a:hover,header a:focus-visible{color:var(--accent)}
-  main{padding:1.5rem;max-width:76rem}
-  .pool{font-size:.78rem;color:var(--ink-faint);margin-left:auto}
-  table{border-collapse:collapse;width:100%;font-size:.82rem}
-  th,td{text-align:left;padding:.5rem .7rem;border-bottom:1px solid var(--rule);
-        vertical-align:top;font-variant-numeric:tabular-nums}
-  th{font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;
-     color:var(--ink-faint)}
-  td.n{text-align:right}
-  tbody tr:last-child td{border-bottom:none}
-  .wrap{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);
-        border-radius:2px}
-  .tag{display:inline-block;font-size:.64rem;letter-spacing:.09em;
-       text-transform:uppercase;padding:.1rem .4rem;border-radius:2px;
-       background:var(--surface-2)}
-  .t-kind{color:var(--accent)}
-  .t-arch{color:var(--ink-faint)}
-  button{font-family:var(--mono);font-size:.74rem;letter-spacing:.06em;
-         text-transform:uppercase;padding:.3rem .7rem;cursor:pointer;
-         background:var(--surface-2);color:var(--ink);
-         border:1px solid var(--rule);border-radius:2px}
-  button:hover{border-color:var(--accent);color:var(--accent)}
-  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  .note{color:var(--ink-soft);font-size:.78rem;margin:0 0 1rem;max-width:62ch}
-  .warn{color:var(--warn)}
-  .sub{color:var(--ink-faint);font-size:.74rem}
+}
+
+*{box-sizing:border-box}
+html,body{overflow-x:clip}
+body{
+  margin:0;background:var(--paper);color:var(--ink-body);
+  font-family:var(--font-body);font-size:var(--text-md);line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---- nav: N9 edge-aligned. Flush bar, one hairline. Not a floating pill. -- */
+header.bar{
+  display:flex;align-items:center;gap:var(--space-lg);flex-wrap:wrap;
+  padding:var(--space-md) var(--space-xl);
+  border-bottom:1px solid var(--rule);background:var(--paper);
+  position:sticky;top:0;z-index:20;
+}
+header.bar .mark{
+  font-family:var(--font-display);font-weight:600;font-size:var(--text-md);
+  letter-spacing:-.01em;color:var(--ink);text-decoration:none;
+}
+header.bar .mark::after{
+  content:"";display:inline-block;width:5px;height:5px;margin-left:.45rem;
+  border-radius:50%;background:var(--accent);vertical-align:middle;
+}
+nav.links{display:flex;gap:var(--space-md);flex-wrap:wrap}
+nav.links a{
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-mute);text-decoration:none;
+  padding:.3rem 0;border-bottom:1.5px solid transparent;white-space:nowrap;
+  transition:color var(--dur-fast) var(--ease-out),
+             border-color var(--dur-fast) var(--ease-out);
+}
+nav.links a:hover{color:var(--ink)}
+nav.links a[aria-current="page"]{color:var(--accent-ink);border-bottom-color:var(--accent)}
+.bar-meta{
+  margin-left:auto;font-family:var(--font-mono);font-size:var(--text-xs);
+  color:var(--ink-faint);font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+
+main{padding:var(--space-xl);max-width:82rem;margin:0 auto}
+h1{
+  font-family:var(--font-display);font-size:var(--text-2xl);font-weight:600;
+  font-style:normal;letter-spacing:-.02em;color:var(--ink);
+  margin:0 0 var(--space-2xs);text-wrap:balance;
+  overflow-wrap:anywhere;min-width:0;
+}
+h2{
+  font-family:var(--font-display);font-size:var(--text-lg);font-weight:600;
+  font-style:normal;color:var(--ink);margin:0 0 var(--space-sm);
+  letter-spacing:-.01em;
+}
+.lede{color:var(--ink-mute);margin:0 0 var(--space-xl);max-width:62ch}
+
+.label{
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-faint);
+}
+
+/* Hairlines do the work. No shadows, no boxed cards. */
+.panel{
+  border:1px solid var(--rule);border-radius:var(--radius-md);
+  background:var(--paper-2);
+}
+.scroll{overflow-x:auto}
+
+table{border-collapse:collapse;width:100%;font-size:var(--text-sm)}
+th,td{
+  text-align:left;padding:var(--space-xs) var(--space-sm);
+  border-bottom:1px solid var(--rule);vertical-align:top;
+  font-variant-numeric:tabular-nums;
+}
+th{
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-faint);font-weight:500;
+}
+td.n{text-align:right}
+tbody tr:last-child td{border-bottom:none}
+
+/* ---- status: form AND colour, never colour alone ------------------------- */
+.chip{
+  display:inline-flex;align-items:center;gap:.35rem;
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.05em;
+  text-transform:uppercase;padding:.15rem .45rem;border-radius:var(--radius-sm);
+  border:1px solid var(--rule-firm);color:var(--ink-mute);background:var(--paper);
+  white-space:nowrap;
+}
+.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.chip.is-running{color:var(--ok);border-color:var(--ok);background:var(--ok-wash)}
+.chip.is-drift  {color:var(--drift);border-color:var(--drift);background:var(--drift-wash)}
+/* Square dot, not round: shape carries the distinction for anyone who cannot
+   separate the two hues. */
+.chip.is-drift::before{border-radius:1px}
+.chip.is-idle::before{background:none;border:1px solid currentColor}
+.chip.is-arch{color:var(--ink-faint);border-style:dashed}
+.chip.is-arch::before{background:none;border:1px solid currentColor;border-radius:1px}
+
+button,.btn{
+  display:inline-block;
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.06em;
+  text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;
+  background:var(--paper);color:var(--ink);text-decoration:none;
+  border:1px solid var(--rule-firm);border-radius:var(--radius-sm);
+  white-space:nowrap;
+  transition:border-color var(--dur-fast) var(--ease-out),
+             color var(--dur-fast) var(--ease-out);
+}
+button:hover,.btn:hover{border-color:var(--accent);color:var(--accent-ink)}
+button:active,.btn:active{transform:translateY(1px)}
+button[disabled]{opacity:.45;cursor:default;transform:none}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:oklch(99% 0 0)}
+.btn-primary:hover{background:var(--accent-ink);border-color:var(--accent-ink);color:oklch(99% 0 0)}
+.btn-danger:hover{border-color:var(--drift);color:var(--drift)}
+
+/* Never animated: the ring must appear the instant focus lands. */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+a{color:var(--accent-ink)}
+code,.mono{font-family:var(--font-mono);font-size:.95em}
+
+.msg{
+  padding:var(--space-sm) var(--space-md);border-radius:var(--radius-sm);
+  border:1px solid var(--accent);background:var(--accent-wash);
+  color:var(--ink);margin-bottom:var(--space-lg);font-size:var(--text-sm);
+}
+.msg.err{border-color:var(--drift);background:var(--drift-wash)}
+.empty{color:var(--ink-faint);padding:var(--space-xl);text-align:center}
+.note{color:var(--ink-mute);font-size:var(--text-sm);margin:0 0 var(--space-md);max-width:62ch}
+.sub{color:var(--ink-faint);font-size:var(--text-xs)}
+.warn{color:var(--drift)}
+
+@media (prefers-reduced-motion:reduce){
+  *{transition-duration:.01ms !important;animation-duration:.01ms !important}
+}
+@media (max-width:640px){
+  main{padding:var(--space-md)}
+  header.bar{padding:var(--space-sm) var(--space-md);gap:var(--space-sm)}
+  .bar-meta{margin-left:0;width:100%}
+}
 </style>
 </head>
 <body>
-<header>
-  <h1>Sous</h1>
-  <a href="/">Catalog</a>
-  <a href="/deployments">Deployments</a>
-  <a href="/larder">Larder</a>
-  <a href="/sources">Sources</a>
-  <span class="pool">pool {{printf "%.1f" .PoolGiB}} GiB · reserve {{printf "%.0f" .ReserveGiB}} GiB · {{.DeployCount}} deployed</span>
+<header class="bar">
+  <a class="mark" href="/">SOUS</a>
+  <nav class="links">
+    <a href="/"{{if eq .Title "Node"}} aria-current="page"{{end}}>Node</a>
+    <a href="/catalog"{{if eq .Title "Catalog"}} aria-current="page"{{end}}>Catalog</a>
+    <a href="/deployments"{{if eq .Title "Deployments"}} aria-current="page"{{end}}>Deployments</a>
+    <a href="/larder"{{if eq .Title "Larder"}} aria-current="page"{{end}}>Larder</a>
+    <a href="/sources"{{if eq .Title "Sources"}} aria-current="page"{{end}}>Sources</a>
+  </nav>
+  <span class="bar-meta">{{printf "%.1f" .PoolGiB}} GiB pool · {{printf "%.0f" .ReserveGiB}} reserved · {{.DeployCount}} deployed</span>
 </header>
 <main>
+{{if .Message}}<p class="msg{{if .IsError}} err{{end}}">{{.Message}}</p>{{end}}
 {{end}}
 
 {{define "foot"}}

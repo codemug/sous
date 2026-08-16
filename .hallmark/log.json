@@ -1,0 +1,9 @@
+[
+  {
+    "date": "2026-08-16",
+    "macrostructure": "Map/Diagram",
+    "theme": "Cobalt",
+    "enrichment": "none — pool diagram is hand-built CSS",
+    "brief": "Sous · ops dashboard for local LLM deployments on one GPU node"
+  }
+]

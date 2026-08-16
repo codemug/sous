@@ -67,7 +67,11 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	s.mux.HandleFunc("GET /sources", s.pageSources)
 	s.mux.HandleFunc("GET /deployments", s.pageDeployments)
 	s.mux.HandleFunc("GET /larder", s.pageLarder)
-	s.mux.HandleFunc("GET /", s.pageCatalog)
+	// The Node dashboard is the landing page: the first question on opening
+	// this panel is "what is running and is it healthy", not "what could I
+	// run next".
+	s.mux.HandleFunc("GET /", s.pageNode)
+	s.mux.HandleFunc("GET /catalog", s.pageCatalog)
 	// Auth wraps the WHOLE mux rather than being applied per route, so a
 	// handler added later is protected by default. The alternative fails
 	// open, and the route that gets forgotten is the one that creates

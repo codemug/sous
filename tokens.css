@@ -1,0 +1,45 @@
+/* Sous design tokens — extracted from internal/ui/templates/layout.html.
+ *
+ * The templates are the source of truth: the CSS is inlined there because this
+ * binary embeds its whole UI and serves no static assets, which is what lets a
+ * single Go binary be the entire deployment. This file exists so the system is
+ * portable to anything else that wants to match it.
+ *
+ * Hallmark · theme: Cobalt · genre: modern-minimal
+ * axes: paper=cool-light · display=grotesk-sans(system) · accent=cool
+ */
+:root{
+  --paper:      oklch(98.5% 0.004 250);
+  --paper-2:    oklch(96.5% 0.005 250);
+  --paper-3:    oklch(93.5% 0.006 252);
+  --ink:        oklch(24%   0.02  258);
+  --ink-body:   oklch(34%   0.018 257);
+  --ink-mute:   oklch(52%   0.014 255);
+  --ink-faint:  oklch(64%   0.012 255);
+  --rule:       oklch(89%   0.008 252);
+  --rule-firm:  oklch(80%   0.010 252);
+
+  --accent:     oklch(58%   0.20  256);
+  --accent-ink: oklch(46%   0.18  256);
+  --accent-wash:oklch(95%   0.03  256);
+
+  --ok:         oklch(52%   0.13  158);
+  --ok-wash:    oklch(95%   0.03  158);
+  --drift:      oklch(62%   0.15   62);
+  --drift-wash: oklch(96%   0.04   72);
+  --graphite:   oklch(22%   0.016 260);
+
+  --font-display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body:    ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --space-2xs:.25rem; --space-xs:.5rem;  --space-sm:.75rem;
+  --space-md:1rem;    --space-lg:1.5rem; --space-xl:2rem; --space-2xl:3rem;
+
+  --text-xs:.6875rem; --text-sm:.8125rem; --text-md:.9375rem;
+  --text-lg:1.125rem; --text-xl:1.5rem;   --text-2xl:2rem;
+
+  --radius-sm:6px; --radius-md:10px;
+  --ease-out:cubic-bezier(.2,.8,.3,1);
+  --dur-fast:120ms;
+}
