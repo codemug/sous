@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/codemug/sous/internal/auth"
 	"github.com/codemug/sous/internal/capacity"
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
@@ -90,7 +91,10 @@ func newServerWithHub(t *testing.T, hub string) http.Handler {
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	h, err := New(m, c, 121.6, hub, t.TempDir())
+	// Auth OFF here on purpose: these tests exercise handlers, and the guard
+	// has its own suite in internal/auth. Threading credentials through every
+	// fixture would re-test the middleware and obscure the handlers.
+	h, err := New(m, c, 121.6, hub, t.TempDir(), auth.Config{Disabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

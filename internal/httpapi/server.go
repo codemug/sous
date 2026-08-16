@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 
+	"github.com/codemug/sous/internal/auth"
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/sources"
@@ -33,7 +34,8 @@ type Server struct {
 	mux *http.ServeMux
 }
 
-func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sourcesDir string) (http.Handler, error) {
+func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sourcesDir string,
+	guard auth.Config) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
@@ -60,5 +62,9 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	s.mux.HandleFunc("GET /deployments", s.pageDeployments)
 	s.mux.HandleFunc("GET /larder", s.pageLarder)
 	s.mux.HandleFunc("GET /", s.pageCatalog)
-	return s.mux, nil
+	// Auth wraps the WHOLE mux rather than being applied per route, so a
+	// handler added later is protected by default. The alternative fails
+	// open, and the route that gets forgotten is the one that creates
+	// containers.
+	return guard.Middleware(s.mux), nil
 }

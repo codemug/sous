@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/codemug/sous/internal/auth"
 	"github.com/codemug/sous/internal/capacity"
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/config"
@@ -85,10 +86,22 @@ func main() {
 		DropCaches: dropCaches,
 	}
 
-	// The larder scans MODEL_DIR/hub, which is where huggingface_hub
-	// places snapshots under the HF_HOME bind mount.
+	// Read BEFORE anything is served. An install that forgot to configure
+	// credentials should fail at startup, loudly, rather than come up open:
+	// this process creates and destroys containers on its node.
+	guard, err := auth.FromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if guard.Disabled {
+		log.Print("WARNING: SOUS_AUTH=none - anyone who can reach this port " +
+			"can start and stop containers on this node")
+	}
+
+	// The larder scans MODEL_DIR/hub, which is where huggingface_hub places
+	// snapshots under the HF_HOME bind mount.
 	h, err := httpapi.New(mgr, cat, mem.TotalGiB,
-		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"))
+		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard)
 	if err != nil {
 		log.Fatalf("http: %v", err)
 	}
