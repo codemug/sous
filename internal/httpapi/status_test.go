@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -198,5 +199,69 @@ func TestNodePageDrawsSegmentsToScale(t *testing.T) {
 	}
 	if !strings.Contains(body, "chip is-running") {
 		t.Error("running state not encoded on the model card")
+	}
+}
+
+func TestModelPageRendersConfigTelemetryAndLogs(t *testing.T) {
+	h := newTestServer(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	rr := send(t, h, http.MethodGet, "/model/qwen38", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"Configuration", "Telemetry", "Logs", "Edit",
+		"qwen38", "chip is-running"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("model page missing %q", want)
+		}
+	}
+	// The edit box must be pre-filled, or "edit" means "retype from scratch".
+	if !strings.Contains(body, "kind: vllm") {
+		t.Error("edit textarea not pre-filled with the recipe YAML")
+	}
+	// Telemetry parsed from the fake runtime's boot log.
+	if !strings.Contains(body, "FLASHINFER") {
+		t.Error("observed attention backend not shown")
+	}
+}
+
+func TestModelPageForUndeployedRecipe(t *testing.T) {
+	h := newTestServer(t)
+	rr := send(t, h, http.MethodGet, "/model/kokoro", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "not deployed") {
+		t.Error("undeployed state not shown")
+	}
+	if !strings.Contains(body, "no running container") {
+		t.Error("missing explanation for absent logs")
+	}
+}
+
+func TestModelPageUnknownIs404(t *testing.T) {
+	h := newTestServer(t)
+	if rr := send(t, h, http.MethodGet, "/model/nosuchmodel", "", ""); rr.Code == http.StatusOK {
+		t.Errorf("unknown model returned 200")
+	}
+}
+
+// The form path is what the browser actually uses; the REST verb is for API
+// clients. Both must reach the same handler.
+func TestFormUpdateAppliesAndRedirects(t *testing.T) {
+	h := newTestServer(t)
+	y := "id: kokoro\nkind: container\nmodality: tts\nimage: ghcr.io/remsky/kokoro-fastapi-gpu:CHANGED\n"
+	rr := post(t, h, "/model/kokoro/update", "application/x-www-form-urlencoded",
+		"body="+url.QueryEscape(y))
+	if rr.Code != http.StatusSeeOther && rr.Code != http.StatusFound && rr.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", rr.Code, rr.Body.String())
+	}
+	after := send(t, h, http.MethodGet, "/model/kokoro", "", "").Body.String()
+	if !strings.Contains(after, "CHANGED") {
+		t.Error("form update did not persist")
 	}
 }

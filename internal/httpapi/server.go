@@ -72,6 +72,14 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	// run next".
 	s.mux.HandleFunc("GET /", s.pageNode)
 	s.mux.HandleFunc("GET /catalog", s.pageCatalog)
+	s.mux.HandleFunc("GET /model/{id}", s.pageModel)
+	// An HTML form can only issue GET and POST. The REST verbs above stay
+	// for API clients; these are the same handlers on paths a browser can
+	// actually submit to.
+	s.mux.HandleFunc("POST /model/{id}/update", s.formUpdate)
+	s.mux.HandleFunc("POST /model/{id}/delete", s.formDelete)
+	s.mux.HandleFunc("POST /model/{id}/deploy", s.formDeploy)
+	s.mux.HandleFunc("POST /model/{id}/undeploy", s.undeploy)
 	// Auth wraps the WHOLE mux rather than being applied per route, so a
 	// handler added later is protected by default. The alternative fails
 	// open, and the route that gets forgotten is the one that creates

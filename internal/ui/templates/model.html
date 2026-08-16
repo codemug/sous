@@ -1,0 +1,142 @@
+{{define "model"}}{{template "head" .}}
+<style>
+.m-head{display:flex;align-items:baseline;gap:var(--space-sm);flex-wrap:wrap;margin-bottom:var(--space-xs)}
+.m-head h1{margin:0}
+.m-acts{margin-left:auto;display:flex;gap:var(--space-xs);flex-wrap:wrap}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--space-lg);align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:minmax(0,1fr)}.m-acts{margin-left:0}}
+.box{border:1px solid var(--rule);border-radius:var(--radius-md);background:var(--paper-2);padding:var(--space-md);margin-bottom:var(--space-lg)}
+.box h2{margin-bottom:var(--space-sm)}
+dl.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-2xs) var(--space-md);margin:0;font-size:var(--text-sm)}
+dl.kv dt{font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);white-space:nowrap}
+dl.kv dd{margin:0;font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+textarea.edit{width:100%;min-height:22rem;font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink);background:var(--paper);border:1px solid var(--rule-firm);border-radius:var(--radius-sm);padding:var(--space-sm);resize:vertical;line-height:1.5}
+textarea.edit:focus-visible{border-color:var(--accent)}
+/* The one dark band. Logs are the page's showcase surface and the only place
+   graphite appears - a light page with a single dark beat, not a dark page. */
+pre.logs{
+  background:var(--graphite);color:oklch(88% 0.01 250);
+  border:1px solid var(--rule-firm);border-radius:var(--radius-md);
+  padding:var(--space-md);overflow:auto;max-height:34rem;
+  font-family:var(--font-mono);font-size:var(--text-xs);line-height:1.5;
+  white-space:pre;margin:0;
+}
+.notes{white-space:pre-wrap;font-size:var(--text-sm);color:var(--ink-body);margin:0;overflow-wrap:anywhere}
+.danger{border-color:var(--drift)}
+.danger summary{color:var(--drift)}
+</style>
+
+{{with .Model}}
+<div class="m-head">
+  <h1>{{.Recipe.ID}}</h1>
+  {{if .Deployed}}
+    {{if .Status.Drifted}}<span class="chip is-drift">drifted</span>
+    {{else}}<span class="chip is-running">running</span>{{end}}
+    <span class="mono" style="color:var(--accent-ink)">:{{.Status.Port}}</span>
+  {{else}}
+    <span class="chip is-idle">not deployed</span>
+  {{end}}
+  {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
+  <span class="m-acts">
+    <a class="btn" href="/catalog">← Catalog</a>
+    {{if .Deployed}}
+      <form method="post" action="/model/{{.Recipe.ID}}/undeploy" style="margin:0">
+        <button class="btn-danger" type="submit">Undeploy</button>
+      </form>
+    {{else if not .Recipe.Archived}}
+      <form method="post" action="/model/{{.Recipe.ID}}/deploy" style="margin:0;display:flex;gap:var(--space-2xs)">
+        <input class="mono" name="port" inputmode="numeric" placeholder="port (auto)"
+               style="width:9rem;padding:.4rem .5rem;border:1px solid var(--rule-firm);border-radius:var(--radius-sm);background:var(--paper);color:var(--ink);font-size:var(--text-xs)">
+        <button class="btn-primary" type="submit">Deploy</button>
+      </form>
+    {{end}}
+  </span>
+</div>
+<p class="lede">{{.Recipe.Kind}} · {{.Recipe.Modality}}{{if .Recipe.Model}} · <span class="mono">{{.Recipe.Model}}</span>{{end}}</p>
+
+<div class="cols">
+  <div>
+    <section class="box">
+      <h2>Configuration</h2>
+      <dl class="kv">
+        <dt>Image</dt><dd>{{.Recipe.Image}}</dd>
+        {{if .Recipe.ServedAs}}<dt>Served as</dt><dd>{{range $i,$n := .Recipe.ServedAs}}{{if $i}}, {{end}}{{$n}}{{end}}</dd>{{end}}
+        <dt>Declared</dt><dd>{{gib .Recipe.Declared.WeightsGiB}} weights · {{gib .Recipe.Declared.KVGiB}} KV</dd>
+        {{range $k,$v := .Recipe.Args}}<dt>{{$k}}</dt><dd>{{$v}}</dd>{{end}}
+        {{range $k,$v := .Recipe.Env}}<dt>env {{$k}}</dt><dd>{{$v}}</dd>{{end}}
+      </dl>
+    </section>
+
+    {{if .Deployed}}
+    <section class="box">
+      <h2>Telemetry</h2>
+      {{if .Status.Observed}}
+        <p class="note">Measured from this container's boot log. Where it differs
+        from the declared footprint, the measurement is the truth and the recipe
+        is the estimate that needs correcting.</p>
+        <dl class="kv">
+          <dt>Weights</dt><dd>{{gib .Status.Observed.WeightsGiB}}</dd>
+          <dt>KV cache</dt><dd>{{gib .Status.Observed.KVGiB}}{{if .Status.Observed.KVTokens}} · {{.Status.Observed.KVTokens}} tokens{{end}}</dd>
+          {{if .Status.Observed.KVKiBPerToken}}<dt>KV / token</dt><dd>{{printf "%.1f KiB" .Status.Observed.KVKiBPerToken}}</dd>{{end}}
+          {{if .Status.Observed.LoadSeconds}}<dt>Load time</dt><dd>{{printf "%.0fs" .Status.Observed.LoadSeconds}}</dd>{{end}}
+          {{if .Status.Observed.Backend}}<dt>Attention</dt><dd>{{.Status.Observed.Backend}}</dd>{{end}}
+          {{if .Status.Observed.CUDAGraphs}}<dt>CUDA graphs</dt><dd>{{.Status.Observed.CUDAGraphs}}</dd>{{end}}
+          {{if .Status.Observed.MaxConcurrency}}<dt>Max concurrency</dt><dd>{{printf "%.1f" .Status.Observed.MaxConcurrency}}</dd>{{end}}
+          <dt>Uptime</dt><dd>{{dur .Status.UptimeSec}}</dd>
+        </dl>
+      {{else}}
+        <p class="note">No observation recorded. The boot log was not parsed for
+        this deployment, so capacity planning is running on the recipe's declared
+        estimate alone.</p>
+      {{end}}
+    </section>
+    {{end}}
+
+    {{if .Recipe.Notes}}
+    <section class="box">
+      <h2>Notes</h2>
+      <p class="notes">{{.Recipe.Notes}}</p>
+    </section>
+    {{end}}
+  </div>
+
+  <div>
+    <section class="box">
+      <h2>Edit</h2>
+      <p class="note">Saving reports what changed and whether the running
+      container now disagrees with its recipe. Image, args, env and model force a
+      restart to take effect; notes, archived and the declared footprint do not.</p>
+      <form method="post" action="/model/{{.Recipe.ID}}/update">
+        <textarea class="edit" name="body" spellcheck="false">{{.YAML}}</textarea>
+        <p style="margin:var(--space-sm) 0 0"><button class="btn-primary" type="submit">Save</button></p>
+      </form>
+    </section>
+
+    <section class="box">
+      <h2>Logs</h2>
+      {{if .LogErr}}
+        <p class="note warn">{{.LogErr}}</p>
+      {{else if .Logs}}
+        <pre class="logs">{{.Logs}}</pre>
+      {{else}}
+        <p class="note">No logs — this recipe has no running container.</p>
+      {{end}}
+    </section>
+
+    <details class="box danger">
+      <summary>Delete this recipe</summary>
+      <p class="note" style="margin-top:var(--space-sm)">Deleting is refused while
+      the model is deployed. Forcing it stops the container <em>and</em> removes the
+      recipe — the configuration that could restart it goes too, so the model
+      cannot be brought back without re-importing it.</p>
+      <form method="post" action="/model/{{.Recipe.ID}}/delete">
+        <label style="display:flex;gap:.4rem;align-items:center;font-size:var(--text-sm);margin-bottom:var(--space-sm)">
+          <input type="checkbox" name="force" value="true"> Stop it first if it is running
+        </label>
+        <button class="btn-danger" type="submit">Delete {{.Recipe.ID}}</button>
+      </form>
+    </details>
+  </div>
+</div>
+{{end}}
+{{template "foot" .}}{{end}}

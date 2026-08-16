@@ -30,6 +30,7 @@ type pageData struct {
 	Message     string
 	IsError     bool
 	Node        *NodeStatus
+	Model       *modelPage
 }
 
 // larderView gathers what the larder needs: the catalog to know what is
@@ -170,7 +171,7 @@ func (s *Server) syncRecipes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/", fmt.Sprintf(
+		s.redirect(w, r, "/catalog", fmt.Sprintf(
 			"catalog sync: %d added, %d updated, %d kept, %d already current",
 			len(res.Added), len(res.Updated), len(res.Kept), len(res.Current)), false)
 		return
@@ -228,14 +229,14 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 		var ce *deploy.CapacityError
 		if errors.As(err, &ce) {
 			if wantsHTML(r) {
-				s.redirect(w, r, "/", ce.Error(), true)
+				s.redirect(w, r, "/catalog", ce.Error(), true)
 				return
 			}
 			writeJSON(w, http.StatusConflict, ce.Result)
 			return
 		}
 		if wantsHTML(r) {
-			s.redirect(w, r, "/", err.Error(), true)
+			s.redirect(w, r, "/catalog", err.Error(), true)
 			return
 		}
 		writeErr(w, http.StatusNotFound, err.Error())

@@ -1,0 +1,42 @@
+{
+  "task": "Finish Sous UI rebuild, release+deploy, onboard models, clear loose ends",
+  "stories": [
+    {"id":"US-001","title":"Catalog page: recipe CRUD affordances","passes":false,
+     "acceptanceCriteria":[
+       "catalog.html uses Cobalt tokens (no --ground/--ink-soft legacy vars)",
+       "Page offers create/import (textarea posting to POST /api/recipes)",
+       "Each recipe row links to its detail page and offers Delete with force confirm",
+       "go test ./internal/httpapi passes"]},
+    {"id":"US-002","title":"Per-model drill-down page with config, telemetry, logs","passes":false,
+     "acceptanceCriteria":[
+       "GET /model/{id} renders recipe config, observation telemetry and last log lines",
+       "Edit form posts to PUT /api/recipes/{id} and shows the resulting diff",
+       "Unknown id returns 404",
+       "go test ./internal/httpapi passes"]},
+    {"id":"US-003","title":"Cobalt language on deployments, larder, sources","passes":false,
+     "acceptanceCriteria":[
+       "No template references a removed legacy token (--ground, --surface-2, --ink-soft, --gold)",
+       "All three pages render 200 in tests",
+       "go test ./... passes and GOOS=linux GOARCH=arm64 go build ./... is clean"]},
+    {"id":"US-004","title":"Release Sous and deploy to gx10","passes":false,
+     "acceptanceCriteria":[
+       "Tag pushed, CI green, multi-arch image published",
+       "nodes/asus-gx10/sous.env bumped, deploy run success",
+       "Authenticated GET /api/status on gx10 returns 200 with the new fields"]},
+    {"id":"US-005","title":"Onboard kokoro, asr, qwen3.6 into Sous","passes":false,
+     "acceptanceCriteria":[
+       "Each service deployed via Sous with its existing port preserved",
+       "GET /api/status shows 3 models running, 0 drifted",
+       "The three services still answer on :8004 :8006 :8000",
+       "Fleet compose markers removed so GitOps no longer competes"]},
+    {"id":"US-006","title":"Clear the loose ends","passes":false,
+     "acceptanceCriteria":[
+       "scripts/dns-probe.sh tracked in git",
+       "asus-gx10:8002 removed from prometheus.yml",
+       "gx10 swap investigated with evidence recorded",
+       "Immich nightly DB dumps write off the photo disk",
+       "Artifact corrected or superseded re the 20 GiB reserve claim",
+       "gx10 build cache reclaimed",
+       "Tailscale key expiry recorded in the fleet"]}
+  ]
+}

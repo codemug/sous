@@ -1,11 +1,76 @@
 {{define "catalog"}}{{template "head" .}}
-<p class="note">Recipes are portable: model, image, flags, and the reasoning behind them.
-Nothing machine-specific lives here — measured footprints belong to a deployment,
-because 24.87 GiB and 136 KiB/token are facts about this box, not about the model.</p>
+<style>
+.cat-head{display:flex;align-items:flex-end;gap:var(--space-md);flex-wrap:wrap;margin-bottom:var(--space-lg)}
+.cat-head .lede{margin:0}
+.cat-acts{margin-left:auto;display:flex;gap:var(--space-xs);flex-wrap:wrap}
+.rid{font-family:var(--font-display);font-weight:600;color:var(--ink);text-decoration:none}
+.rid:hover{color:var(--accent-ink)}
+.rmodel{display:block;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--ink-faint);overflow-wrap:anywhere}
+tr.arch td{opacity:.62}
+.row-acts{display:flex;gap:var(--space-2xs);justify-content:flex-end;flex-wrap:wrap}
+/* <details> as the import drawer: no JS, and it stays shut until wanted. */
+details.drawer{margin-bottom:var(--space-lg)}
+details.drawer > summary{
+  cursor:pointer;font-family:var(--font-mono);font-size:var(--text-xs);
+  letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);
+  padding:var(--space-xs) 0;
+}
+details.drawer > summary:hover{color:var(--accent-ink)}
+details.drawer[open] > summary{color:var(--ink)}
+.drawer-body{
+  border:1px solid var(--rule);border-radius:var(--radius-md);
+  background:var(--paper-2);padding:var(--space-md);margin-top:var(--space-xs);
+}
+textarea{
+  width:100%;min-height:11rem;font-family:var(--font-mono);font-size:var(--text-sm);
+  color:var(--ink);background:var(--paper);border:1px solid var(--rule-firm);
+  border-radius:var(--radius-sm);padding:var(--space-sm);resize:vertical;line-height:1.5;
+}
+textarea:focus-visible{border-color:var(--accent)}
+@media (max-width:640px){.cat-acts{margin-left:0}}
+</style>
 
-{{if .Message}}<p class="note{{if .IsError}} warn{{end}}">{{.Message}}</p>{{end}}
+<div class="cat-head">
+  <div>
+    <h1>Catalog</h1>
+    <p class="lede">Recipes are portable: model, image, flags, and the reasoning
+    behind them. Nothing machine-specific lives here — measured footprints belong
+    to a deployment, because 24.87 GiB and 136 KiB per token are facts about this
+    box, not about the model.</p>
+  </div>
+  <span class="cat-acts">
+    <form method="post" action="/api/recipes/sync" style="display:inline">
+      <button type="submit" title="Adds recipes this binary carries that are missing here. Recipes you have edited are kept.">Sync seeds</button>
+    </form>
+  </span>
+</div>
 
-<div class="wrap">
+<details class="drawer">
+  <summary>+ New recipe / import YAML</summary>
+  <div class="drawer-body">
+    <p class="note">Paste a recipe — YAML as published in <code>recipes/</code>, or
+    JSON. Creating never overwrites: if the id already exists you get a conflict
+    and a pointer to the edit page, so importing an older copy cannot quietly
+    replace a tuned one.</p>
+    <form method="post" action="/api/recipes">
+      <textarea name="body" spellcheck="false" placeholder="id: my-model
+kind: vllm
+modality: text
+image: vllm/vllm-openai:latest
+model: org/Model-Name
+declared:
+  weights_gib: 10
+  kv_gib: 4
+args:
+  gpu-memory-utilization: 0.5"></textarea>
+      <p style="margin:var(--space-sm) 0 0">
+        <button class="btn-primary" type="submit">Create</button>
+      </p>
+    </form>
+  </div>
+</details>
+
+<div class="panel scroll">
 <table>
   <thead>
     <tr>
@@ -15,23 +80,26 @@ because 24.87 GiB and 136 KiB/token are facts about this box, not about the mode
   </thead>
   <tbody>
   {{range .Recipes}}
-    <tr>
+    <tr{{if .Archived}} class="arch"{{end}}>
       <td>
-        <strong>{{.ID}}</strong>
-        {{if .Model}}<br><span class="sub">{{.Model}}</span>{{end}}
+        <a class="rid" href="/model/{{.ID}}">{{.ID}}</a>
+        {{if .Model}}<span class="rmodel">{{.Model}}</span>{{end}}
       </td>
-      <td><span class="tag t-kind">{{.Kind}}</span></td>
+      <td><span class="chip">{{.Kind}}</span></td>
       <td>{{.Modality}}</td>
       <td class="n">
         {{if .Declared.TotalGiB}}{{printf "%.2f GiB" .Declared.TotalGiB}}{{else}}CPU only{{end}}
       </td>
-      <td>{{if .Archived}}<span class="tag t-arch">archived</span>{{end}}</td>
+      <td>{{if .Archived}}<span class="chip is-arch">archived</span>{{end}}</td>
       <td>
-        {{if not .Archived}}
-        <form method="post" action="/api/deploy/{{.ID}}" style="margin:0">
-          <button type="submit">Deploy</button>
-        </form>
-        {{end}}
+        <span class="row-acts">
+          <a class="btn" href="/model/{{.ID}}">Open</a>
+          {{if not .Archived}}
+          <form method="post" action="/api/deploy/{{.ID}}" style="margin:0">
+            <button type="submit">Deploy</button>
+          </form>
+          {{end}}
+        </span>
       </td>
     </tr>
   {{end}}

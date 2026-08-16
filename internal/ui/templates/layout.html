@@ -150,6 +150,22 @@ h2{
   background:var(--paper-2);
 }
 .scroll{overflow-x:auto}
+/* .wrap predates the redesign and is what deployments/larder/sources use for a
+   scrollable table surface. Kept as the same thing rather than renamed across
+   three templates for no behavioural gain. */
+.wrap{border:1px solid var(--rule);border-radius:var(--radius-md);
+      background:var(--paper-2);overflow-x:auto}
+/* A TAG labels a thing; a CHIP reports a state. Same family, deliberately
+   different weight: the tag carries no status dot, so a kind never reads as a
+   health signal. */
+.tag{
+  display:inline-block;font-family:var(--font-mono);font-size:var(--text-xs);
+  letter-spacing:.06em;text-transform:uppercase;padding:.1rem .4rem;
+  border-radius:var(--radius-sm);background:var(--paper-3);color:var(--ink-mute);
+  white-space:nowrap;
+}
+.t-kind{color:var(--accent-ink);background:var(--accent-wash)}
+.t-arch{color:var(--ink-faint);background:none;border:1px dashed var(--rule-firm)}
 
 table{border-collapse:collapse;width:100%;font-size:var(--text-sm)}
 th,td{

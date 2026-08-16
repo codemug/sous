@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -42,6 +43,24 @@ func decodeRecipe(r *http.Request) (recipe.Recipe, error) {
 	}
 
 	ct := r.Header.Get("Content-Type")
+
+	// A browser <form> posts application/x-www-form-urlencoded, so the recipe
+	// arrives percent-encoded inside a "body" field rather than as the request
+	// body. Without this the UI's import drawer would send YAML that parses as
+	// one long key and fails with a message about nothing recognisable.
+	if strings.Contains(ct, "x-www-form-urlencoded") {
+		vals, err := url.ParseQuery(string(body))
+		if err != nil {
+			return rec, fmt.Errorf("invalid form body: %w", err)
+		}
+		field := strings.TrimSpace(vals.Get("body"))
+		if field == "" {
+			return rec, errors.New("the recipe field was empty")
+		}
+		body = []byte(field)
+		ct = "" // fall through to sniffing below
+	}
+
 	if strings.Contains(ct, "json") || strings.HasPrefix(strings.TrimSpace(string(body)), "{") {
 		if err := json.Unmarshal(body, &rec); err != nil {
 			return rec, fmt.Errorf("invalid JSON: %w", err)
@@ -85,7 +104,7 @@ func (s *Server) createRecipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/", "created "+rec.ID, false)
+		s.redirect(w, r, "/catalog", "created "+rec.ID, false)
 		return
 	}
 	writeJSON(w, http.StatusCreated, rec)
@@ -134,7 +153,7 @@ func (s *Server) updateRecipe(w http.ResponseWriter, r *http.Request) {
 		if deployed && d.NeedsRestart() {
 			msg += "; redeploy to apply " + strings.Join(d.RestartFields(), ", ")
 		}
-		s.redirect(w, r, "/", msg, false)
+		s.redirect(w, r, "/model/"+id, msg, false)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -202,7 +221,7 @@ func (s *Server) deleteRecipe(w http.ResponseWriter, r *http.Request) {
 	if s.isDeployed(id) && !force {
 		msg := fmt.Sprintf("%s is deployed; undeploy it first, or pass ?force=true to stop it and delete the recipe", id)
 		if wantsHTML(r) {
-			s.redirect(w, r, "/", msg, true)
+			s.redirect(w, r, "/model/"+id, msg, true)
 			return
 		}
 		writeJSON(w, http.StatusConflict, map[string]any{
@@ -229,7 +248,7 @@ func (s *Server) deleteRecipe(w http.ResponseWriter, r *http.Request) {
 		if undeployed {
 			msg = "stopped and deleted " + id
 		}
-		s.redirect(w, r, "/", msg, false)
+		s.redirect(w, r, "/catalog", msg, false)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "undeployed": undeployed})

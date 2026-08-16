@@ -5,7 +5,6 @@ Backend and CUDA graph mode are shown because they change throughput with no
 error message: fp8 KV narrows the backend choice, FlashInfer is then selected,
 and FlashInfer with speculative decoding drops FULL graphs.</p>
 
-{{if .Message}}<p class="note{{if .IsError}} warn{{end}}">{{.Message}}</p>{{end}}
 
 <div class="wrap">
 <table>
