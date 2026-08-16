@@ -30,6 +30,25 @@ func (c *Catalog) Get(id string) (recipe.Recipe, error) {
 	return r, nil
 }
 
+// Delete removes a recipe and its provenance mark.
+//
+// The mark goes too, deliberately. Leaving it behind would mean a later
+// SyncSeeds sees a missing recipe, re-adds it from the built-in catalog, and
+// then treats the stale mark as proof nobody had touched it - quietly
+// resurrecting something an operator deleted on purpose.
+func (c *Catalog) Delete(id string) error {
+	if !recipe.ValidID(id) {
+		return fmt.Errorf("catalog: invalid id %q", id)
+	}
+	if err := c.s.Delete(store.KindRecipe, id); err != nil {
+		return err
+	}
+	// A missing mark is not an error: recipes written before marks existed,
+	// and recipes created through the API, never had one.
+	_ = c.s.Delete(store.KindSeedMark, id)
+	return nil
+}
+
 func (c *Catalog) List() ([]recipe.Recipe, error) {
 	names, err := c.s.List(store.KindRecipe)
 	if err != nil {
