@@ -49,6 +49,16 @@ type Recipe struct {
 	Build      string   `yaml:"build,omitempty" json:"build,omitempty"`
 	Entrypoint []string `yaml:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 
+	// ContainerPort overrides the port Sous maps to inside the container.
+	//
+	// Normally unnecessary: Sous sets the port for the kinds it commands, and
+	// reads EXPOSE from the image for KindContainer. It exists because an
+	// image's metadata can be WRONG - kokoro-fastapi declares EXPOSE 8000 and
+	// its process listens on 8880 - and when it is, nothing else can discover
+	// the truth. Leave it 0 unless a deployed container answers nothing while
+	// reporting healthy.
+	ContainerPort int `yaml:"container_port,omitempty" json:"container_port,omitempty"`
+
 	Declared Footprint         `yaml:"declared" json:"declared"`
 	Args     map[string]any    `yaml:"args,omitempty" json:"args,omitempty"`
 	Env      map[string]string `yaml:"env,omitempty" json:"env,omitempty"`

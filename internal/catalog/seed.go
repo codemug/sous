@@ -304,9 +304,13 @@ func Seeds() []recipe.Recipe {
 		},
 		{
 			ID: "kokoro", Kind: recipe.KindContainer, Modality: recipe.ModalityTTS,
-			Image:    "ghcr.io/remsky/kokoro-fastapi-gpu:latest",
-			Declared: recipe.Footprint{WeightsGiB: 3, KVGiB: 0},
-			Env:      map[string]string{"HF_HOME": "/root/.cache/huggingface"},
+			Image: "ghcr.io/remsky/kokoro-fastapi-gpu:latest",
+			// The image declares EXPOSE 8000 and the process listens on 8880.
+			// Without this the container starts, warms up on the GPU, reports
+			// healthy, and answers nothing.
+			ContainerPort: 8880,
+			Declared:      recipe.Footprint{WeightsGiB: 3, KVGiB: 0},
+			Env:           map[string]string{"HF_HOME": "/root/.cache/huggingface"},
 			Notes: "MOVED TO GPU 2026-08-16, AFTER MEASURING. This recipe previously\n" +
 				"specified the -cpu image with a 0 GiB footprint, and the reasoning for\n" +
 				"that was written when a 25.6 GiB Omni was co-resident. It does not\n" +

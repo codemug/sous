@@ -111,7 +111,12 @@ func (m *Manager) Deploy(ctx context.Context, id string, wantPort int, force boo
 	// is a property of the image, and a recipe that restated it would go stale
 	// the first time the image changed.
 	if r.Kind == recipe.KindContainer {
-		if cp, err := m.Runtime.ImageExposedPort(ctx, r.Image); err == nil && cp > 0 {
+		// The recipe wins when it says anything, because it is the only place
+		// that can correct an image whose EXPOSE metadata disagrees with the
+		// process inside it.
+		if r.ContainerPort > 0 {
+			spec.ContainerPort = r.ContainerPort
+		} else if cp, err := m.Runtime.ImageExposedPort(ctx, r.Image); err == nil && cp > 0 {
 			spec.ContainerPort = cp
 		}
 		// A failure here is not fatal: an image with no EXPOSE still has to be

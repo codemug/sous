@@ -395,3 +395,25 @@ func (f *fakeRuntime) lastSpec() (engine.Spec, bool) {
 	}
 	return f.specs[len(f.specs)-1], true
 }
+
+// An image can lie. kokoro-fastapi declares EXPOSE 8000 and listens on 8880,
+// so the recipe override has to beat the image lookup or the mapping is wrong
+// in a way nothing else can correct.
+func TestRecipeContainerPortBeatsTheImageLookup(t *testing.T) {
+	rt := newFake()
+	m := newManager(t, rt)
+	rec, err := m.Catalog.Get("kokoro")
+	if err != nil {
+		t.Skipf("kokoro seed unavailable: %v", err)
+	}
+	if rec.ContainerPort != 8880 {
+		t.Fatalf("seed container_port = %d, want 8880", rec.ContainerPort)
+	}
+	if _, err := m.Deploy(context.Background(), "kokoro", 8004, false); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	spec, _ := rt.lastSpec()
+	if spec.ContainerPort != 8880 {
+		t.Errorf("container port = %d, want the recipe's 8880", spec.ContainerPort)
+	}
+}

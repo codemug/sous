@@ -2,6 +2,7 @@ id: kokoro
 kind: container
 modality: tts
 image: ghcr.io/remsky/kokoro-fastapi-gpu:latest
+container_port: 8880
 declared:
     weights_gib: 3
     kv_gib: 0
