@@ -6,7 +6,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/recipe"
 )
@@ -116,5 +115,3 @@ func (s *Server) formDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	s.deploy(w, r)
 }
-
-var _ = deploy.Record{}

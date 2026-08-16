@@ -1,0 +1,5 @@
+# Ralph/session scaffolding - not project content. .hallmark/log.json IS kept:
+# it is the design-rotation memory a future Hallmark run reads.
+.hallmark/prd.json
+.hallmark/preflight.json
+progress.txt
