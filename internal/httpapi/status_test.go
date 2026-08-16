@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func statusOf(t *testing.T, h http.Handler) NodeStatus {
@@ -263,5 +264,37 @@ func TestFormUpdateAppliesAndRedirects(t *testing.T) {
 	after := send(t, h, http.MethodGet, "/model/kokoro", "", "").Body.String()
 	if !strings.Contains(after, "CHANGED") {
 		t.Error("form update did not persist")
+	}
+}
+
+// Docker frames non-TTY log output with an 8-byte binary header per chunk.
+// Passing that through put raw bytes into the HTML: the page became invalid
+// UTF-8 and the logs panel rendered nothing, with no error to explain it.
+func TestLogOutputIsValidUTF8(t *testing.T) {
+	h := newTestServer(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	for _, path := range []string{"/api/logs/qwen38", "/model/qwen38"} {
+		body := send(t, h, http.MethodGet, path, "", "").Body.Bytes()
+		if !utf8.Valid(body) {
+			t.Errorf("%s emitted invalid UTF-8", path)
+		}
+		if bytes.ContainsRune(body, 0) {
+			t.Errorf("%s emitted a NUL byte", path)
+		}
+	}
+}
+
+func TestSafeTextRepairsBinary(t *testing.T) {
+	got := safeText([]byte{0x01, 0x00, 0x00, 0x00, 0x89, 'h', 'i'})
+	if !utf8.ValidString(got) {
+		t.Errorf("safeText returned invalid UTF-8: %q", got)
+	}
+	if strings.ContainsRune(got, 0) {
+		t.Errorf("safeText kept a NUL: %q", got)
+	}
+	if !strings.Contains(got, "hi") {
+		t.Errorf("safeText dropped readable text: %q", got)
 	}
 }

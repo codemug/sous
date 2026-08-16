@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/observe"
@@ -218,7 +220,22 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(lastLines(buf, tail))
+	_, _ = io.WriteString(w, safeText(lastLines(buf, tail)))
+}
+
+// safeText makes container output safe to embed in a page.
+//
+// The demultiplexer in engine.Logs removes Docker's framing, which was the
+// cause of the corruption. This is the belt: a container may legitimately emit
+// binary - a progress bar, a truncated multi-byte character at a read
+// boundary, a stray NUL - and none of that should be able to break the
+// document around it. Invalid sequences become U+FFFD rather than being
+// dropped, so the log still shows that SOMETHING was there.
+func safeText(b []byte) string {
+	if utf8.Valid(b) {
+		return strings.ReplaceAll(string(b), "\x00", "")
+	}
+	return strings.ReplaceAll(strings.ToValidUTF8(string(b), "\uFFFD"), "\x00", "")
 }
 
 // lastLines returns the final n lines of b without splitting the whole buffer

@@ -72,7 +72,7 @@ func (s *Server) pageModel(w http.ResponseWriter, r *http.Request) {
 						break
 					}
 				}
-				m.Logs = string(lastLines(buf, 120))
+				m.Logs = safeText(lastLines(buf, 120))
 			} else {
 				m.LogErr = err.Error()
 			}

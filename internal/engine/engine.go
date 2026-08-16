@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -98,10 +99,35 @@ func (d *Docker) Stop(ctx context.Context, name string) error {
 	return nil
 }
 
+// Logs returns a container's output as PLAIN TEXT.
+//
+// Docker's log stream for a non-TTY container is MULTIPLEXED: every chunk is
+// prefixed with an 8-byte header carrying the stream id and the frame length.
+// Handing that to a caller unchanged puts raw binary through whatever consumes
+// it - in a web page it produces invalid UTF-8 and a corrupted document, which
+// is how this surfaced: the logs panel rendered nothing and the page around it
+// broke, with no error anywhere to explain why.
+//
+// stdcopy.StdCopy is the demultiplexer. Both streams are folded into one
+// destination because interleaved order is what a person reads a log for -
+// separating them would put the traceback in a different pane from the line
+// that caused it.
 func (d *Docker) Logs(ctx context.Context, name string) (io.ReadCloser, error) {
-	return d.cli.ContainerLogs(ctx, name, container.LogsOptions{
+	raw, err := d.cli.ContainerLogs(ctx, name, container.LogsOptions{
 		ShowStdout: true, ShowStderr: true,
 	})
+	if err != nil {
+		return nil, err
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		defer raw.Close()
+		_, err := stdcopy.StdCopy(pw, pw, raw)
+		// CloseWithError(nil) is equivalent to Close, so a clean EOF stays a
+		// clean EOF for the reader.
+		_ = pw.CloseWithError(err)
+	}()
+	return pr, nil
 }
 
 func (d *Docker) Running(ctx context.Context) ([]string, error) {

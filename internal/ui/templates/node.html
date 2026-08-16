@@ -138,7 +138,7 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
       {{end}}
       {{if .Archived}}<span class="chip is-arch">archived</span>{{end}}
       <span class="model-acts">
-        <a class="btn" href="/logs/{{.RecipeID}}">Logs</a>
+        <a class="btn" href="/model/{{.RecipeID}}">Open</a>
         <form method="post" action="/api/undeploy/{{.RecipeID}}" style="display:inline">
           <button class="btn-danger" type="submit">Undeploy</button>
         </form>
