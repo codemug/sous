@@ -46,9 +46,14 @@ func BuildSpec(r recipe.Recipe, hostPort int, modelDir string) (Spec, error) {
 		ContainerPort: containerPort,
 		Binds:         []string{modelDir + ":/root/.cache/huggingface"},
 		// A recipe declaring zero weights is CPU-only and must not request a
-		// GPU. Kokoro is the live example, and that is a design choice: TTS on
-		// the CPU leaves the memory bandwidth for the LLM, which is what
-		// decode is actually bound by.
+		// GPU. This is load-bearing rather than a hint: a footprint left at 0
+		// does not merely misreport the capacity plan, it WITHHOLDS THE DEVICE.
+		//
+		// Kokoro used to be the live example of a deliberate CPU service. It is
+		// not any more - it moved to GPU on 2026-08-16 after measurement (1194
+		// ms -> 199 ms, ~6x, for 3 GiB), and the recipe's declared footprint is
+		// what grants it the device. The old comment outlived the decision it
+		// described, which is exactly how a stale example becomes a bug.
 		GPU: r.Declared.WeightsGiB > 0,
 	}
 	for k, v := range r.Env {

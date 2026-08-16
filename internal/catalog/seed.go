@@ -305,22 +305,36 @@ func Seeds() []recipe.Recipe {
 		{
 			ID: "kokoro", Kind: recipe.KindContainer, Modality: recipe.ModalityTTS,
 			Image:    "ghcr.io/remsky/kokoro-fastapi-gpu:latest",
-			Declared: recipe.Footprint{WeightsGiB: 3.0},
+			Declared: recipe.Footprint{WeightsGiB: 3, KVGiB: 0},
 			Env:      map[string]string{"HF_HOME": "/root/.cache/huggingface"},
-			Notes: "ON THE GPU since 2026-08-16, after measuring. Was CPU-only, and the\n" +
-				"argument for that was inherited rather than checked:\n\n" +
-				"  CPU  1194 / 1131 / 1391 ms   GPU  202 / 201 / 193 / 198 / 194 ms\n\n" +
-				"~6x faster for 3 GiB. TTS had been the largest single component of the\n" +
-				"voice loop - larger than ASR (~440 ms) and the LLM (~260 ms) combined.\n\n" +
-				"The old reasoning was 'keeping TTS off the GPU leaves the bandwidth for\n" +
-				"the LLM'. True when a 25.6 GiB Omni was co-resident; false here. Kokoro\n" +
-				"is 82M parameters reading ~0.16 GB per forward against qwen38's 24.87 GB\n" +
-				"- under 1% of this box's ~273 GB/s.\n\n" +
-				"arm64 confirmed in the manifest AND at runtime ('Model warmed up on\n" +
-				"cuda: kokoro_v1' on GB10). The second check is not optional: GPU whisper\n" +
-				"reported the GPU as visible, silently ran on CPU, and was slower.\n\n" +
-				"68 voices. Revert by pinning the -cpu tag; it still has an arm64 image.",
-		},
+			Notes: "MOVED TO GPU 2026-08-16, AFTER MEASURING. This recipe previously\n" +
+				"specified the -cpu image with a 0 GiB footprint, and the reasoning for\n" +
+				"that was written when a 25.6 GiB Omni was co-resident. It does not\n" +
+				"survive the arithmetic at this model's size.\n\n" +
+				"Kokoro is 82M parameters and reads ~0.16 GB per forward pass against a\n" +
+				"27B model's 24.87 GB - under 1% of this box's ~273 GB/s. The\n" +
+				"'co-resident models split bandwidth negative-sum' argument is real for\n" +
+				"two large models and irrelevant for this one.\n\n" +
+				"Measured side by side on gx10, identical 14-word input:\n" +
+				"  CPU   1194 / 1131 / 1391 ms\n" +
+				"  GPU    202 /  201 /  193 / 198 / 194 ms      ~6x faster\n" +
+				"  cost  3 GiB resident\n\n" +
+				"TTS was the largest single component of the voice loop - larger than ASR\n" +
+				"(~440 ms) and the LLM (~260 ms) combined. This takes the round trip from\n" +
+				"~1.41s to roughly 0.5s, the difference between dictation and\n" +
+				"conversation.\n\n" +
+				"THE DECLARED FOOTPRINT IS LOAD-BEARING, NOT DOCUMENTATION: spec.go sets\n" +
+				"GPU: Declared.WeightsGiB > 0, so a 0 here does not merely misreport the\n" +
+				"capacity plan, it withholds the device and silently returns this service\n" +
+				"to the CPU path it was moved off.\n\n" +
+				"ARM64 was checked before the move, because this box has lost hours to it:\n" +
+				"the image publishes linux/arm64 AND confirmed at runtime, not just in the\n" +
+				"manifest - 'Found GPU0 NVIDIA GB10 ... cuda capability 12.1', 'CUDA: True'.\n" +
+				"GPU whisper was tried here and silently ran on CPU because CTranslate2\n" +
+				"ships no aarch64 CUDA build, and was SLOWER than the CPU image while\n" +
+				"reporting the GPU as visible.\n\n" +
+				"To go back: set the image to the -cpu tag AND set weights_gib to 0, or\n" +
+				"the container gets a GPU it does not use."},
 		{
 			ID: "whisper", Kind: recipe.KindContainer, Modality: recipe.ModalityASR,
 			Image: "ghcr.io/speaches-ai/speaches:latest-cpu", Archived: true,
