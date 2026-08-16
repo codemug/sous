@@ -35,6 +35,10 @@ type Runtime interface {
 	Stop(ctx context.Context, name string) error
 	Logs(ctx context.Context, name string) (io.ReadCloser, error)
 	Running(ctx context.Context) ([]string, error)
+	// ImageExposedPort reports the port an image listens on inside the
+	// container. Only KindContainer needs it: for the kinds Sous generates a
+	// command for, it sets the port itself.
+	ImageExposedPort(ctx context.Context, ref string) (int, error)
 }
 
 // CapacityError is distinct so callers can render the margin and the way out
@@ -95,6 +99,24 @@ func (m *Manager) Deploy(ctx context.Context, id string, wantPort int, force boo
 	spec, err := engine.BuildSpec(r, port, m.ModelDir)
 	if err != nil {
 		return Record{}, err
+	}
+
+	// A third-party image listens where its author chose. BuildSpec defaults to
+	// 8000 because that is what Sous itself commands vLLM to use, but for
+	// KindContainer nothing here controls the port - kokoro serves on 8880 -
+	// and mapping the host port to the wrong container port produces a
+	// container that starts, reports healthy, and answers nothing.
+	//
+	// Read it from the image rather than making the recipe declare it: a port
+	// is a property of the image, and a recipe that restated it would go stale
+	// the first time the image changed.
+	if r.Kind == recipe.KindContainer {
+		if cp, err := m.Runtime.ImageExposedPort(ctx, r.Image); err == nil && cp > 0 {
+			spec.ContainerPort = cp
+		}
+		// A failure here is not fatal: an image with no EXPOSE still has to be
+		// deployable, and 8000 is as good a guess as any. The deployment is
+		// visibly broken either way, which is better than refusing to start.
 	}
 
 	// Stop first. Always. A profile or a marker file cannot be relied on to

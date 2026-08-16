@@ -437,3 +437,10 @@ func TestFetchReportsPerSourceErrors(t *testing.T) {
 		t.Fatal("a broken source took down the catalog page")
 	}
 }
+
+// ImageExposedPort mirrors the real engine's lookup. 8880 is not arbitrary: it
+// is what kokoro actually listens on, and hardcoding 8000 here would let the
+// port-mapping bug this method exists to fix pass the tests.
+func (f *fakeRuntime) ImageExposedPort(context.Context, string) (int, error) {
+	return 8880, nil
+}

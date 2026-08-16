@@ -21,6 +21,7 @@ import (
 // fakeRuntime records the order of operations so the stop-before-start rule
 // can be asserted directly rather than inferred.
 type fakeRuntime struct {
+	specs    []engine.Spec
 	mu       sync.Mutex
 	events   []string
 	running  map[string]bool
@@ -38,6 +39,9 @@ func newFake() *fakeRuntime {
 }
 
 func (f *fakeRuntime) Start(_ context.Context, s engine.Spec) (string, error) {
+	f.mu.Lock()
+	f.specs = append(f.specs, s)
+	f.mu.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
@@ -344,4 +348,50 @@ func TestPlanIsAvailableWithoutDeploying(t *testing.T) {
 		t.Fatal("Plan started a container")
 	}
 	_ = strconv.Itoa(0)
+}
+
+// ImageExposedPort mirrors the real engine's lookup. 8880 is not arbitrary: it
+// is what kokoro actually listens on, and hardcoding 8000 here would let the
+// port-mapping bug this method exists to fix pass the tests.
+func (f *fakeRuntime) ImageExposedPort(context.Context, string) (int, error) {
+	return 8880, nil
+}
+
+// The bug this guards: engine.ImageExposedPort existed, its comment said it
+// was "how a third-party image avoids declaring a port Sous does not control",
+// and nothing ever called it. BuildSpec hardcoded 8000, so a KindContainer
+// recipe got its host port mapped to the wrong container port - the container
+// started, reported healthy, and answered nothing. Found onboarding kokoro,
+// which listens on 8880.
+func TestContainerKindUsesTheImagesExposedPort(t *testing.T) {
+	rt := newFake()
+	m := newManager(t, rt)
+	if _, err := m.Catalog.Get("kokoro"); err != nil {
+		t.Skipf("kokoro seed unavailable: %v", err)
+	}
+	rec, err := m.Deploy(context.Background(), "kokoro", 8004, false)
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if rec.HostPort != 8004 {
+		t.Errorf("host port = %d, want 8004", rec.HostPort)
+	}
+	spec, ok := rt.lastSpec()
+	if !ok {
+		t.Fatal("runtime never received a spec")
+	}
+	if spec.ContainerPort != 8880 {
+		t.Errorf("container port = %d, want 8880 read from the image; "+
+			"8000 means the lookup is not wired and the mapping is wrong",
+			spec.ContainerPort)
+	}
+}
+
+func (f *fakeRuntime) lastSpec() (engine.Spec, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.specs) == 0 {
+		return engine.Spec{}, false
+	}
+	return f.specs[len(f.specs)-1], true
 }
