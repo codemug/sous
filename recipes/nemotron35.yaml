@@ -34,4 +34,3 @@ notes: |-
 
     reasoning-parser nemotron_v3, not nemotron: the KeyError lists the valid
     set, and --help does not.
-archived: true

@@ -64,8 +64,18 @@ type Recipe struct {
 	Env      map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	Notes    string            `yaml:"notes,omitempty" json:"notes,omitempty"`
 
-	// Archived keeps a recipe in the catalog without offering it for service.
-	// Negative results are worth keeping: they stop someone re-deriving why a
-	// configuration lost.
+	// Archived means CANNOT RUN HERE - not "not running right now".
+	//
+	// The distinction matters because the UI hides the deploy control on an
+	// archived recipe. Marking a working model archived because it happens to
+	// be stopped makes it undeployable from the catalog, which is how
+	// nemotron35, qwen38-fp8 and omni all became unreachable despite each
+	// being a configuration that works on this box.
+	//
+	// Reserve it for a recipe proven impossible on this hardware - whisper was
+	// the honest case, and was deleted rather than archived once that was
+	// settled. A model that is merely slower, superseded, or simply stopped
+	// stays ACTIVE; whether it is deployed is a fact about the node, and the
+	// deployment list already answers it.
 	Archived bool `yaml:"archived,omitempty" json:"archived,omitempty"`
 }

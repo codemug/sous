@@ -236,7 +236,9 @@ func TestCatalogPageRenders(t *testing.T) {
 		t.Fatalf("status %d: %s", rr.Code, rr.Body)
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"qwen38", "kokoro", "Sous", "CPU only"} {
+	// "CPU only" was rendered by a zero-footprint recipe; none remain now
+	// that whisper is deleted and kokoro runs on the GPU.
+	for _, want := range []string{"qwen38", "kokoro", "Sous", "nemotron35"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("catalog page missing %q", want)
 		}

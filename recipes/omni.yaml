@@ -32,4 +32,3 @@ notes: |-
     presents as a per-modality processor error and MIGRATES when you suppress
     one modality, which sends you chasing the wrong thing entirely. Look for
     CppCompileError first.
-archived: true

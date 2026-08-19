@@ -32,4 +32,3 @@ notes: |-
 
     util 0.80 left the box at 113/121 GiB with 4.2 GiB of swap engaged: a
     fraction taken at its word rather than a budget that was needed.
-archived: true

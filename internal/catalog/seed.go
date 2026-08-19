@@ -88,7 +88,7 @@ func Seeds() []recipe.Recipe {
 		{
 			ID: "qwen38-fp8", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
 			Model: "Qwen/Qwen3.8-27B-FP8", Image: pinnedVLLM,
-			ServedAs: []string{"qwen38"}, Archived: true,
+			ServedAs: []string{"qwen38"},
 			Declared: recipe.Footprint{WeightsGiB: 28.95, KVGiB: 62.03},
 			Args: map[string]any{
 				"gpu-memory-utilization": 0.80, "max-model-len": 131072,
@@ -119,7 +119,7 @@ func Seeds() []recipe.Recipe {
 			ID: "nemotron35", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
 			Model:    "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
 			Image:    "vllm/vllm-openai:v0.27.1-aarch64",
-			ServedAs: []string{"nemotron"}, Archived: true,
+			ServedAs: []string{"nemotron"},
 			Declared: recipe.Footprint{WeightsGiB: 17.86, KVGiB: 4},
 			Args: map[string]any{
 				"gpu-memory-utilization": 0.38, "kv-cache-memory-bytes": 4294967296,
@@ -256,7 +256,7 @@ func Seeds() []recipe.Recipe {
 			ID: "omni", Kind: recipe.KindVLLM, Modality: recipe.ModalityOmni,
 			Model:    "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
 			Image:    "fleet/vllm-omni-gcc12:v0.27.1-aarch64",
-			ServedAs: []string{"omni"}, Archived: true,
+			ServedAs: []string{"omni"},
 			Declared: recipe.Footprint{WeightsGiB: 21.59, KVGiB: 4},
 			Args: map[string]any{
 				"gpu-memory-utilization": 0.45, "kv-cache-memory-bytes": 4294967296,
@@ -339,24 +339,5 @@ func Seeds() []recipe.Recipe {
 				"reporting the GPU as visible.\n\n" +
 				"To go back: set the image to the -cpu tag AND set weights_gib to 0, or\n" +
 				"the container gets a GPU it does not use."},
-		{
-			ID: "whisper", Kind: recipe.KindContainer, Modality: recipe.ModalityASR,
-			Image: "ghcr.io/speaches-ai/speaches:latest-cpu", Archived: true,
-			Declared: recipe.Footprint{},
-			Env: map[string]string{
-				"WHISPER__MODEL": "Systran/faster-whisper-tiny",
-				"WHISPER__TTL":   "-1",
-				// NOT /root/.cache - this image runs as the unprivileged user
-				// `ubuntu`, and the /root convention produced a permission error
-				// on every request while /health still answered 200.
-				"HF_HOME": "/home/ubuntu/.cache/huggingface",
-			},
-			Notes: "RETIRED, replaced by asr. Could not use the GPU here at all:\n" +
-				"faster-whisper is built on CTranslate2, which publishes no aarch64 CUDA\n" +
-				"build. The cuda image was tried and was SLOWER (4.54s vs 3.92s) because\n" +
-				"it silently ran on CPU anyway - nvidia-smi saw the GPU while\n" +
-				"ctranslate2.get_cuda_device_count() returned 0. No device flag fixes\n" +
-				"that; only a different runtime would.",
-		},
 	}
 }

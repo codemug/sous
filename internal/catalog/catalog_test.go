@@ -109,20 +109,23 @@ func TestSeedsCoverEveryKindAndModality(t *testing.T) {
 }
 
 // A CPU-only recipe declaring zero is a real answer, not a missing value, and
-// the capacity model must accept it. whisper is the remaining example - kokoro
-// moved to the GPU on 2026-08-16 and now declares 3 GiB.
+// the capacity model must accept it.
+//
+// SELF-CONTAINED ON PURPOSE. This used to assert against whichever seed
+// happened to be CPU-only - kokoro, then whisper. kokoro moved to the GPU and
+// whisper was deleted, and the test then failed for having nothing to look at
+// rather than because the zero case broke. The behaviour under test belongs to
+// Footprint, not to the catalog's current contents.
 func TestZeroGPUIsAcceptedForCPUOnlyRecipes(t *testing.T) {
-	found := false
-	for _, r := range Seeds() {
-		if r.ID == "whisper" {
-			found = true
-			if r.Declared.TotalGiB() != 0 {
-				t.Fatalf("whisper is CPU-only, want 0 GiB, got %.2f", r.Declared.TotalGiB())
-			}
-		}
+	cpuOnly := recipe.Recipe{
+		ID: "cpu-only", Kind: recipe.KindContainer, Modality: recipe.ModalityTTS,
+		Image: "example/cpu:latest", Declared: recipe.Footprint{},
 	}
-	if !found {
-		t.Fatal("expected a CPU-only seed to exercise the zero case")
+	if err := cpuOnly.Validate(); err != nil {
+		t.Fatalf("a zero footprint must be valid: %v", err)
+	}
+	if got := cpuOnly.Declared.TotalGiB(); got != 0 {
+		t.Fatalf("TotalGiB = %.2f, want 0", got)
 	}
 }
 
@@ -142,20 +145,44 @@ func TestKokoroDeclaresItsGPUFootprint(t *testing.T) {
 	}
 }
 
-// Negative results are kept on purpose so nobody re-derives why they lost.
-func TestSupersededRecipesAreArchivedNotAbsent(t *testing.T) {
-	want := map[string]bool{"qwen38-fp8": false, "omni": false, "whisper": false}
+// ARCHIVED MEANS "CANNOT RUN HERE", NOT "NOT RUNNING RIGHT NOW.
+//
+// The UI hides the deploy control on an archived recipe, so marking a working
+// model archived because it happens to be stopped makes it undeployable from
+// the catalog. That is exactly what happened to nemotron35, qwen38-fp8 and
+// omni: each is a configuration that works on this box, each was flagged
+// archived for being merely superseded or stopped, and all three became
+// unreachable in the UI.
+//
+// Superseded is not the same as impossible. A slower or beaten configuration
+// stays ACTIVE and keeps its notes; only something proven unrunnable on this
+// hardware earns the flag - and whisper, the one honest case (CTranslate2
+// ships no aarch64 CUDA build, so it could not use the GPU at all), was
+// deleted outright rather than archived.
+func TestWorkingRecipesAreNotArchived(t *testing.T) {
+	mustBeActive := map[string]bool{"nemotron35": false, "qwen38-fp8": false, "omni": false}
 	for _, r := range Seeds() {
-		if _, ok := want[r.ID]; ok {
-			want[r.ID] = true
-			if !r.Archived {
-				t.Errorf("%s is superseded and must be archived", r.ID)
+		if _, ok := mustBeActive[r.ID]; ok {
+			mustBeActive[r.ID] = true
+			if r.Archived {
+				t.Errorf("%s works on this box and must be deployable, not archived", r.ID)
 			}
 		}
 	}
-	for id, found := range want {
+	for id, found := range mustBeActive {
 		if !found {
-			t.Errorf("expected a seed for the retired %q", id)
+			t.Errorf("expected a seed for %q - superseded is not a reason to delete it", id)
+		}
+	}
+}
+
+// whisper could not use the GPU on this hardware at all, which is a fact about
+// the box rather than a preference. It is deleted, not archived, so nobody
+// spends a deploy window rediscovering it.
+func TestWhisperIsGone(t *testing.T) {
+	for _, r := range Seeds() {
+		if r.ID == "whisper" {
+			t.Fatal("whisper is back; it cannot run on aarch64 and should not be offered")
 		}
 	}
 }

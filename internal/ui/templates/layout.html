@@ -95,37 +95,75 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 
-/* ---- nav: N9 edge-aligned. Flush bar, one hairline. Not a floating pill. -- */
-header.bar{
-  display:flex;align-items:center;gap:var(--space-lg);flex-wrap:wrap;
-  padding:var(--space-md) var(--space-xl);
-  border-bottom:1px solid var(--rule);background:var(--paper);
-  position:sticky;top:0;z-index:20;
+/* ---- shell: sidebar, not a menubar --------------------------------------
+ * A rail suits this app better than a top bar for a specific reason: the
+ * pages are wide tables and a full-width pool diagram, so vertical space is
+ * the scarce axis and a top bar spends it on every screen. The rail also has
+ * room to carry the node's state permanently - pool, margin, counts - which
+ * a bar could only fit as a cramped right-aligned string.
+ *
+ * Grid rather than fixed positioning, so the content column can never slide
+ * under the rail.
+ */
+.shell{display:grid;grid-template-columns:14rem minmax(0,1fr);min-height:100dvh}
+
+aside.rail{
+  border-right:1px solid var(--rule);background:var(--paper-2);
+  padding:var(--space-lg) var(--space-md);
+  display:flex;flex-direction:column;gap:var(--space-lg);
+  position:sticky;top:0;height:100dvh;overflow-y:auto;
 }
-header.bar .mark{
+aside.rail .mark{
   font-family:var(--font-display);font-weight:600;font-size:var(--text-md);
   letter-spacing:-.01em;color:var(--ink);text-decoration:none;
+  display:flex;align-items:center;gap:.45rem;
 }
-header.bar .mark::after{
-  content:"";display:inline-block;width:5px;height:5px;margin-left:.45rem;
-  border-radius:50%;background:var(--accent);vertical-align:middle;
+aside.rail .mark::after{
+  content:"";width:5px;height:5px;border-radius:50%;background:var(--accent);
 }
-nav.links{display:flex;gap:var(--space-md);flex-wrap:wrap}
+nav.links{display:flex;flex-direction:column;gap:.1rem}
 nav.links a{
   font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.06em;
   text-transform:uppercase;color:var(--ink-mute);text-decoration:none;
-  padding:.3rem 0;border-bottom:1.5px solid transparent;white-space:nowrap;
+  padding:.45rem .55rem;border-radius:var(--radius-sm);
+  border-left:2px solid transparent;
   transition:color var(--dur-fast) var(--ease-out),
-             border-color var(--dur-fast) var(--ease-out);
+             background var(--dur-fast) var(--ease-out);
 }
-nav.links a:hover{color:var(--ink)}
-nav.links a[aria-current="page"]{color:var(--accent-ink);border-bottom-color:var(--accent)}
-.bar-meta{
-  margin-left:auto;font-family:var(--font-mono);font-size:var(--text-xs);
-  color:var(--ink-faint);font-variant-numeric:tabular-nums;white-space:nowrap;
+nav.links a:hover{color:var(--ink);background:var(--paper-3)}
+/* The active item is marked by a rule AND a background AND colour - three
+   signals, so it survives a colourblind reader and a dimmed screen. */
+nav.links a[aria-current="page"]{
+  color:var(--accent-ink);background:var(--accent-wash);
+  border-left-color:var(--accent);
 }
 
-main{padding:var(--space-xl);max-width:82rem;margin:0 auto}
+.rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:var(--space-sm)}
+.rail-stat{
+  font-family:var(--font-mono);font-size:var(--text-xs);color:var(--ink-faint);
+  font-variant-numeric:tabular-nums;line-height:1.7;
+}
+.rail-stat b{color:var(--ink-mute);font-weight:500}
+
+main{padding:var(--space-xl);max-width:76rem;min-width:0}
+
+/* Below 820px the rail becomes a strip across the top. No JS drawer: a
+   toggle that needs script is one more thing to fail on a panel whose whole
+   point is being reachable when something else is broken. */
+@media (max-width:820px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  aside.rail{
+    position:static;height:auto;flex-direction:row;align-items:center;
+    flex-wrap:wrap;gap:var(--space-md);
+    border-right:none;border-bottom:1px solid var(--rule);
+    padding:var(--space-sm) var(--space-md);
+  }
+  nav.links{flex-direction:row;flex-wrap:wrap;gap:var(--space-2xs)}
+  nav.links a{border-left:none;border-bottom:2px solid transparent}
+  nav.links a[aria-current="page"]{border-left-color:transparent;border-bottom-color:var(--accent)}
+  .rail-foot{margin-top:0;margin-left:auto;flex-direction:row;align-items:center;gap:var(--space-sm)}
+  main{padding:var(--space-md)}
+}
 h1{
   font-family:var(--font-display);font-size:var(--text-2xl);font-weight:600;
   font-style:normal;letter-spacing:-.02em;color:var(--ink);
@@ -243,7 +281,8 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 </style>
 </head>
 <body>
-<header class="bar">
+<div class="shell">
+<aside class="rail">
   <a class="mark" href="/">SOUS</a>
   <nav class="links">
     <a href="/"{{if eq .Title "Node"}} aria-current="page"{{end}}>Node</a>
@@ -252,20 +291,26 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
     <a href="/larder"{{if eq .Title "Larder"}} aria-current="page"{{end}}>Larder</a>
     <a href="/sources"{{if eq .Title "Sources"}} aria-current="page"{{end}}>Sources</a>
   </nav>
-  <span class="bar-meta">{{printf "%.1f" .PoolGiB}} GiB pool · {{printf "%.0f" .ReserveGiB}} reserved · {{.DeployCount}} deployed</span>
-  {{/* Basic auth had no way to sign out at all - the browser kept resending
-       the credentials until it was restarted. A session can simply be
-       dropped. */}}
-  <form method="post" action="/logout" style="margin:0">
-    <button type="submit" title="End this browser session">Sign out</button>
-  </form>
-</header>
+  <div class="rail-foot">
+    <div class="rail-stat">
+      <b>{{printf "%.1f" .PoolGiB}}</b> GiB pool<br>
+      <b>{{printf "%.0f" .ReserveGiB}}</b> GiB reserved<br>
+      <b>{{.DeployCount}}</b> deployed
+    </div>
+    {{/* Basic auth had no way to sign out at all - the browser kept resending
+         the credentials until it was restarted. A session can just be dropped. */}}
+    <form method="post" action="/logout" style="margin:0">
+      <button type="submit" title="End this browser session">Sign out</button>
+    </form>
+  </div>
+</aside>
 <main>
 {{if .Message}}<p class="msg{{if .IsError}} err{{end}}">{{.Message}}</p>{{end}}
 {{end}}
 
 {{define "foot"}}
 </main>
+</div>
 </body>
 </html>
 {{end}}
