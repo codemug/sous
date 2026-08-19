@@ -11,7 +11,7 @@ declared:
 args:
   max-model-len: 32768
   gpu-memory-utilization: 0.33
-  speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":8}'
+  speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}'
 env:
   TORCH_CUDA_ARCH_LIST: 12.1a
   CUTE_DSL_ARCH: sm_121a
@@ -40,5 +40,14 @@ notes: |-
 
   declared weights_gib is target 28.77 PLUS drafter 3.58: the drafter is
   resident too, and a footprint that ignores it would under-plan by 3.58 GiB.
+
+  num_speculative_tokens IS 7, NOT 8. The first attempt used 8 and died in a
+  CUDA device-side assert - "index out of bounds" in IndexKernel - the instant
+  the drafter first ran, while the FP8 target itself had already compiled and
+  completed a full 37s warmup. DFlash2's block size is 8, which is 7 draft
+  tokens PLUS the verified one; asking for 8 drafts needs 9 slots in a buffer
+  sized for 8. The upstream model card says 7.
+
+  So FP8 was never the problem, and neither was sm_121: the target ran.
 
   UNPROVEN: not yet benchmarked. The number to beat is 23.97 tok/s structured.
