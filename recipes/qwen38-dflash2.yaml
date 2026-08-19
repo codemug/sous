@@ -18,7 +18,22 @@ env:
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
 notes: |-
-    TRIAL. DFlash2 speculative decoding against Qwen3.8-27B-FP8.
+    MEASURED 2026-08-19: 27.42 tok/s aggregate against the 23.97
+    NVFP4 + MTP baseline, +14.4%. The aggregate is the least useful
+    number here, because the spread is the finding:
+
+      42.96 tok/s  JSON list      +79%
+      28.40 tok/s  code + tests   +18%
+      19.16 tok/s  prose          -20%
+
+    Mean acceptance length 4.45-6.10 of 7 drafted. Speculation pays
+    where the drafter can guess - syntax it has seen a thousand times -
+    and COSTS on prose, where every rejected draft is bandwidth spent
+    for nothing on a box already bandwidth-bound at decode. A model
+    serving mixed traffic gets the average; one serving structured
+    output gets most of the 79%.
+
+    DFlash2 speculative decoding against Qwen3.8-27B-FP8.
 
     ITS IMAGE IS LOCALLY BUILT AND ON NO REGISTRY. vLLM PR 52816 adds
     DFlash2DraftModel, which no released vLLM and no SGLang carries. A

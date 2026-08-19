@@ -143,7 +143,19 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "TRIAL. DFlash2 speculative decoding against Qwen3.8-27B-FP8.\n\n" +
+			Notes: "MEASURED 2026-08-19: 27.42 tok/s aggregate against the 23.97\n" +
+				"NVFP4 + MTP baseline, +14.4%. The aggregate is the least useful\n" +
+				"number here, because the spread is the finding:\n\n" +
+				"  42.96 tok/s  JSON list      +79%\n" +
+				"  28.40 tok/s  code + tests   +18%\n" +
+				"  19.16 tok/s  prose          -20%\n\n" +
+				"Mean acceptance length 4.45-6.10 of 7 drafted. Speculation pays\n" +
+				"where the drafter can guess - syntax it has seen a thousand times -\n" +
+				"and COSTS on prose, where every rejected draft is bandwidth spent\n" +
+				"for nothing on a box already bandwidth-bound at decode. A model\n" +
+				"serving mixed traffic gets the average; one serving structured\n" +
+				"output gets most of the 79%.\n\n" +
+				"DFlash2 speculative decoding against Qwen3.8-27B-FP8.\n\n" +
 				"ITS IMAGE IS LOCALLY BUILT AND ON NO REGISTRY. vLLM PR 52816 adds\n" +
 				"DFlash2DraftModel, which no released vLLM and no SGLang carries. A\n" +
 				"node without that image cannot deploy this recipe.\n\n" +
