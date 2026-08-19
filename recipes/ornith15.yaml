@@ -1,0 +1,53 @@
+id: ornith15
+kind: vllm
+modality: text
+model: ornith-ai/Ornith-1.5-35B-A3B-FP8
+image: vllm/vllm-openai@sha256:d5a8e53ad2534e24b99ba1a2e3f183a213adc0da48ed83166cb75534a5903a17
+served_as:
+    - ornith
+declared:
+    weights_gib: 36.66
+    kv_gib: 26
+args:
+    enable-auto-tool-choice: true
+    enable-prefix-caching: true
+    gpu-memory-utilization: 0.48
+    kv-cache-dtype: auto
+    kv-cache-memory-bytes: 27917287424
+    max-model-len: 262144
+    max-num-batched-tokens: 8192
+    max-num-seqs: 4
+    reasoning-parser: qwen3
+    speculative-config: '{"method":"mtp","num_speculative_tokens":2}'
+    tensor-parallel-size: 1
+    tool-call-parser: qwen3_coder
+env:
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
+notes: |-
+    UNPROVEN: published 2026-08-19, added the following day, not yet
+    benchmarked here. Every number below is the vendor's, not ours.
+
+    A self-improvement fine-tune of the same Qwen3.6-35B-A3B this node
+    already serves, claiming large coding gains over it: Terminal-Bench
+    2.1 67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. If that holds it is
+    a drop-in replacement for qwen36 rather than an addition - which is
+    also why it cannot run beside qwen36: 36.66 + 26 GiB does not fit
+    next to it, and the two are the same slot anyway.
+
+    QUANTIZED DIFFERENTLY to qwen36, and it matters on this hardware:
+    compressed-tensors with CHANNEL-wise weights and dynamic per-token
+    activations, not block-scaled. Block-scaled FP8 is the format that
+    has repeatedly hit DeepGemm bugs on GB10, so this avoids that path
+    by construction rather than by workaround.
+
+    Hybrid attention: 30 of 40 layers are linear_attention and only 10
+    are full_attention, with 2 KV heads. KV should therefore be far
+    cheaper per token than qwen36's 88.3 KiB - worth measuring, because
+    if it is, the 26 GiB pin buys a much longer context here.
+
+    Multimodal weights are present (333 visual tensors) but modality is
+    declared text: nothing in this fleet sends it images yet, and
+    claiming a capability that is untested is how a recipe starts lying.

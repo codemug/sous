@@ -86,6 +86,68 @@ func Seeds() []recipe.Recipe {
 				"dumber rather than as a configuration error.",
 		},
 		{
+			ID: "ornith15", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
+			Model: "ornith-ai/Ornith-1.5-35B-A3B-FP8",
+			// SAME PINNED DIGEST AS qwen36, deliberately. This model is
+			// architecturally identical to it - Qwen3_5MoeForConditionalGeneration,
+			// 40 layers, 256 experts, 2 KV heads, head_dim 256, vocab 248320 - so
+			// the image that already serves one should serve the other. The only
+			// structural difference is how it is quantized.
+			Image:    pinnedVLLM,
+			ServedAs: []string{"ornith"},
+			Declared: recipe.Footprint{WeightsGiB: 36.66, KVGiB: 26},
+			Args: map[string]any{
+				"enable-auto-tool-choice": true,
+				"enable-prefix-caching":   true,
+				// 0.48 rather than qwen36's 0.46: same shape, 1.64 GiB more weights.
+				"gpu-memory-utilization": 0.48,
+				"kv-cache-dtype":         "auto",
+				// Pinned to the same 26 GiB as qwen36 so a throughput comparison
+				// between them is not secretly a comparison of cache sizes.
+				"kv-cache-memory-bytes":  27917287424,
+				"max-model-len":          262144,
+				"max-num-batched-tokens": 8192,
+				"max-num-seqs":           4,
+				"reasoning-parser":       "qwen3",
+				// MTP ships INSIDE this checkpoint: 785 mtp.* tensors, and the
+				// quantization config explicitly excludes "re:.*mtp.*" from being
+				// quantized. No separate drafter is needed, unlike DFlash2.
+				"speculative-config":   `{"method":"mtp","num_speculative_tokens":2}`,
+				"tensor-parallel-size": 1,
+				// READ FROM ITS chat_template.jinja, not assumed: the template
+				// emits "<tool_call>\n<function=NAME>", which is the qwen3_coder
+				// shape rather than the JSON-in-tool_call shape hermes parses.
+				// Guessing this on a previous model cost an afternoon.
+				"tool-call-parser": "qwen3_coder",
+			},
+			Env: map[string]string{
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
+			Notes: "UNPROVEN: published 2026-08-19, added the following day, not yet\n" +
+				"benchmarked here. Every number below is the vendor's, not ours.\n\n" +
+				"A self-improvement fine-tune of the same Qwen3.6-35B-A3B this node\n" +
+				"already serves, claiming large coding gains over it: Terminal-Bench\n" +
+				"2.1 67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. If that holds it is\n" +
+				"a drop-in replacement for qwen36 rather than an addition - which is\n" +
+				"also why it cannot run beside qwen36: 36.66 + 26 GiB does not fit\n" +
+				"next to it, and the two are the same slot anyway.\n\n" +
+				"QUANTIZED DIFFERENTLY to qwen36, and it matters on this hardware:\n" +
+				"compressed-tensors with CHANNEL-wise weights and dynamic per-token\n" +
+				"activations, not block-scaled. Block-scaled FP8 is the format that\n" +
+				"has repeatedly hit DeepGemm bugs on GB10, so this avoids that path\n" +
+				"by construction rather than by workaround.\n\n" +
+				"Hybrid attention: 30 of 40 layers are linear_attention and only 10\n" +
+				"are full_attention, with 2 KV heads. KV should therefore be far\n" +
+				"cheaper per token than qwen36's 88.3 KiB - worth measuring, because\n" +
+				"if it is, the 26 GiB pin buys a much longer context here.\n\n" +
+				"Multimodal weights are present (333 visual tensors) but modality is\n" +
+				"declared text: nothing in this fleet sends it images yet, and\n" +
+				"claiming a capability that is untested is how a recipe starts lying.",
+		},
+		{
 			ID: "qwen38-fp8", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
 			Model: "Qwen/Qwen3.8-27B-FP8", Image: pinnedVLLM,
 			ServedAs: []string{"qwen38"},
