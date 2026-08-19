@@ -21,10 +21,10 @@ type SourceLoader interface {
 // things, and the UI has to be able to say which is which.
 type Resolved struct {
 	recipe.Recipe
-	Source    string `json:"source,omitempty"`    // empty means local
-	Overlaid  bool   `json:"overlaid,omitempty"`  // a local patch is applied
-	Shadowed  bool   `json:"shadowed,omitempty"`  // a local recipe hides this one
-	ShadowsID string `json:"shadows,omitempty"`   // this local recipe hides a source one
+	Source    string `json:"source,omitempty"`   // empty means local
+	Overlaid  bool   `json:"overlaid,omitempty"` // a local patch is applied
+	Shadowed  bool   `json:"shadowed,omitempty"` // a local recipe hides this one
+	ShadowsID string `json:"shadows,omitempty"`  // this local recipe hides a source one
 }
 
 func (c *Catalog) Sources() ([]sources.Source, error) {

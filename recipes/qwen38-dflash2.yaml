@@ -4,58 +4,35 @@ modality: text
 model: Qwen/Qwen3.8-27B-FP8
 image: fleet/vllm-dflash2:pr52816-aarch64
 served_as:
-  - dflash2
+    - dflash2
 declared:
-  weights_gib: 32.35
-  kv_gib: 20
+    weights_gib: 32.35
+    kv_gib: 20
 args:
-  max-model-len: 32768
-  gpu-memory-utilization: 0.5
-  speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}'
+    gpu-memory-utilization: 0.5
+    max-model-len: 32768
+    speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}'
 env:
-  TORCH_CUDA_ARCH_LIST: 12.1a
-  CUTE_DSL_ARCH: sm_121a
-  HF_HOME: /root/.cache/huggingface
-  VLLM_LOGGING_LEVEL: INFO
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
 notes: |-
-  TRIAL, 2026-08-19. DFlash2 speculative decoding against Qwen3.8-27B-FP8.
+    TRIAL. DFlash2 speculative decoding against Qwen3.8-27B-FP8.
 
-  IMAGE IS LOCALLY BUILT and not on any registry: vLLM PR 52816 adds
-  DFlash2DraftModel, which neither a released vLLM nor SGLang carries. Built on
-  this node because the target is aarch64 + sm_121; verified to register
-  DFlash2DraftModel and to run a bf16 matmul on the GB10.
+    ITS IMAGE IS LOCALLY BUILT AND ON NO REGISTRY. vLLM PR 52816 adds
+    DFlash2DraftModel, which no released vLLM and no SGLang carries. A
+    node without that image cannot deploy this recipe.
 
-  FP8 RATHER THAN NVFP4: the DFlash2 selector cannot take a quantized target
-  lm_head yet (SGLang #35462/#35496) and NVFP4 quantizes it. This checkpoint
-  leaves lm_head out of quantization - verified in its config.
+    FP8 rather than NVFP4: the DFlash2 selector cannot take a quantized
+    target lm_head yet, and NVFP4 quantizes it. This checkpoint does not.
 
-  FP8 RATHER THAN bf16: decode here is bandwidth-bound near 273 GB/s, so
-  bf16's 51.77 GiB against NVFP4's 24.87 roughly halves the base rate, and ~3x
-  speculation on a halved base lands BELOW the 23.97 tok/s already measured on
-  NVFP4 + MTP. bf16 clears every software blocker and loses on physics.
+    FP8 rather than bf16: decode here is bandwidth-bound near 273 GB/s,
+    so bf16's 51.77 GiB against NVFP4's 24.87 roughly halves the base
+    rate - and ~3x speculation on a halved base lands BELOW the 23.97
+    tok/s already measured on NVFP4 + MTP. bf16 clears every software
+    blocker and loses on physics.
 
-  The FP8-on-Blackwell crash reports (vLLM #51884, #47818) appear to be handled:
-  this build logs "Auto-disabled DeepGemm for model_type=qwen3_5_text on
-  Blackwell - DeepGemm E8M0 scale format causes accuracy degradation".
-
-  declared weights_gib is target 28.77 PLUS drafter 3.58: the drafter is
-  resident too, and a footprint that ignores it would under-plan by 3.58 GiB.
-
-  gpu-memory-utilization IS 0.5 BECAUSE THIS RUNS ALONE. At 0.33 - chosen when
-  the trial was still meant to sit beside qwen36 - vLLM capped itself near 40
-  GiB, and weights plus drafter already take 32.33, so it refused to start:
-  "4.11 GiB KV cache is needed, which is larger than the available KV cache".
-  Sous was reporting 53 GiB of margin at that moment. The flag is a gate
-  against free memory, not a budget, and setting it low does not make a model
-  smaller - it only starves the KV cache.
-
-  num_speculative_tokens IS 7, NOT 8. The first attempt used 8 and died in a
-  CUDA device-side assert - "index out of bounds" in IndexKernel - the instant
-  the drafter first ran, while the FP8 target itself had already compiled and
-  completed a full 37s warmup. DFlash2's block size is 8, which is 7 draft
-  tokens PLUS the verified one; asking for 8 drafts needs 9 slots in a buffer
-  sized for 8. The upstream model card says 7.
-
-  So FP8 was never the problem, and neither was sm_121: the target ran.
-
-  UNPROVEN: not yet benchmarked. The number to beat is 23.97 tok/s structured.
+    Block-scaled FP8 DOES work on sm_121: this build logs
+    CutlassFp8BlockScaledMMKernel and auto-disables DeepGemm on
+    Blackwell, which is the path that crashed earlier attempts.

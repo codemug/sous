@@ -417,3 +417,38 @@ func TestRecipeContainerPortBeatsTheImageLookup(t *testing.T) {
 		t.Errorf("container port = %d, want the recipe's 8880", spec.ContainerPort)
 	}
 }
+
+// Undeploying something that is already gone must SUCCEED, not error.
+//
+// This cost a real outage. A trial window stopped qwen36 to make room, the
+// deploy that followed failed for an unrelated reason, and the cleanup path
+// called Undeploy a second time - which returned "remove
+// /var/lib/sous/deployments/qwen36.yaml: no such file or directory" as a 500.
+// The script treated that as a failure to restore and gave up, leaving the
+// fleet's chat model down when the state it wanted was the state it already
+// had.
+//
+// Stopping something already stopped is the definition of idempotent, and
+// every caller of an undeploy is trying to reach a state, not perform an event.
+func TestUndeployIsIdempotent(t *testing.T) {
+	f := newFake()
+	m := newManager(t, f)
+	ctx := context.Background()
+	if _, err := m.Deploy(ctx, "kokoro", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Undeploy(ctx, "kokoro"); err != nil {
+		t.Fatalf("first Undeploy: %v", err)
+	}
+	if err := m.Undeploy(ctx, "kokoro"); err != nil {
+		t.Fatalf("second Undeploy must be a no-op, got: %v", err)
+	}
+}
+
+// And one that was never deployed at all is the same case.
+func TestUndeployNeverDeployedSucceeds(t *testing.T) {
+	m := newManager(t, newFake())
+	if err := m.Undeploy(context.Background(), "kokoro"); err != nil {
+		t.Fatalf("undeploying a never-deployed recipe must be a no-op, got: %v", err)
+	}
+}

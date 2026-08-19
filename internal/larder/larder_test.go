@@ -109,9 +109,9 @@ func TestArchivedRecipeStillProtectsItsWeights(t *testing.T) {
 
 func TestTotalAndReclaimable(t *testing.T) {
 	root := hub(t, map[string]int{
-		"models--keep--me":  4,
-		"models--drop--me":  8,
-		"models--hold--me":  4,
+		"models--keep--me": 4,
+		"models--drop--me": 8,
+		"models--hold--me": 4,
 	})
 	recipes := []recipe.Recipe{
 		{ID: "k", Model: "keep/me"},

@@ -16,8 +16,10 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"sync"
 	"time"
 
@@ -166,7 +168,21 @@ func (m *Manager) Undeploy(ctx context.Context, id string) error {
 	if err := m.Runtime.Stop(ctx, engine.ContainerName(id)); err != nil {
 		return err
 	}
-	return m.Store.Delete(store.KindDeployment, id)
+	// A MISSING RECORD IS SUCCESS. Callers of Undeploy are trying to reach a
+	// state, not perform an event, and "already gone" is that state.
+	//
+	// Returning an error here took the fleet's chat model down. A trial window
+	// stopped qwen36 to make room, failed for an unrelated reason, and its
+	// cleanup path called Undeploy a second time - which answered 500 for a
+	// record it had itself already deleted. The script read that as a failed
+	// restore and gave up, leaving the model down.
+	//
+	// Deliberately NOT fixed in Store.Delete: recipe deletion needs a missing
+	// file to stay an error, or deleting a mistyped id would report success.
+	if err := m.Store.Delete(store.KindDeployment, id); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // Plan answers "would this fit" without touching a container, so the UI can

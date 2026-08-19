@@ -116,6 +116,49 @@ func Seeds() []recipe.Recipe {
 				"fraction taken at its word rather than a budget that was needed.",
 		},
 		{
+			ID: "qwen38-dflash2", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
+			Model: "Qwen/Qwen3.8-27B-FP8", Image: "fleet/vllm-dflash2:pr52816-aarch64",
+			ServedAs: []string{"dflash2"},
+			// Target 28.77 PLUS drafter 3.58: the drafter is resident too, and a
+			// footprint that ignored it would under-plan by 3.58 GiB. vLLM later
+			// reported 32.28 GiB for the pair, against the 32.35 declared here.
+			Declared: recipe.Footprint{WeightsGiB: 32.35, KVGiB: 20},
+			Args: map[string]any{
+				// 0.5, not the 0.33 this started with. At 0.33 vLLM caps itself
+				// near 40 GiB and weights plus drafter already take 32.33, so it
+				// refuses to start for want of KV - while Sous reports 53 GiB of
+				// margin going unused. The flag gates against free memory; it
+				// does not budget, and a low value only starves the KV cache.
+				"gpu-memory-utilization": 0.5, "max-model-len": 32768,
+				// SEVEN, not eight. DFlash2's block size of 8 is 7 draft tokens
+				// PLUS the verified one. Asking for 8 wants 9 slots in a buffer
+				// sized for 8, and it dies in a CUDA device-side assert -
+				// "index out of bounds" - the instant the drafter first runs,
+				// which reads like an FP8 or sm_121 fault and is neither.
+				"speculative-config": `{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}`,
+			},
+			Env: map[string]string{
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
+			Notes: "TRIAL. DFlash2 speculative decoding against Qwen3.8-27B-FP8.\n\n" +
+				"ITS IMAGE IS LOCALLY BUILT AND ON NO REGISTRY. vLLM PR 52816 adds\n" +
+				"DFlash2DraftModel, which no released vLLM and no SGLang carries. A\n" +
+				"node without that image cannot deploy this recipe.\n\n" +
+				"FP8 rather than NVFP4: the DFlash2 selector cannot take a quantized\n" +
+				"target lm_head yet, and NVFP4 quantizes it. This checkpoint does not.\n\n" +
+				"FP8 rather than bf16: decode here is bandwidth-bound near 273 GB/s,\n" +
+				"so bf16's 51.77 GiB against NVFP4's 24.87 roughly halves the base\n" +
+				"rate - and ~3x speculation on a halved base lands BELOW the 23.97\n" +
+				"tok/s already measured on NVFP4 + MTP. bf16 clears every software\n" +
+				"blocker and loses on physics.\n\n" +
+				"Block-scaled FP8 DOES work on sm_121: this build logs\n" +
+				"CutlassFp8BlockScaledMMKernel and auto-disables DeepGemm on\n" +
+				"Blackwell, which is the path that crashed earlier attempts.",
+		},
+		{
 			ID: "nemotron35", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
 			Model:    "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
 			Image:    "vllm/vllm-openai:v0.27.1-aarch64",
