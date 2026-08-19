@@ -126,26 +126,43 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "UNPROVEN: published 2026-08-19, added the following day, not yet\n" +
-				"benchmarked here. Every number below is the vendor's, not ours.\n\n" +
-				"A self-improvement fine-tune of the same Qwen3.6-35B-A3B this node\n" +
-				"already serves, claiming large coding gains over it: Terminal-Bench\n" +
-				"2.1 67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. If that holds it is\n" +
-				"a drop-in replacement for qwen36 rather than an addition - which is\n" +
-				"also why it cannot run beside qwen36: 36.66 + 26 GiB does not fit\n" +
-				"next to it, and the two are the same slot anyway.\n\n" +
-				"QUANTIZED DIFFERENTLY to qwen36, and it matters on this hardware:\n" +
-				"compressed-tensors with CHANNEL-wise weights and dynamic per-token\n" +
-				"activations, not block-scaled. Block-scaled FP8 is the format that\n" +
-				"has repeatedly hit DeepGemm bugs on GB10, so this avoids that path\n" +
-				"by construction rather than by workaround.\n\n" +
-				"Hybrid attention: 30 of 40 layers are linear_attention and only 10\n" +
-				"are full_attention, with 2 KV heads. KV should therefore be far\n" +
-				"cheaper per token than qwen36's 88.3 KiB - worth measuring, because\n" +
-				"if it is, the 26 GiB pin buys a much longer context here.\n\n" +
-				"Multimodal weights are present (333 visual tensors) but modality is\n" +
-				"declared text: nothing in this fleet sends it images yet, and\n" +
-				"claiming a capability that is untested is how a recipe starts lying.",
+			Notes: "MEASURED 2026-08-19, same prompts and same hour as qwen36:\n\n" +
+				"           prose   code   json    agg\n" +
+				"  qwen36   64.78  66.24  69.07  66.55 tok/s\n" +
+				"  ornith   39.12  46.12  49.53  44.89 tok/s   -33%\n\n" +
+				"It works: loads on the same pinned image, 36.85 GiB against the 36.66\n" +
+				"declared, and tool calls parse. It is a third slower than the model it\n" +
+				"would replace.\n\n" +
+				"SPECULATION IS NOT THE REASON, which was the first thing to suspect:\n" +
+				"mean acceptance length 1.81-2.19 here against qwen36's 1.63 accepted\n" +
+				"per draft, on the same k=2. Ornith's MTP is doing at least as well.\n\n" +
+				"KV IS NOT THE REASON EITHER, and this recipe used to claim otherwise.\n" +
+				"It predicted KV would be far cheaper per token than qwen36's 88.3 KiB\n" +
+				"because 30 of 40 layers are linear_attention. Measured: 308,736 tokens\n" +
+				"at the same 26 GiB pin - byte for byte identical to qwen36. Of course\n" +
+				"it is: same architecture, same 10 full-attention layers, same 2 KV\n" +
+				"heads. The prediction reasoned from the hybrid layout and forgot it was\n" +
+				"describing the incumbent too.\n\n" +
+				"WHAT IS LEFT is the quantization. Weights are 5.2% larger, which on a\n" +
+				"bandwidth-bound decode buys about 5% of the gap. The rest is most\n" +
+				"likely the scheme itself: compressed-tensors here uses DYNAMIC\n" +
+				"per-token activation quantization, so every forward pass computes\n" +
+				"activation scales at runtime that qwen36's static fp8 does not.\n" +
+				"Untested - it is a hypothesis with the right shape, not a measurement.\n\n" +
+				"THE TRADE, stated plainly: a third of the throughput for the vendor's\n" +
+				"claimed coding gains over this exact incumbent - Terminal-Bench 2.1\n" +
+				"67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. Those are THEIR numbers.\n" +
+				"Nothing here verifies quality, and a throughput comparison cannot.\n" +
+				"Worth adopting only if agentic coding quality is what this slot is\n" +
+				"for; not worth it if the slot is general chat.\n\n" +
+				"Same slot as qwen36, not an addition: the planner refuses it beside\n" +
+				"qwen36 with must_free=[qwen36].\n\n" +
+				"tool-call-parser was READ from chat_template.jinja rather than assumed\n" +
+				"- the template emits '<tool_call>\\n<function=NAME>', the qwen3_coder\n" +
+				"shape - and the tool call was exercised, not just configured.\n\n" +
+				"Multimodal weights are present (333 visual tensors) but modality stays\n" +
+				"text: nothing here sends it images, and claiming an untested capability\n" +
+				"is how a recipe starts lying.",
 		},
 		{
 			ID: "qwen38-fp8", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,

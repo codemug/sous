@@ -27,27 +27,49 @@ env:
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
 notes: |-
-    UNPROVEN: published 2026-08-19, added the following day, not yet
-    benchmarked here. Every number below is the vendor's, not ours.
+    MEASURED 2026-08-19, same prompts and same hour as qwen36:
 
-    A self-improvement fine-tune of the same Qwen3.6-35B-A3B this node
-    already serves, claiming large coding gains over it: Terminal-Bench
-    2.1 67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. If that holds it is
-    a drop-in replacement for qwen36 rather than an addition - which is
-    also why it cannot run beside qwen36: 36.66 + 26 GiB does not fit
-    next to it, and the two are the same slot anyway.
+               prose   code   json    agg
+      qwen36   64.78  66.24  69.07  66.55 tok/s
+      ornith   39.12  46.12  49.53  44.89 tok/s   -33%
 
-    QUANTIZED DIFFERENTLY to qwen36, and it matters on this hardware:
-    compressed-tensors with CHANNEL-wise weights and dynamic per-token
-    activations, not block-scaled. Block-scaled FP8 is the format that
-    has repeatedly hit DeepGemm bugs on GB10, so this avoids that path
-    by construction rather than by workaround.
+    It works: loads on the same pinned image, 36.85 GiB against the 36.66
+    declared, and tool calls parse. It is a third slower than the model it
+    would replace.
 
-    Hybrid attention: 30 of 40 layers are linear_attention and only 10
-    are full_attention, with 2 KV heads. KV should therefore be far
-    cheaper per token than qwen36's 88.3 KiB - worth measuring, because
-    if it is, the 26 GiB pin buys a much longer context here.
+    SPECULATION IS NOT THE REASON, which was the first thing to suspect:
+    mean acceptance length 1.81-2.19 here against qwen36's 1.63 accepted
+    per draft, on the same k=2. Ornith's MTP is doing at least as well.
 
-    Multimodal weights are present (333 visual tensors) but modality is
-    declared text: nothing in this fleet sends it images yet, and
-    claiming a capability that is untested is how a recipe starts lying.
+    KV IS NOT THE REASON EITHER, and this recipe used to claim otherwise.
+    It predicted KV would be far cheaper per token than qwen36's 88.3 KiB
+    because 30 of 40 layers are linear_attention. Measured: 308,736 tokens
+    at the same 26 GiB pin - byte for byte identical to qwen36. Of course
+    it is: same architecture, same 10 full-attention layers, same 2 KV
+    heads. The prediction reasoned from the hybrid layout and forgot it was
+    describing the incumbent too.
+
+    WHAT IS LEFT is the quantization. Weights are 5.2% larger, which on a
+    bandwidth-bound decode buys about 5% of the gap. The rest is most
+    likely the scheme itself: compressed-tensors here uses DYNAMIC
+    per-token activation quantization, so every forward pass computes
+    activation scales at runtime that qwen36's static fp8 does not.
+    Untested - it is a hypothesis with the right shape, not a measurement.
+
+    THE TRADE, stated plainly: a third of the throughput for the vendor's
+    claimed coding gains over this exact incumbent - Terminal-Bench 2.1
+    67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. Those are THEIR numbers.
+    Nothing here verifies quality, and a throughput comparison cannot.
+    Worth adopting only if agentic coding quality is what this slot is
+    for; not worth it if the slot is general chat.
+
+    Same slot as qwen36, not an addition: the planner refuses it beside
+    qwen36 with must_free=[qwen36].
+
+    tool-call-parser was READ from chat_template.jinja rather than assumed
+    - the template emits '<tool_call>\n<function=NAME>', the qwen3_coder
+    shape - and the tool call was exercised, not just configured.
+
+    Multimodal weights are present (333 visual tensors) but modality stays
+    text: nothing here sends it images, and claiming an untested capability
+    is how a recipe starts lying.
