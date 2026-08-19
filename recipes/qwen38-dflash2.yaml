@@ -1,0 +1,44 @@
+id: qwen38-dflash2
+kind: vllm
+modality: text
+model: Qwen/Qwen3.8-27B-FP8
+image: fleet/vllm-dflash2:pr52816-aarch64
+served_as:
+  - dflash2
+declared:
+  weights_gib: 32.35
+  kv_gib: 8
+args:
+  max-model-len: 32768
+  gpu-memory-utilization: 0.33
+  speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":8}'
+env:
+  TORCH_CUDA_ARCH_LIST: 12.1a
+  CUTE_DSL_ARCH: sm_121a
+  HF_HOME: /root/.cache/huggingface
+  VLLM_LOGGING_LEVEL: INFO
+notes: |-
+  TRIAL, 2026-08-19. DFlash2 speculative decoding against Qwen3.8-27B-FP8.
+
+  IMAGE IS LOCALLY BUILT and not on any registry: vLLM PR 52816 adds
+  DFlash2DraftModel, which neither a released vLLM nor SGLang carries. Built on
+  this node because the target is aarch64 + sm_121; verified to register
+  DFlash2DraftModel and to run a bf16 matmul on the GB10.
+
+  FP8 RATHER THAN NVFP4: the DFlash2 selector cannot take a quantized target
+  lm_head yet (SGLang #35462/#35496) and NVFP4 quantizes it. This checkpoint
+  leaves lm_head out of quantization - verified in its config.
+
+  FP8 RATHER THAN bf16: decode here is bandwidth-bound near 273 GB/s, so
+  bf16's 51.77 GiB against NVFP4's 24.87 roughly halves the base rate, and ~3x
+  speculation on a halved base lands BELOW the 23.97 tok/s already measured on
+  NVFP4 + MTP. bf16 clears every software blocker and loses on physics.
+
+  The FP8-on-Blackwell crash reports (vLLM #51884, #47818) appear to be handled:
+  this build logs "Auto-disabled DeepGemm for model_type=qwen3_5_text on
+  Blackwell - DeepGemm E8M0 scale format causes accuracy degradation".
+
+  declared weights_gib is target 28.77 PLUS drafter 3.58: the drafter is
+  resident too, and a footprint that ignores it would under-plan by 3.58 GiB.
+
+  UNPROVEN: not yet benchmarked. The number to beat is 23.97 tok/s structured.
