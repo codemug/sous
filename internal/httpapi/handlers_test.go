@@ -101,7 +101,18 @@ func newServerWithHub(t *testing.T, hub string) http.Handler {
 	return buildServer(t, hub, &fakeRuntime{running: map[string]bool{}})
 }
 
+// buildServerAuth builds a server with auth ENABLED, for the login-flow tests.
+// Everything else runs with auth off so the handler tests stay about handlers.
+func buildServerAuth(t *testing.T, guard auth.Config) http.Handler {
+	t.Helper()
+	return buildServerWith(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, guard)
+}
+
 func buildServer(t *testing.T, hub string, rt *fakeRuntime) http.Handler {
+	return buildServerWith(t, hub, rt, auth.Config{Disabled: true})
+}
+
+func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) http.Handler {
 	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
@@ -119,10 +130,7 @@ func buildServer(t *testing.T, hub string, rt *fakeRuntime) http.Handler {
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	// Auth OFF here on purpose: these tests exercise handlers, and the guard
-	// has its own suite in internal/auth. Threading credentials through every
-	// fixture would re-test the middleware and obscure the handlers.
-	h, err := New(m, c, 121.6, hub, t.TempDir(), auth.Config{Disabled: true})
+	h, err := New(m, c, 121.6, hub, t.TempDir(), guard)
 	if err != nil {
 		t.Fatal(err)
 	}

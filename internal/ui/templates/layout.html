@@ -253,6 +253,12 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
     <a href="/sources"{{if eq .Title "Sources"}} aria-current="page"{{end}}>Sources</a>
   </nav>
   <span class="bar-meta">{{printf "%.1f" .PoolGiB}} GiB pool · {{printf "%.0f" .ReserveGiB}} reserved · {{.DeployCount}} deployed</span>
+  {{/* Basic auth had no way to sign out at all - the browser kept resending
+       the credentials until it was restarted. A session can simply be
+       dropped. */}}
+  <form method="post" action="/logout" style="margin:0">
+    <button type="submit" title="End this browser session">Sign out</button>
+  </form>
 </header>
 <main>
 {{if .Message}}<p class="msg{{if .IsError}} err{{end}}">{{.Message}}</p>{{end}}

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/codemug/sous/internal/auth"
 	"unicode/utf8"
 )
 
@@ -296,5 +299,138 @@ func TestSafeTextRepairsBinary(t *testing.T) {
 	}
 	if !strings.Contains(got, "hi") {
 		t.Errorf("safeText dropped readable text: %q", got)
+	}
+}
+
+// ---- login flow ----------------------------------------------------------
+
+func guardedServer(t *testing.T) http.Handler {
+	t.Helper()
+	return buildServerAuth(t, auth.Config{User: "op", Password: "s3cret"})
+}
+
+func TestLoginPageRenders(t *testing.T) {
+	h := guardedServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	req.Header.Set("Accept", "text/html")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"Sign in", `name="username"`, `name="password"`, "Bearer"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("login page missing %q", want)
+		}
+	}
+	// It must not leak what it is guarding.
+	if strings.Contains(body, "GiB pool") {
+		t.Error("login page discloses node capacity to an unauthenticated visitor")
+	}
+}
+
+func TestLoginSetsSessionAndRedirects(t *testing.T) {
+	h := guardedServer(t)
+	form := url.Values{"username": {"op"}, "password": {"s3cret"}, "next": {"/catalog"}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body: %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("Location"); got != "/catalog" {
+		t.Errorf("Location = %q, want /catalog", got)
+	}
+	var ck *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			ck = c
+		}
+	}
+	if ck == nil {
+		t.Fatal("no session cookie issued")
+	}
+	if !ck.HttpOnly {
+		t.Error("session cookie is not HttpOnly; script-readable session cookies are stealable")
+	}
+	if ck.SameSite != http.SameSiteLaxMode {
+		t.Error("session cookie is not SameSite=Lax")
+	}
+
+	// And it must actually authenticate a subsequent request.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/recipes", nil)
+	req2.AddCookie(ck)
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Errorf("session did not authenticate: %d", rr2.Code)
+	}
+}
+
+func TestLoginRejectsWrongPassword(t *testing.T) {
+	h := guardedServer(t)
+	form := url.Values{"username": {"op"}, "password": {"wrong"}}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Wrong username or password") {
+		t.Error("no error shown on the returned form")
+	}
+	// Must not say WHICH was wrong - that confirms whether a username exists.
+	if strings.Contains(strings.ToLower(body), "no such user") ||
+		strings.Contains(strings.ToLower(body), "unknown username") {
+		t.Error("the error distinguishes a bad username from a bad password")
+	}
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == auth.CookieName && c.Value != "" {
+			t.Error("a session cookie was issued for a failed login")
+		}
+	}
+}
+
+func TestLogoutClearsTheSession(t *testing.T) {
+	h := guardedServer(t)
+	c := auth.Config{User: "op", Password: "s3cret"}
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: c.MintSession("op")})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rr.Code)
+	}
+	cleared := false
+	for _, ck := range rr.Result().Cookies() {
+		if ck.Name == auth.CookieName && ck.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("logout did not expire the session cookie")
+	}
+}
+
+// An open redirect would bounce an operator who has just typed their password
+// onto someone else's page.
+func TestLoginRefusesOffOriginNext(t *testing.T) {
+	h := guardedServer(t)
+	for _, evil := range []string{"https://evil.example/x", "//evil.example/x"} {
+		form := url.Values{"username": {"op"}, "password": {"s3cret"}, "next": {evil}}
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if loc := rr.Header().Get("Location"); loc != "/" {
+			t.Errorf("next=%q redirected to %q, want /", evil, loc)
+		}
 	}
 }

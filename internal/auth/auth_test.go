@@ -3,6 +3,8 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -103,18 +105,123 @@ func TestHealthzIsExempt(t *testing.T) {
 	}
 }
 
-// A browser needs the challenge to show its prompt; a script does not, and
-// curl hangs waiting for input when it receives one.
-func TestChallengesBrowsersOnly(t *testing.T) {
+// The popup is gone ON PURPOSE. Sending WWW-Authenticate is what makes the
+// browser render its native credential dialog - unstyleable, unable to explain
+// why a login failed, and offering no way to sign out. Browsers now get a real
+// form instead, and this test is what stops the header creeping back.
+func TestBrowsersAreRedirectedNotChallenged(t *testing.T) {
 	c := Config{User: "u", Password: "p"}
 
-	html := do(t, c, func(r *http.Request) { r.Header.Set("Accept", "text/html") })
-	if html.Header().Get("WWW-Authenticate") == "" {
-		t.Error("browser request got no WWW-Authenticate challenge")
+	rr := do(t, c, func(r *http.Request) { r.Header.Set("Accept", "text/html") })
+	if rr.Header().Get("WWW-Authenticate") != "" {
+		t.Error("WWW-Authenticate is back; the browser will show a popup again")
 	}
-	api := do(t, c, func(r *http.Request) { r.Header.Set("Accept", "application/json") })
-	if api.Header().Get("WWW-Authenticate") != "" {
-		t.Error("API request got a WWW-Authenticate challenge; curl will hang on it")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 to the login form", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, LoginPath) {
+		t.Errorf("Location = %q, want a redirect to %s", loc, LoginPath)
+	}
+	// Where they were going has to survive, or every login dumps you at /.
+	if !strings.Contains(loc, url.QueryEscape("/api/recipes")) {
+		t.Errorf("Location = %q, does not carry the original path", loc)
+	}
+}
+
+// A script cannot fill in a form. Redirecting it would turn a failed API call
+// into a 200 carrying HTML, which is worse than a clean refusal.
+func TestScriptsGetAPlain401(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	rr := do(t, c, func(r *http.Request) { r.Header.Set("Accept", "application/json") })
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rr.Code)
+	}
+	if rr.Header().Get("WWW-Authenticate") != "" {
+		t.Error("a script got a challenge; curl hangs waiting for input on one")
+	}
+}
+
+// The login page must stay reachable while signed out, or the redirect loops.
+func TestLoginPathIsNotGuarded(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	req := httptest.NewRequest(http.MethodGet, LoginPath, nil)
+	req.Header.Set("Accept", "text/html")
+	rr := httptest.NewRecorder()
+	c.Middleware(ok(t)).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("login page returned %d - the redirect will loop forever", rr.Code)
+	}
+}
+
+// An unchecked ?next= is an open redirect: a crafted link would bounce an
+// operator who has just typed their password onto someone else's page.
+func TestRedirectRefusesOffOriginNext(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	for _, evil := range []string{"//evil.example/x", "https://evil.example/x"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Accept", "text/html")
+		req.RequestURI = evil
+		rr := httptest.NewRecorder()
+		c.Middleware(ok(t)).ServeHTTP(rr, req)
+		if loc := rr.Header().Get("Location"); strings.Contains(loc, "evil.example") {
+			t.Errorf("off-origin next survived into %q", loc)
+		}
+	}
+}
+
+// ---- sessions ------------------------------------------------------------
+
+func TestSessionCookieAuthenticates(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	rr := do(t, c, func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: CookieName, Value: c.MintSession("u")})
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a valid session", rr.Code)
+	}
+}
+
+func TestForgedSessionIsRejected(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	for _, bad := range []string{"", "garbage", "a.b", c.MintSession("u") + "x"} {
+		rr := do(t, c, func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: CookieName, Value: bad})
+		})
+		if rr.Code == http.StatusOK {
+			t.Errorf("forged cookie %q was accepted", bad)
+		}
+	}
+}
+
+// THE PROPERTY THAT MAKES A PASSWORD RESET MEAN SOMETHING: the signing key is
+// derived from the credentials, so rotating either one invalidates every
+// session that was already issued. Without this a changed password would leave
+// existing browsers signed in for the rest of the cookie's life.
+func TestRotatingCredentialsInvalidatesExistingSessions(t *testing.T) {
+	before := Config{User: "u", Password: "old-password"}
+	tok := before.MintSession("u")
+
+	after := Config{User: "u", Password: "new-password"}
+	if after.validSession(tok) {
+		t.Error("a session minted under the old password still verifies")
+	}
+	// And the token counts too, since it is equally powerful.
+	afterTok := Config{User: "u", Password: "old-password", Token: "new-token"}
+	if afterTok.validSession(tok) {
+		t.Error("a session survived an API-token rotation")
+	}
+}
+
+func TestCheckPasswordRequiresBoth(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	if !c.CheckPassword("u", "p") {
+		t.Error("the correct pair was rejected")
+	}
+	for _, bad := range [][2]string{{"u", "wrong"}, {"wrong", "p"}, {"", ""}} {
+		if c.CheckPassword(bad[0], bad[1]) {
+			t.Errorf("accepted %q/%q", bad[0], bad[1])
+		}
 	}
 }
 

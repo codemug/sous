@@ -32,6 +32,10 @@ type Server struct {
 	src *sources.Manager
 
 	mux *http.ServeMux
+
+	// guard is held so the login handlers can verify a password and mint a
+	// session with the same configuration the middleware checks against.
+	guard auth.Config
 }
 
 func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sourcesDir string,
@@ -40,7 +44,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir,
+	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -72,6 +76,9 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	// run next".
 	s.mux.HandleFunc("GET /", s.pageNode)
 	s.mux.HandleFunc("GET /catalog", s.pageCatalog)
+	s.mux.HandleFunc("GET /login", s.pageLogin)
+	s.mux.HandleFunc("POST /login", s.doLogin)
+	s.mux.HandleFunc("POST /logout", s.doLogout)
 	s.mux.HandleFunc("GET /model/{id}", s.pageModel)
 	// An HTML form can only issue GET and POST. The REST verbs above stay
 	// for API clients; these are the same handlers on paths a browser can
