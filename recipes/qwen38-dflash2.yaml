@@ -7,10 +7,10 @@ served_as:
   - dflash2
 declared:
   weights_gib: 32.35
-  kv_gib: 8
+  kv_gib: 20
 args:
   max-model-len: 32768
-  gpu-memory-utilization: 0.33
+  gpu-memory-utilization: 0.5
   speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}'
 env:
   TORCH_CUDA_ARCH_LIST: 12.1a
@@ -40,6 +40,14 @@ notes: |-
 
   declared weights_gib is target 28.77 PLUS drafter 3.58: the drafter is
   resident too, and a footprint that ignores it would under-plan by 3.58 GiB.
+
+  gpu-memory-utilization IS 0.5 BECAUSE THIS RUNS ALONE. At 0.33 - chosen when
+  the trial was still meant to sit beside qwen36 - vLLM capped itself near 40
+  GiB, and weights plus drafter already take 32.33, so it refused to start:
+  "4.11 GiB KV cache is needed, which is larger than the available KV cache".
+  Sous was reporting 53 GiB of margin at that moment. The flag is a gate
+  against free memory, not a budget, and setting it low does not make a model
+  smaller - it only starves the KV cache.
 
   num_speculative_tokens IS 7, NOT 8. The first attempt used 8 and died in a
   CUDA device-side assert - "index out of bounds" in IndexKernel - the instant
