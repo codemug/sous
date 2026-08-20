@@ -112,7 +112,15 @@ func Seeds() []recipe.Recipe {
 				// MTP ships INSIDE this checkpoint: 785 mtp.* tensors, and the
 				// quantization config explicitly excludes "re:.*mtp.*" from being
 				// quantized. No separate drafter is needed, unlike DFlash2.
-				"speculative-config":   `{"method":"mtp","num_speculative_tokens":2}`,
+				//
+				// k=1, NOT the 2 this shipped with, and not 0. Measured three ways on
+				// the code case: none 38.27, k=2 48.07, k=1 55.28 tok/s decode.
+				// Speculation is worth +44% here, but the SECOND draft token loses
+				// 13% of that back - because "excluded from quantization" means the
+				// MTP layer runs in bf16, so every extra draft is a full bf16 MoE
+				// forward on a box that is bandwidth-bound at decode. k=2 is
+				// dominated by k=1 on every case measured.
+				"speculative-config":   `{"method":"mtp","num_speculative_tokens":1}`,
 				"tensor-parallel-size": 1,
 				// READ FROM ITS chat_template.jinja, not assumed: the template
 				// emits "<tool_call>\n<function=NAME>", which is the qwen3_coder
@@ -126,43 +134,49 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "MEASURED 2026-08-19, same prompts and same hour as qwen36:\n\n" +
-				"           prose   code   json    agg\n" +
-				"  qwen36   64.78  66.24  69.07  66.55 tok/s\n" +
-				"  ornith   39.12  46.12  49.53  44.89 tok/s   -33%\n\n" +
-				"It works: loads on the same pinned image, 36.85 GiB against the 36.66\n" +
-				"declared, and tool calls parse. It is a third slower than the model it\n" +
-				"would replace.\n\n" +
-				"SPECULATION IS NOT THE REASON, which was the first thing to suspect:\n" +
-				"mean acceptance length 1.81-2.19 here against qwen36's 1.63 accepted\n" +
-				"per draft, on the same k=2. Ornith's MTP is doing at least as well.\n\n" +
-				"KV IS NOT THE REASON EITHER, and this recipe used to claim otherwise.\n" +
-				"It predicted KV would be far cheaper per token than qwen36's 88.3 KiB\n" +
-				"because 30 of 40 layers are linear_attention. Measured: 308,736 tokens\n" +
-				"at the same 26 GiB pin - byte for byte identical to qwen36. Of course\n" +
-				"it is: same architecture, same 10 full-attention layers, same 2 KV\n" +
-				"heads. The prediction reasoned from the hybrid layout and forgot it was\n" +
-				"describing the incumbent too.\n\n" +
-				"WHAT IS LEFT is the quantization. Weights are 5.2% larger, which on a\n" +
-				"bandwidth-bound decode buys about 5% of the gap. The rest is most\n" +
-				"likely the scheme itself: compressed-tensors here uses DYNAMIC\n" +
-				"per-token activation quantization, so every forward pass computes\n" +
-				"activation scales at runtime that qwen36's static fp8 does not.\n" +
-				"Untested - it is a hypothesis with the right shape, not a measurement.\n\n" +
-				"THE TRADE, stated plainly: a third of the throughput for the vendor's\n" +
-				"claimed coding gains over this exact incumbent - Terminal-Bench 2.1\n" +
-				"67.8 vs 52.5, SWE-bench Verified 79 vs 73.4. Those are THEIR numbers.\n" +
-				"Nothing here verifies quality, and a throughput comparison cannot.\n" +
-				"Worth adopting only if agentic coding quality is what this slot is\n" +
-				"for; not worth it if the slot is general chat.\n\n" +
-				"Same slot as qwen36, not an addition: the planner refuses it beside\n" +
-				"qwen36 with must_free=[qwen36].\n\n" +
-				"tool-call-parser was READ from chat_template.jinja rather than assumed\n" +
-				"- the template emits '<tool_call>\\n<function=NAME>', the qwen3_coder\n" +
-				"shape - and the tool call was exercised, not just configured.\n\n" +
-				"Multimodal weights are present (333 visual tensors) but modality stays\n" +
-				"text: nothing here sends it images, and claiming an untested capability\n" +
-				"is how a recipe starts lying.",
+			Notes: "MEASURED 2026-08-19/20 against qwen36, same prompts, same node.\n" +
+				"Streamed, so TTFT and decode are separated - an earlier pass used\n" +
+				"non-streaming and folded prefill into decode, which hid half of this.\n\n" +
+				"                 ttft-short  ttft-16k   decode-code\n" +
+				"  qwen36              121ms     395ms     68.19 t/s\n" +
+				"  ornith k=1          130ms     435ms     55.28 t/s\n" +
+				"  ornith k=2          135ms     419ms     48.07 t/s\n" +
+				"  ornith no-spec       87ms     227ms     38.27 t/s\n\n" +
+				"TTFT IS NOT THE PROBLEM and needs no work: within 10% of qwen36 at\n" +
+				"both prompt lengths, and 16k tokens prefill in 435ms either way. The\n" +
+				"whole gap is decode.\n\n" +
+				"SPECULATION IS WORTH +44% (38.27 -> 55.28) and the shipped k=2 threw\n" +
+				"13% of it away. The MTP layer is EXCLUDED FROM QUANTIZATION by the\n" +
+				"checkpoint's own config - 785 bf16 tensors - so each extra draft token\n" +
+				"is a full bf16 MoE forward, and the second one does not earn it back.\n\n" +
+				"SPECULATION COSTS TTFT, which is the trade to know: 87 -> 130ms short\n" +
+				"and 227 -> 435ms at 16k, because the first decode step now drafts too.\n" +
+				"If this slot ever becomes latency-critical rather than throughput-\n" +
+				"critical, dropping speculation nearly halves time to first token.\n\n" +
+				"WHY IT IS STILL BEHIND qwen36 at k=1, from the boot logs: the two pick\n" +
+				"DIFFERENT linear kernels for the same architecture -\n" +
+				"CutlassFP8ScaledMMLinearKernel here against qwen36's\n" +
+				"CutlassFp8BlockScaledMMKernel - which follows from channel-wise plus\n" +
+				"dynamic per-token activations rather than block-scaled weights. That\n" +
+				"is a property of the checkpoint, not a setting.\n\n" +
+				"NOT the reason, ruled out by measurement: KV is identical (308,736\n" +
+				"tokens at the same pin, same 10 full-attention layers), CUDA graph\n" +
+				"capture is identical (FULL 3 / PIECEWISE 5), and the attention backend\n" +
+				"is FLASH_ATTN for both.\n\n" +
+				"OPEN, and it would help qwen36 too: both log 'Using default MoE\n" +
+				"config. Performance might be sub-optimal!' - 316 tuned MoE tables ship\n" +
+				"and none is for GB10, so a 256-expert MoE runs untuned Triton on both.\n" +
+				"benchmark_moe.py ships in the image. Untested.\n\n" +
+				"THE TRADE, unchanged: fewer tokens per second for the vendor's claimed\n" +
+				"coding gains over this exact incumbent - Terminal-Bench 2.1 67.8 vs\n" +
+				"52.5, SWE-bench Verified 79 vs 73.4. Their numbers; nothing here\n" +
+				"verifies quality and a throughput bench never could.\n\n" +
+				"Same slot as qwen36: the planner refuses it beside qwen36 with\n" +
+				"must_free=[qwen36].\n\n" +
+				"tool-call-parser was READ from chat_template.jinja and then exercised,\n" +
+				"not merely configured. Multimodal weights are present (333 visual\n" +
+				"tensors) but modality stays text: nothing here sends it images, and\n" +
+				"claiming an untested capability is how a recipe starts lying.",
 		},
 		{
 			ID: "qwen38-fp8", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
