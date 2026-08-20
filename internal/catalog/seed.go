@@ -145,49 +145,46 @@ func Seeds() []recipe.Recipe {
 				// an hour of tuning before anyone noticed.
 				"VLLM_TUNED_CONFIG_FOLDER": "/root/.cache/huggingface/moe-configs",
 			},
-			Notes: "MEASURED 2026-08-19/20 against qwen36, same prompts, same node.\n" +
-				"Streamed, so TTFT and decode are separated - an earlier pass used\n" +
-				"non-streaming and folded prefill into decode, which hid half of this.\n\n" +
-				"                 ttft-short  ttft-16k   decode-code\n" +
-				"  qwen36              121ms     395ms     68.19 t/s\n" +
-				"  ornith k=1          130ms     435ms     55.28 t/s\n" +
-				"  ornith k=2          135ms     419ms     48.07 t/s\n" +
-				"  ornith no-spec       87ms     227ms     38.27 t/s\n\n" +
-				"TTFT IS NOT THE PROBLEM and needs no work: within 10% of qwen36 at\n" +
-				"both prompt lengths, and 16k tokens prefill in 435ms either way. The\n" +
-				"whole gap is decode.\n\n" +
-				"SPECULATION IS WORTH +44% (38.27 -> 55.28) and the shipped k=2 threw\n" +
-				"13% of it away. The MTP layer is EXCLUDED FROM QUANTIZATION by the\n" +
-				"checkpoint's own config - 785 bf16 tensors - so each extra draft token\n" +
-				"is a full bf16 MoE forward, and the second one does not earn it back.\n\n" +
-				"SPECULATION COSTS TTFT, which is the trade to know: 87 -> 130ms short\n" +
-				"and 227 -> 435ms at 16k, because the first decode step now drafts too.\n" +
-				"If this slot ever becomes latency-critical rather than throughput-\n" +
-				"critical, dropping speculation nearly halves time to first token.\n\n" +
-				"WHY IT IS STILL BEHIND qwen36 at k=1, from the boot logs: the two pick\n" +
-				"DIFFERENT linear kernels for the same architecture -\n" +
-				"CutlassFP8ScaledMMLinearKernel here against qwen36's\n" +
-				"CutlassFp8BlockScaledMMKernel - which follows from channel-wise plus\n" +
-				"dynamic per-token activations rather than block-scaled weights. That\n" +
-				"is a property of the checkpoint, not a setting.\n\n" +
-				"NOT the reason, ruled out by measurement: KV is identical (308,736\n" +
-				"tokens at the same pin, same 10 full-attention layers), CUDA graph\n" +
-				"capture is identical (FULL 3 / PIECEWISE 5), and the attention backend\n" +
-				"is FLASH_ATTN for both.\n\n" +
-				"OPEN, and it would help qwen36 too: both log 'Using default MoE\n" +
-				"config. Performance might be sub-optimal!' - 316 tuned MoE tables ship\n" +
-				"and none is for GB10, so a 256-expert MoE runs untuned Triton on both.\n" +
-				"benchmark_moe.py ships in the image. Untested.\n\n" +
-				"THE TRADE, unchanged: fewer tokens per second for the vendor's claimed\n" +
-				"coding gains over this exact incumbent - Terminal-Bench 2.1 67.8 vs\n" +
-				"52.5, SWE-bench Verified 79 vs 73.4. Their numbers; nothing here\n" +
-				"verifies quality and a throughput bench never could.\n\n" +
-				"Same slot as qwen36: the planner refuses it beside qwen36 with\n" +
-				"must_free=[qwen36].\n\n" +
-				"tool-call-parser was READ from chat_template.jinja and then exercised,\n" +
-				"not merely configured. Multimodal weights are present (333 visual\n" +
-				"tensors) but modality stays text: nothing here sends it images, and\n" +
-				"claiming an untested capability is how a recipe starts lying.",
+			Notes: "MEASURED. Decode, against qwen36 on identical prompts:\n\n" +
+				"           prose   code   long-ctx\n" +
+				"  qwen36   67.89  68.40      54.94 tok/s\n" +
+				"  ornith   48.27  56.27      39.47 tok/s   about -19%\n\n" +
+				"COLD PREFILL, novel prompts, warmup absorbed - qwen36 vs ornith:\n" +
+				"    100 tok   189 / 191 ms    identical\n" +
+				"  1,000 tok   308 / 307 ms    identical\n" +
+				"  5,000 tok   850 / 1515 ms   1.8x\n" +
+				" 18,000 tok  2658 / 3553 ms   1.3x  (6,772 vs 5,065 tok/s)\n\n" +
+				"So prefill is free at chat lengths and costs about a third more at\n" +
+				"long context, which is the same story as decode and points at the same\n" +
+				"cause: dynamic per-token activation quantization does work on every\n" +
+				"pass that qwen36's static fp8 does once.\n\n" +
+				"MEASURING THIS WAS HARDER THAN IT SHOULD HAVE BEEN, and the traps are\n" +
+				"worth more than the numbers:\n" +
+				"  - enable-prefix-caching makes a REPEATED prompt return in 585ms what\n" +
+				"    costs 2658ms cold at 18k. Benchmarking the same prompt twice\n" +
+				"    measures the cache and calls it prefill.\n" +
+				"  - the first request after a deploy pays one-time warmup; 35 SECONDS\n" +
+				"    was observed once at 18k and is not prefill.\n" +
+				"  An earlier conclusion that 'ornith prefills within 10% of qwen36'\n" +
+				"  came from comparing one model's cached number with the other's cold\n" +
+				"  one. scripts/bench/prefill-cold.py defeats both artifacts.\n\n" +
+				"num_speculative_tokens IS 1. MTP ships unquantized in this checkpoint\n" +
+				"(785 bf16 mtp.* tensors), so every extra draft is a full bf16 MoE\n" +
+				"forward. Speculation is worth +44% over none; k=2 gives 13% of that\n" +
+				"back and loses to k=1 on every case measured. Speculation also buys\n" +
+				"throughput WITH latency - turning it off nearly halves TTFT.\n\n" +
+				"THE GB10-TUNED MoE TABLE BUYS NOTHING. vLLM ships 316 tuned tables and\n" +
+				"none for this device, so a table was generated on this GPU and loaded\n" +
+				"via VLLM_TUNED_CONFIG_FOLDER - confirmed read in the log, not assumed.\n" +
+				"A/B, one script, back to back: 48.87/55.24/41.29 tuned against\n" +
+				"48.17/56.11/39.55 default. Wins two, loses one, all inside noise. The\n" +
+				"env var is kept because it is harmless and the table is now correct;\n" +
+				"the honest summary is that the default Triton config was already fine\n" +
+				"for these shapes.\n\n" +
+				"Same slot as qwen36 - the planner refuses it alongside, must_free=[qwen36].\n" +
+				"Vendor claims large agentic-coding gains over qwen3.6 (Terminal-Bench\n" +
+				"2.1 67.8 vs 52.5, SWE-bench Verified 79 vs 73.4). Unverified here, and\n" +
+				"no throughput test can verify it. The trade is ~19% of decode.",
 		},
 		{
 			ID: "qwen38-fp8", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
