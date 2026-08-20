@@ -133,6 +133,17 @@ func Seeds() []recipe.Recipe {
 				"CUTE_DSL_ARCH":        "sm_121a",
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
+				// vLLM ships 316 tuned MoE tables and not one is for this device, so
+				// the hottest loop in a 256-expert model runs the default Triton
+				// config. This points the loader at a table generated on this GPU.
+				// The models dir is already bind-mounted, so no image rebuild.
+				//
+				// The filename encodes the shape and is matched exactly:
+				// E=256,N=512,device_name=NVIDIA_GB10,dtype=fp8_w8a8.json. N is the
+				// intermediate size PER RANK, so a table tuned at benchmark_moe.py's
+				// default tp=2 lands at N=256 and is SILENTLY never read - which cost
+				// an hour of tuning before anyone noticed.
+				"VLLM_TUNED_CONFIG_FOLDER": "/root/.cache/huggingface/moe-configs",
 			},
 			Notes: "MEASURED 2026-08-19/20 against qwen36, same prompts, same node.\n" +
 				"Streamed, so TTFT and decode are separated - an earlier pass used\n" +

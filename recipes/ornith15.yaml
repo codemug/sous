@@ -26,6 +26,7 @@ env:
     HF_HOME: /root/.cache/huggingface
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
+    VLLM_TUNED_CONFIG_FOLDER: /root/.cache/huggingface/moe-configs
 notes: |-
     MEASURED 2026-08-19/20 against qwen36, same prompts, same node.
     Streamed, so TTFT and decode are separated - an earlier pass used
