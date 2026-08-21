@@ -272,3 +272,35 @@ func TestEmptyStateDoesNotClaimAFreePoolBesideOrphans(t *testing.T) {
 		t.Error("no empty state at all for a node whose only records are orphans")
 	}
 }
+
+// Nine-plus recipes as equal cards with no way to narrow. The filters are links
+// carrying ?filter=, so each is a real URL - bookmarkable, and no JS.
+func TestModelsPageFilters(t *testing.T) {
+	h, rt := newTestServerWithRuntime(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	_ = rt
+
+	all := send(t, h, http.MethodGet, "/models", "", "").Body.String()
+	if !strings.Contains(all, `href="/models?filter=pool"`) {
+		t.Fatal("no filter links on the models page")
+	}
+
+	pool := send(t, h, http.MethodGet, "/models?filter=pool", "", "").Body.String()
+	if !strings.Contains(pool, "qwen38") {
+		t.Error("the deployed model is missing from the in-the-pool filter")
+	}
+	// A recipe that is not deployed must not survive that filter. qwen36 is
+	// seeded and nothing deployed it.
+	if strings.Contains(pool, `/model/qwen36"`) {
+		t.Error("an undeployed recipe appears under in-the-pool")
+	}
+
+	// A bad filter shows everything rather than an empty page, which would read
+	// as "there are no models" for what is really a mistyped URL.
+	bad := send(t, h, http.MethodGet, "/models?filter=nonsense", "", "").Body.String()
+	if !strings.Contains(bad, "qwen38") {
+		t.Error("an unknown filter emptied the page instead of falling back to all")
+	}
+}

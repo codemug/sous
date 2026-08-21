@@ -65,6 +65,16 @@ args:
   </div>
 </details>
 
+{{with .Filters}}
+<nav class="filters" aria-label="Filter models">
+  {{range .}}
+    {{/* The current one is a span, not a link to where you already are. */}}
+    {{if .Current}}<span class="filter is-on" aria-current="true">{{.Label}} <b>{{.Count}}</b></span>
+    {{else}}<a class="filter" href="/models?filter={{.Key}}">{{.Label}} <b>{{.Count}}</b></a>{{end}}
+  {{end}}
+</nav>
+{{end}}
+
 <div class="cards wide">
   {{range .Models}}
     <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}">

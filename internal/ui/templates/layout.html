@@ -571,6 +571,20 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
    dimming that tr.arch td used to do before the tables became cards. */
 .card.is-arch{opacity:.62}
 
+/* Filter tabs. Links and a query string - no JS, and each one is a real URL
+   that can be bookmarked or sent to someone. */
+.filters{display:flex;gap:var(--space-xs);flex-wrap:wrap;margin-bottom:var(--space-md)}
+.filter{
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.04em;
+  color:var(--ink-mute);text-decoration:none;padding:var(--space-2xs) var(--space-sm);
+  border:1px solid var(--rule);border-radius:var(--radius-sm);background:var(--paper-2);
+}
+.filter:hover{color:var(--ink);border-color:var(--rule-firm)}
+.filter b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.filter.is-on{
+  color:var(--accent-ink);border-color:var(--accent);background:var(--accent-wash);
+}
+
 .card{height:100%}
 
 /* A note inside a panel or a card fills it. The 62ch measure is right for

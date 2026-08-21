@@ -34,6 +34,7 @@ type pageData struct {
 	Node        *NodeStatus
 	Model       *modelPage
 	Models      []ModelView
+	Filters     []FilterTab
 	Pool        *PoolBar
 	Plan        *PlanPage
 	Keys        *keysPage
@@ -495,15 +496,71 @@ func (s *Server) forgetRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 // pageModels lists every recipe with whatever is happening to it.
+// modelFilters are the ways this page can be narrowed.
+//
+// LINKS AND A QUERY STRING, no JS. With nine-plus recipes as equal cards there
+// was no way to narrow at all, and this is the page where that bites. Counts
+// come from the unfiltered set so a filter that would show nothing says so
+// before it is clicked.
+var modelFilters = []struct {
+	Key, Label string
+	Match      func(ModelView) bool
+}{
+	{"all", "all", func(ModelView) bool { return true }},
+	{"pool", "in the pool", func(v ModelView) bool { return v.Resident() }},
+	{"library", "library", func(v ModelView) bool {
+		return !v.Resident() && !v.Recipe.Archived
+	}},
+	{"archived", "archived", func(v ModelView) bool { return v.Recipe.Archived }},
+}
+
+// FilterTab is one choice, with what it would show.
+type FilterTab struct {
+	Key, Label string
+	Count      int
+	Current    bool
+}
+
 func (s *Server) pageModels(w http.ResponseWriter, r *http.Request) {
 	s.page(w, r, "models", "Models", func(d *pageData) error {
 		vs, err := s.models(r)
 		if err != nil {
 			return err
 		}
-		d.Models = vs
+		want := r.URL.Query().Get("filter")
+		match := modelFilters[0].Match
+		known := want == "" || want == "all"
+		for _, f := range modelFilters {
+			d.Filters = append(d.Filters, FilterTab{
+				Key: f.Key, Label: f.Label, Count: countMatching(vs, f.Match),
+				Current: f.Key == want || (want == "" && f.Key == "all"),
+			})
+			if f.Key == want {
+				match, known = f.Match, true
+			}
+		}
+		// An unknown filter shows everything rather than an empty page, which
+		// would read as "there are no models" for what is really a bad URL.
+		if !known {
+			d.Filters[0].Current = true
+		}
+		for _, v := range vs {
+			if match(v) {
+				d.Models = append(d.Models, v)
+			}
+		}
 		return nil
 	})
+}
+
+func countMatching(vs []ModelView, f func(ModelView) bool) int {
+	n := 0
+	for _, v := range vs {
+		if f(v) {
+			n++
+		}
+	}
+	return n
 }
 
 // pageBody renders a page WITHOUT writing a status, so a caller that has
