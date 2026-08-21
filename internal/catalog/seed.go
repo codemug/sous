@@ -279,7 +279,35 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "MEASURED 2026-08-19: 27.42 tok/s aggregate against the 23.97\n" +
+			Notes: "MEASURED 2026-08-22, fp8 KV vs 16-bit, SAME harness both arms:\n" +
+				"\n" +
+				"                  16-bit/32768      fp8/262144\n" +
+				"  JSON list       31.67 t/s 5.95   37.53 t/s 6.01   +18%\n" +
+				"  code + tests    24.01 t/s 5.10   37.24 t/s 5.96   +55%\n" +
+				"  prose           13.05 t/s 3.00   16.37 t/s 2.62   +25%\n" +
+				"  aggregate       22.91 t/s 4.68   30.38 t/s 4.86   +33%\n" +
+				"\n" +
+				"Second column is mean accepted length of 8 (7 drafted + 1\n" +
+				"verified). 1631 draft rounds sampled across the two arms.\n" +
+				"\n" +
+				"EIGHT TIMES THE CONTEXT AND FASTER, which is not the trade the\n" +
+				"qwen38 recipe warned about. fp8 KV does move the attention\n" +
+				"backend and does force CUDA graphs off FULL_AND_PIECEWISE, and\n" +
+				"that was expected to cost something here - decode is bandwidth\n" +
+				"bound at ~273 GB/s, and halving KV bytes per token buys back\n" +
+				"more than the graph mode loses. Acceptance held: 4.68 -> 4.86\n" +
+				"aggregate.\n" +
+				"\n" +
+				"PROSE IS THE ONE REGRESSION and it is in acceptance, not speed:\n" +
+				"3.00 -> 2.62. Prose is where the drafter guesses worst, so it\n" +
+				"has the least speculation to lose and the most bandwidth to\n" +
+				"gain; it still ends up 25% faster.\n" +
+				"\n" +
+				"The 2026-08-19 figures below were taken with a DIFFERENT\n" +
+				"workload set and are not comparable with the table above. They\n" +
+				"are kept for the acceptance-spread finding, which still holds.\n" +
+				"\n" +
+				"MEASURED 2026-08-19: 27.42 tok/s aggregate against the 23.97\n" +
 				"NVFP4 + MTP baseline, +14.4%. The aggregate is the least useful\n" +
 				"number here, because the spread is the finding:\n\n" +
 				"  42.96 tok/s  JSON list      +79%\n" +
