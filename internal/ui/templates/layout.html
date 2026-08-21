@@ -422,6 +422,18 @@ tbody tr:last-child td{border-bottom:none}
   background:var(--paper);color:var(--ink);min-width:14rem;
 }
 .warn-panel{border-left:3px solid var(--drift)}
+/* The live dot. Off is the honest default: it turns on only when a frame has
+   actually arrived, so a stream that never connects reads as not live rather
+   than as a page with nothing to say. */
+.live-line{
+  display:flex;align-items:center;gap:.4rem;margin:var(--space-sm) 0 0;
+  font-family:var(--font-mono);font-size:var(--text-xs);color:var(--ink-faint);
+}
+.live-dot{
+  width:6px;height:6px;border-radius:50%;display:inline-block;
+  background:var(--ink-faint);transition:background var(--dur-fast) var(--ease-out);
+}
+.live-dot[data-on="1"]{background:var(--ok)}
 
 /* API keys. The fresh-secret panel is deliberately loud: it is shown once and
    a reader who scrolls past it has lost the key. */
@@ -624,6 +636,10 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
     </div>
     {{/* Basic auth had no way to sign out at all - the browser kept resending
          the credentials until it was restarted. A session can just be dropped. */}}
+    <p class="live-line">
+      <i class="live-dot" data-live-dot data-on="0" aria-hidden="true"></i>
+      <span>live</span>
+    </p>
     <form method="post" action="/logout" style="margin:0">
       <button type="submit" title="End this browser session">Sign out</button>
     </form>

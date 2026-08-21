@@ -37,6 +37,7 @@
     {{if gt (index .Counts "gone") 0}}
       <span class="warn"><i class="swatch sw-gone"></i><b>{{index .Counts "gone"}}</b> gone — record without a container</span>
     {{end}}
+    <span><b data-committed>{{gib1 .CommittedGiB}}</b> GiB committed</span>
     <span><i class="swatch sw-free"></i><b data-margin>{{gib1 .MarginGiB}}</b> GiB free</span>
   </div>
 

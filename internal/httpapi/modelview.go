@@ -159,6 +159,20 @@ type PoolBar struct {
 	Counts map[string]int
 }
 
+// CommittedGiB is what the residents are holding.
+//
+// DERIVED, not stored: the bar already knows the pool, the reserve and what is
+// left, and a fourth field would be a second place for the same number to be
+// wrong in. The rail patches this from the stream, so it has to agree with what
+// the bar draws.
+func (b PoolBar) CommittedGiB() float64 {
+	v := b.PoolGiB - b.ReserveGiB - b.MarginGiB
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 // poolBar derives the bar from phases.
 //
 // This replaces a bar coloured from a binary Drifted flag while the cards below

@@ -17,14 +17,34 @@
     if (el && v !== undefined && v !== null) el.textContent = v;
   }
 
+  // GUARD THE NUMBERS. These fields have no omitempty today, so they are always
+  // present - but .toFixed() on an absent one throws INSIDE the listener, which
+  // kills every later patch in the same frame. One check is cheaper than that
+  // failure mode, which would look like "the stream stopped working".
+  function num(v, digits) {
+    return typeof v === "number" && isFinite(v) ? v.toFixed(digits) : null;
+  }
+
+  // Mirrors the secs template helper, so a patched value cannot be formatted
+  // differently from the one the server rendered.
+  function fmtSecs(f) {
+    if (!(typeof f === "number") || f <= 0) return "—";
+    if (f < 60) return String(Math.round(f)) + "s";
+    return String(Math.floor(f / 60)) + "m " + String(Math.floor(f % 60)) + "s";
+  }
+
+  // Only real phases. A bare /is-[a-z]+/ would eat is-arch off an archived
+  // card and drop the dimming on the first frame.
+  var PHASE = /is-(ready|starting|stopping|failed|gone|idle)/;
+
   var es = new EventSource("/events");
   es.addEventListener("status", function (ev) {
     var d;
     try { d = JSON.parse(ev.data); } catch (e) { return; }
     mark(true);
 
-    setText("[data-margin]", d.margin_gib.toFixed(1));
-    setText("[data-committed]", d.committed_gib.toFixed(1));
+    setText("[data-margin]", num(d.margin_gib, 1));
+    setText("[data-committed]", num(d.committed_gib, 1));
 
     (d.models || []).forEach(function (m) {
       var card = document.querySelector('[data-model="' + m.id + '"]');
@@ -33,11 +53,20 @@
         if (chip) { chip.textContent = m.phase; chip.className = "chip is-" + m.phase; }
         var det = card.querySelector("[data-detail]");
         if (det && m.stage) det.textContent = m.stage;
-        card.className = card.className.replace(/is-[a-z]+/, "is-" + m.phase);
+        // The stepper's own line. Without these two the element the script
+        // patched only existed when Progress was nil - so a ten-minute start
+        // showed a frozen stage list until someone reloaded, which is the one
+        // case the whole feature was for.
+        var st = card.querySelector("[data-stage]");
+        if (st && m.stage) st.textContent = m.stage;
+        var el = card.querySelector("[data-elapsed]");
+        if (el && typeof m.elapsed_sec === "number") el.textContent = fmtSecs(m.elapsed_sec);
+        card.className = card.className.replace(PHASE, "is-" + m.phase);
       }
       var seg = document.querySelector('[data-seg="' + m.id + '"]');
       if (seg) {
-        seg.style.width = m.pct.toFixed(2) + "%";
+        var w = num(m.pct, 2);
+        if (w !== null) seg.style.width = w + "%";
         seg.className = "seg seg-" + m.phase;
       }
     });

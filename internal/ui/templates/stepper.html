@@ -14,13 +14,20 @@
         {{if eq .State "done"}}✓{{else if eq .State "skipped"}}–{{else if eq .State "running"}}<span class="spin"></span>{{else}}·{{end}}
       </span>
       <span class="step-name">{{.Name}}</span>
-      {{if .Seconds}}<span class="step-t">{{secs .Seconds}}</span>{{end}}
+      {{if .Seconds}}<span class="step-t">{{secs .Seconds}}</span>{{else}}<span class="step-t dim">{{.State}}</span>{{end}}
       {{if .Note}}<span class="step-note">{{.Note}}</span>{{end}}
     </li>
     {{end}}
   </ol>
+  {{/* THE STEP MARKS ONLY MOVE ON RELOAD, and that is an acceptable line to
+       hold - but then the stage name and the elapsed time must move, or a
+       ten-minute start reads as a frozen page. These two spans are what the
+       stream patches; before them the only element live.html looked for was
+       rendered in the branch where Progress is nil, so it never existed while
+       a model was actually starting. */}}
   <p class="note dim">
-    {{secs .ElapsedSec}} elapsed{{if .LastRunSec}} · last successful start took {{secs .LastRunSec}}{{end}}
+    <span data-stage>{{.Current}}</span> ·
+    <span data-elapsed>{{secs .ElapsedSec}}</span> elapsed{{if .LastRunSec}} · last successful start took {{secs .LastRunSec}}{{end}}
   </p>
 </div>
 {{end}}
