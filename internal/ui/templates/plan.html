@@ -1,0 +1,97 @@
+{{define "plan"}}{{template "head" .}}
+{{with .Plan}}
+
+<h1>Deploy {{.ModelID}}</h1>
+<p class="lede">
+  {{if .Result.Fits}}This fits. {{gib1 .Result.MarginGiB}} GiB would remain.
+  {{else}}This does not fit. It is {{gib1 (neg .Result.MarginGiB)}} GiB over.{{end}}
+</p>
+
+{{/* The projection, with the incoming model as its own hatched segment. A
+     refusal you can look at beats one you have to read. */}}
+<div class="panel">
+  <h2>Projected</h2>
+  <div class="pool-map">
+    <div class="pool-bar plan-bar">
+      {{range .Projected.Segments}}
+        <div class="seg{{if .Reserve}} seg-reserve{{else if .Free}} seg-free{{else}} seg-{{.Phase}}{{end}}{{if eq .ID $.Plan.ModelID}} seg-incoming{{end}}"
+             style="width:{{pctf .Pct}}%"
+             title="{{if .ID}}{{.ID}} — {{gib1 .GiB}} GiB{{else if .Reserve}}reserved — {{gib1 .GiB}} GiB{{else}}free — {{gib1 .GiB}} GiB{{end}}">{{.Label}}</div>
+      {{end}}
+      {{/* When the projection overflows, the bar is scaled past the pool and a
+           dashed rule marks where the real limit is - so the overflow reads as
+           overflow rather than as a bar that merely looks full. */}}
+      {{if lt .PoolMarkPct 100.0}}
+        <div class="pool-mark" style="left:{{pctf .PoolMarkPct}}%" title="{{gib1 $.PoolGiB}} GiB — the pool ends here"></div>
+      {{end}}
+    </div>
+    <div class="pool-ruler" aria-hidden="true">
+      {{range .Projected.Ticks}}<span>{{gib1 .}}</span>{{end}}
+    </div>
+  </div>
+
+  <div class="facts">
+    <div class="fact"><span class="k">Incoming</span><span class="v">{{gib1 .Incoming.FootprintGiB}} GiB</span></div>
+    <div class="fact"><span class="k">Committed</span><span class="v">{{gib1 .Result.CommittedGiB}} GiB</span></div>
+    <div class="fact"><span class="k">Reserve</span><span class="v">{{gib1 $.ReserveGiB}} GiB</span></div>
+    <div class="fact">
+      <span class="k">Margin</span>
+      <span class="v{{if lt .Result.MarginGiB 0.0}} gap{{end}}">{{gib1 .Result.MarginGiB}} GiB</span>
+    </div>
+  </div>
+  {{if .Result.Warning}}<p class="note warn">{{.Result.Warning}}</p>{{end}}
+</div>
+
+{{if .Result.Fits}}
+<div class="panel">
+  <form method="post" action="/api/deploy/{{.ModelID}}">
+    <button class="btn-primary" type="submit">Deploy {{.ModelID}}</button>
+  </form>
+  <p class="note">Starting takes eight to ten minutes on this hardware. The Node
+  page shows which stage it has reached.</p>
+</div>
+{{else}}
+
+{{/* What to stop, each with the button that stops it. The page recomputes on
+     return, so the margin updates as things are freed. */}}
+<div class="panel">
+  <h2>Stop one of these to make room</h2>
+  <p class="note">Largest first — the shortest route back to a margin that fits.</p>
+  {{range .MustFree}}
+  <div class="orphan">
+    <span class="mono"><strong>{{.Recipe.ID}}</strong></span>
+    <span class="chip is-{{.Phase}}">{{.Phase}}</span>
+    <span class="note">{{gib1 .FootprintGiB}} GiB</span>
+    <span class="orphan-act">
+      <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
+      <form method="post" action="/api/undeploy/{{.Recipe.ID}}?next=/model/{{$.Plan.ModelID}}/plan" style="display:inline">
+        <button class="btn-danger" type="submit">Stop</button>
+      </form>
+    </span>
+  </div>
+  {{end}}
+</div>
+
+{{/* Force stays available because the reserve is deliberately conservative and
+     the operator sometimes knows better. It is typed, not clicked. */}}
+<details class="drawer">
+  <summary>Deploy anyway</summary>
+  <div class="panel warn-panel">
+    <p class="note warn"><strong>The reserve exists because this node has OOM-killed
+    models before.</strong> If the pool runs out, the kernel picks which process
+    dies — and it may not pick this one. A model that was serving fine can be the
+    one that goes.</p>
+    <p class="note">The reserve is deliberately conservative and has no formula
+    behind it, so it will sometimes refuse a set that would in fact fit. That is
+    the case this is for.</p>
+    <form method="post" action="/api/deploy/{{.ModelID}}?force=true" class="confirmform">
+      <label for="confirm" class="mono">Type <strong>{{.ModelID}}</strong> to confirm</label>
+      <input id="confirm" name="confirm" type="text" autocomplete="off" spellcheck="false" required>
+      <button class="btn-danger" type="submit">Force deploy</button>
+    </form>
+  </div>
+</details>
+{{end}}
+
+{{end}}
+{{template "foot" .}}{{end}}

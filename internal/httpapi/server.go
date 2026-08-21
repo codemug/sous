@@ -140,6 +140,9 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	s.mux.HandleFunc("POST /login", s.doLogin)
 	s.mux.HandleFunc("POST /logout", s.doLogout)
 	s.mux.HandleFunc("GET /model/{id}", s.pageModel)
+	// A question, not an action: GET with no side effects, so it can be linked,
+	// refreshed and returned to after stopping something.
+	s.mux.HandleFunc("GET /model/{id}/plan", s.pagePlan)
 	// An HTML form can only issue GET and POST. The REST verbs above stay
 	// for API clients; these are the same handlers on paths a browser can
 	// actually submit to.

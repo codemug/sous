@@ -59,6 +59,9 @@ func Templates() (*template.Template, error) {
 		"pctf": func(f float64) string { return strconv.FormatFloat(f, 'f', 2, 64) },
 		// secs renders a duration the way an operator reads one: seconds under
 		// a minute, minutes and seconds above.
+		// neg renders an over-commit as a positive number, so the copy can read
+		// "12.4 GiB over" instead of "-12.4 GiB over".
+		"neg": func(f float64) float64 { return -f },
 		"secs": func(f float64) string {
 			if f <= 0 {
 				return "—"

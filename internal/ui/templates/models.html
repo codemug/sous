@@ -107,9 +107,10 @@ args:
         <span class="row-acts">
           <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
           {{if and (not .Recipe.Archived) (not .Deployed)}}
-          <form method="post" action="/api/deploy/{{.Recipe.ID}}" style="margin:0">
-            <button type="submit">Deploy</button>
-          </form>
+          {{/* Through the plan, not straight to deploy: the projection is
+               worth seeing before a ten-minute start, and a refusal explains
+               itself there rather than as a banner. */}}
+          <a class="btn" href="/model/{{.Recipe.ID}}/plan">Deploy…</a>
           {{end}}
         </span>
       </td>

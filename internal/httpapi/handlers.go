@@ -35,6 +35,7 @@ type pageData struct {
 	Model       *modelPage
 	Models      []ModelView
 	Pool        *PoolBar
+	Plan        *PlanPage
 	Keys        *keysPage
 	Fetches     *fetchView
 	// BaseURL is this server as the BROWSER reached it, so a copyable example
@@ -248,22 +249,28 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 		// and the way out, not just a failure.
 		var ce *deploy.CapacityError
 		if errors.As(err, &ce) {
+			// THE REFUSAL IS A PAGE, not a sentence. It carries a margin, a
+			// list of what to stop and a force path; a query string carries
+			// none of those, so an operator was told no and left to work out
+			// the rest themselves.
 			if wantsHTML(r) {
-				s.redirect(w, r, "/catalog", ce.Error(), true)
+				s.renderPlanRefusal(w, r, v, ce)
 				return
 			}
 			writeJSON(w, http.StatusConflict, ce.Result)
 			return
 		}
 		if wantsHTML(r) {
-			s.redirect(w, r, "/catalog", err.Error(), true)
+			s.redirect(w, r, "/models", err.Error(), true)
 			return
 		}
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/deployments", "", false)
+		// Back to the Node page: the thing the operator now wants to watch is
+		// the model coming up, which is where the stepper is.
+		s.redirect(w, r, "/", "", false)
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
@@ -291,7 +298,9 @@ func (s *Server) undeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/deployments", "", false)
+		// Back to the Node page: the thing the operator now wants to watch is
+		// the model coming up, which is where the stepper is.
+		s.redirect(w, r, "/", "", false)
 		return
 	}
 	// 202, not 204: the caller is being told this was accepted, not finished.
@@ -477,4 +486,23 @@ func (s *Server) pageModels(w http.ResponseWriter, r *http.Request) {
 		d.Models = vs
 		return nil
 	})
+}
+
+// pageBody renders a page WITHOUT writing a status, so a caller that has
+// already written one - a 409 carrying the plan, say - still gets a whole page
+// rather than a bare code.
+func (s *Server) pageBody(w http.ResponseWriter, r *http.Request, name, title string, fill func(*pageData) error) {
+	ds, _ := s.mgr.List()
+	d := pageData{
+		Title: title, PoolGiB: s.pool, ReserveGiB: s.mgr.Planner.ReserveGiB,
+		DeployCount: len(ds), Deployments: ds,
+		BaseURL: baseURL(r),
+	}
+	if fill != nil {
+		if err := fill(&d); err != nil {
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tpl.ExecuteTemplate(w, name, d)
 }
