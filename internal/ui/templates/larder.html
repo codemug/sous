@@ -1,8 +1,9 @@
 {{define "larder"}}{{template "head" .}}
-<p class="note">What is actually on disk, reconciled against the catalog. Sizes are measured
-by walking the tree, not read from a model card — the card describes the repo,
-the disk holds what landed. On this fleet that distinction was worth 206 GB.</p>
 
+<h1>Larder</h1>
+<p class="lede">What is actually on disk, reconciled against the catalog. Sizes are
+measured by walking the tree, not read from a model card — the card describes the
+repo, the disk holds what landed. On this fleet that distinction was worth 206 GB.</p>
 
 <p class="note"><strong>{{.LarderTotal}}</strong> on disk ·
 <strong>{{.Reclaimable}}</strong> reclaimable without force</p>
@@ -15,104 +16,110 @@ the disk holds what landed. On this fleet that distinction was worth 206 GB.</p>
 <div class="panel">
   <h2>Download a model</h2>
   <form method="post" action="/larder/fetch" class="fetchform">
-    <label for="repo" class="mono">HuggingFace repo</label>
+    <label for="repo" class="mlabel">HuggingFace repo</label>
     <input id="repo" name="repo" type="text" required
            placeholder="Qwen/Qwen3.6-35B-A3B-FP8"
-           pattern="[A-Za-z0-9][A-Za-z0-9._\-]*/[A-Za-z0-9][A-Za-z0-9._\-]*"
            autocomplete="off" spellcheck="false" autocapitalize="off">
     <button class="btn-primary" type="submit">Download</button>
   </form>
   <p class="note">Runs in the background and writes into this same cache. Tens of
-  gigabytes take tens of minutes — do it <em>before</em> the window where you
-  stop something to make room.</p>
+  gigabytes take tens of minutes — do it <em>before</em> the window where you stop
+  something to make room.</p>
 </div>
 
 {{with .Fetches}}{{if .Jobs}}
 <div class="panel">
   <h2>Downloads</h2>
   <div class="scroll">
-    <div class="cards">
-  {{range .Larder}}
-    <article class="card{{if eq (printf "%s" .State) "orphan"}} is-gone{{else}} is-ready{{end}}">
-      <div class="card-head">
-        <span class="card-title">{{.Repo}}</span>
-        <span class="chip{{if eq (printf "%s" .State) "orphan"}} is-gone{{else}} is-ready{{end}}">{{.State}}</span>
-      </div>
-      <div class="card-foot">
-        <span class="stat"><span class="mlabel">On disk</span><span class="v">{{gibOf .Bytes | printf "%.1f"}} GiB</span></span>
-        <span class="stat">
-          <span class="mlabel">Used by</span>
-          <span class="v">{{if .ReferencedBy}}{{range $i,$r := .ReferencedBy}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}nothing{{end}}</span>
-        </span>
-      </div>
-      {{/* A set a container is holding is not deletable at all, so its card
-           offers no armed state rather than a button that will refuse. */}}
-      {{if not .ReferencedBy}}
-      <details class="drawer danger-drawer">
-        <summary>Delete weights</summary>
-        <div class="panel warn-panel">
-          <p class="note warn">This frees {{gibOf .Bytes | printf "%.1f"}} GiB and the only
-          way back is the network. No download rate is recorded here, so how long
-          a re-fetch takes is not something this page can honestly tell you.</p>
-          <form method="post" action="/api/larder/delete" class="confirmform">
-            <input type="hidden" name="repo" value="{{.Repo}}">
-            <label class="mono">Type <strong>{{.Repo}}</strong> to confirm</label>
-            <input name="confirm" type="text" required autocomplete="off" spellcheck="false">
-            <button class="btn-danger" type="submit">Delete</button>
-          </form>
-        </div>
-      </details>
-      {{end}}
-    </article>
-  {{end}}
-  </div>
+    <table>
+      <thead><tr><th>Repo</th><th>State</th><th>Detail</th><th></th></tr></thead>
+      <tbody>
+        {{range .Jobs}}
+        <tr>
+          <td class="mono">{{.Repo}}</td>
+          <td>
+            {{if eq (printf "%s" .Phase) "downloading"}}
+              <span class="chip is-starting"><span class="spin" aria-hidden="true"></span>downloading</span>
+            {{else if eq (printf "%s" .Phase) "done"}}
+              <span class="chip is-ready">done</span>
+            {{else}}
+              <span class="chip is-failed">failed</span>
+            {{end}}
+          </td>
+          <td class="mono dim">{{if .Detail}}{{.Detail}}{{else}}—{{end}}</td>
+          <td class="acts">
+            {{if ne (printf "%s" .Phase) "downloading"}}
+            <form method="post" action="/larder/fetch/forget" style="display:inline">
+              <input type="hidden" name="repo" value="{{.Repo}}">
+              <button class="btn" type="submit">Clear</button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
   </div>
 </div>
 {{end}}{{end}}
 
-<div class="wrap">
-<table>
-  <thead>
-    <tr>
-      <th>Repository</th><th class="n">Size</th><th>State</th>
-      <th>Referenced by</th><th></th>
-    </tr>
-  </thead>
-  <tbody>
+{{if .Larder}}
+<h2>On disk</h2>
+<div class="cards">
   {{range .Larder}}
-    <tr>
-      <td><strong>{{.Repo}}</strong></td>
-      <td class="n">{{printf "%.2f GiB" (gibOf .Bytes)}}</td>
-      <td>
-        {{if eq .State "referenced"}}<span class="tag t-kind">in use</span>
-        {{else if eq .State "protected"}}<span class="tag t-arch">rollback</span>
-        {{else}}<span class="tag" style="color:var(--warn)">stale</span>{{end}}
-      </td>
-      <td class="sub">
-        {{if .ReferencedBy}}{{range .ReferencedBy}}{{.}} {{end}}{{else}}—{{end}}
-      </td>
-      <td>
-        {{if eq .State "referenced"}}
-          <span class="sub">protected</span>
-        {{else if eq .State "protected"}}
-          <form method="post" action="/api/larder/delete?repo={{.Repo}}&amp;force=true"
-                style="margin:0"
-                onsubmit="return confirm('These are rollback weights. Deleting them turns a redeploy into a re-download during an outage. Continue?')">
-            <button type="submit">Force delete</button>
-          </form>
-        {{else}}
-          <form method="post" action="/api/larder/delete?repo={{.Repo}}" style="margin:0">
-            <button type="submit">Delete</button>
-          </form>
-        {{end}}
-      </td>
-    </tr>
-  {{else}}
-    <tr><td colspan="5" class="sub">Nothing downloaded yet.</td></tr>
+  {{/* THREE STATES, not two. referenced means a live recipe names it or it is
+       deployed now; protected means only an ARCHIVED recipe does - the rollback
+       weights, and the difference between a redeploy and a 25 GB re-download
+       during an outage; stale means nothing names it. Collapsing protected into
+       either neighbour is how the rollback path gets deleted by accident. */}}
+  <article class="card{{if eq (printf "%s" .State) "referenced"}} is-ready{{else if eq (printf "%s" .State) "protected"}} is-starting{{else}} is-gone{{end}}">
+    <div class="card-head">
+      <span class="card-title">{{.Repo}}</span>
+      {{if eq (printf "%s" .State) "referenced"}}
+        <span class="chip is-ready">in use</span>
+      {{else if eq (printf "%s" .State) "protected"}}
+        <span class="chip is-starting">protected</span>
+      {{else}}
+        <span class="chip is-gone">stale</span>
+      {{end}}
+    </div>
+    <div class="card-foot">
+      <span class="stat"><span class="mlabel">On disk</span><span class="v">{{printf "%.1f" (gibOf .Bytes)}} GiB</span></span>
+      <span class="stat">
+        <span class="mlabel">Used by</span>
+        <span class="v">{{if .ReferencedBy}}{{range $i,$r := .ReferencedBy}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}nothing{{end}}</span>
+      </span>
+    </div>
+
+    {{/* Only stale sets offer deletion here. A referenced one is refused by the
+         guard anyway, and a protected one is the rollback path - both would be
+         a button that exists to say no. */}}
+    {{if eq (printf "%s" .State) "stale"}}
+    <details class="drawer danger-drawer">
+      <summary>Delete weights</summary>
+      <div class="panel warn-panel">
+        <p class="note warn">This frees {{printf "%.1f" (gibOf .Bytes)}} GiB and the only
+        way back is the network. No download rate is recorded here, so how long a
+        re-fetch would take is not something this page can honestly tell you.</p>
+        <form method="post" action="/api/larder/delete" class="confirmform">
+          <input type="hidden" name="repo" value="{{.Repo}}">
+          <label class="mlabel">Type <strong>{{.Repo}}</strong> to confirm</label>
+          <input name="confirm" type="text" required autocomplete="off" spellcheck="false">
+          <button class="btn-danger" type="submit">Delete</button>
+        </form>
+      </div>
+    </details>
+    {{end}}
+  </article>
   {{end}}
-  </tbody>
-</table>
 </div>
+{{else}}
+<div class="panel empty">
+  Nothing on disk yet. Download a model above, or deploy one and let it fetch its
+  own weights — though that holds a deploy window open for the length of a download.
+</div>
+{{end}}
+
 {{with .Fetches}}{{if .Active}}
 <script>
   // Only while something is still moving. A page that reloads forever fights

@@ -39,3 +39,20 @@ func TestListScreensUseCards(t *testing.T) {
 		}
 	}
 }
+
+// The larder is the one screen where a botched edit hid: a regex matched the
+// DOWNLOADS table inside {{with .Fetches}} and replaced that, so the cards only
+// appeared while a download was in flight and the old table stayed below.
+func TestLarderShowsCardsWithNoDownloadInFlight(t *testing.T) {
+	h := newTestServerWithHub(t)
+	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
+	if !strings.Contains(body, `class="cards"`) {
+		t.Error("no card grid on the larder with nothing downloading")
+	}
+	if strings.Contains(body, "<table") && strings.Contains(body, "Referenced by") {
+		t.Error("the old larder table is still rendered alongside the cards")
+	}
+	if !strings.Contains(body, "</html>") {
+		t.Error("larder truncated")
+	}
+}
