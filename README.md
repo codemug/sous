@@ -120,6 +120,75 @@ different decisions, and a bare "yes" hides which one you have.
 **Force separates policy from safety.** It overrides a judgement you may disagree with —
 deleting rollback weights — and never overrides a guard protecting something in use.
 
+## One endpoint for every model
+
+Sous allocates a port per model, which means every client has to know which
+model is on which port — and that mapping changes whenever anything is
+redeployed. Worse, a port refuses connections for the eight to ten minutes a
+model spends loading, so "is it up yet" becomes a question each client answers
+badly.
+
+The gateway removes both problems. Models are addressed by name, the way they
+would be at any OpenAI-compatible provider:
+
+```bash
+curl $SOUS/v1/models -H "Authorization: Bearer $SOUS_API_TOKEN"
+
+curl $SOUS/v1/chat/completions -H "Authorization: Bearer $SOUS_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"ornith","messages":[{"role":"user","content":"hello"}]}'
+```
+
+`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/rerank` and
+the `/v1/audio/*` paths all route the same way. Streaming passes through
+unbuffered, so SSE token streaming works as it does against the model directly.
+
+A model can be named by any of its `served_as` aliases or by its recipe id;
+Sous rewrites the name to whatever the upstream actually answers to, so both
+work. Every deployment is listed by `/v1/models` **including ones that are not
+ready**, each carrying its phase — hiding a loading model would make a client
+that polls conclude it does not exist.
+
+Requests to a model that is not ready get a described `503` rather than a
+refused connection:
+
+| phase | response |
+|---|---|
+| `starting` | 503 `model_starting`, with `Retry-After` |
+| `stopping` | 503 `model_stopping` |
+| `failed` | 503 `model_failed` |
+| unknown name | 404 naming every model that *is* deployed |
+
+**It is not a load balancer.** Envoy AI Gateway fans out across replicas and
+providers; this fronts one node where each model is a singleton. A request that
+cannot be served says so immediately rather than being queued, and is never
+quietly sent to a different model than the one asked for.
+
+## Phases, and why "running" was not enough
+
+A container that exists is not a model that works. On this hardware a vLLM
+model is `running` for eight to ten minutes — loading weights, compiling,
+capturing CUDA graphs — before it answers anything.
+
+| phase | meaning |
+|---|---|
+| `starting` | container up, port not answering yet |
+| `ready` | the port answers; the only phase that means usable |
+| `failed` | crashed, OOM-killed, or restarting |
+| `stopping` | an undeploy is in flight |
+| `gone` | a record with no container behind it |
+
+Phases are derived on every read and never stored — a stored phase starts lying
+the moment a container dies outside Sous. Readiness is a port that *answers*,
+and failure is checked before readiness, because a crash-looping container
+passes through `running` repeatedly and would otherwise be caught mid-loop and
+called healthy.
+
+Undeploy returns `202` immediately and reports `stopping` until the container is
+actually gone. Docker's stop carries a 60-second grace period and a 61 GiB model
+uses most of it; holding the request for that long is indistinguishable from a
+broken button.
+
 ## Recipes are distributable
 
 A **source** is a git repo of recipe YAML, mirrored read-only. Your edits live as sparse
