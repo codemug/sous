@@ -182,6 +182,43 @@ connection.
 If this fleet ever grows a second node or a hosted provider to fail over to,
 Envoy is the right answer and this becomes the thing behind it.
 
+## API keys
+
+The gateway is behind the same guard as everything else, so a client needs a
+credential. The obvious one — `SOUS_API_TOKEN` — is **root-equivalent**: it can
+deploy, undeploy and delete recipes. Giving that to a notebook so it can call a
+model hands the notebook the ability to destroy the node, and revoking it later
+breaks every other caller at the same time.
+
+So keys issued from the dashboard reach the **inference surface and nothing
+else**. A leaked key spends GPU time; it cannot change what is deployed.
+
+```bash
+curl $SOUS/v1/chat/completions \
+  -H "Authorization: Bearer sk-sous-…" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"…","messages":[{"role":"user","content":"hello"}]}'
+```
+
+It also works as the `api_key` in any OpenAI client with `base_url` pointed at
+`$SOUS/v1`, because most client libraries send a lone secret in the basic-auth
+password field.
+
+Keys are **stored as SHA-256 hashes** and the plaintext is shown exactly once,
+at creation. It is not recoverable afterwards by anyone, including whoever runs
+the process — a store that can show a key back to a browser can show it to
+anyone who reaches the store. The list keeps the last six characters so you can
+match a key you hold against a row without revealing anything useful.
+
+Revoking **disables without deleting**. The row is the only evidence that the
+key existed, what it was called and when it was last used, and that last one is
+the question actually asked after a leak. Deleting is available for keys that
+were never used.
+
+Last-used timestamps are buffered and flushed on a timer rather than written per
+request, because a key used in a streaming loop would otherwise rewrite its own
+file once per token.
+
 ## Phases, and why "running" was not enough
 
 A container that exists is not a model that works. On this hardware a vLLM

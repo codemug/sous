@@ -2,6 +2,7 @@
 package main
 
 import (
+	"github.com/codemug/sous/internal/apikey"
 	"log"
 	"net/http"
 	"os"
@@ -104,9 +105,24 @@ func main() {
 			"can start and stop containers on this node")
 	}
 
+	// API keys reach models and nothing else. Wiring the guard into auth is
+	// what makes that true: without it a key would be an unrecognised bearer
+	// token and simply fail, which is safe but useless.
+	keys := &apikey.Manager{Store: st}
+	guard.Keys = apikey.Guard{M: keys}
+
+	// Buffered last-used timestamps are flushed on a timer rather than written
+	// per request: a key used in a streaming loop would otherwise rewrite its
+	// own file once per token.
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			keys.FlushLastUsed()
+		}
+	}()
+
 	// The larder scans MODEL_DIR/hub, which is where huggingface_hub places
 	// snapshots under the HF_HOME bind mount.
-	h, err := httpapi.New(mgr, cat, mem.TotalGiB,
+	h, err := httpapi.New(mgr, cat, keys, mem.TotalGiB,
 		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard)
 	if err != nil {
 		log.Fatalf("http: %v", err)

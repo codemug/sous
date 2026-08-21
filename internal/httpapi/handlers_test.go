@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"github.com/codemug/sous/internal/apikey"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +124,8 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	if _, err := c.SeedIfEmpty(); err != nil {
 		t.Fatal(err)
 	}
+	keys := &apikey.Manager{Store: s}
+	guard.Keys = apikey.Guard{M: keys}
 	m := &deploy.Manager{
 		Store: s, Catalog: c, Runtime: rt,
 		Planner:    capacity.Planner{PoolGiB: 121.6, ReserveGiB: 24, WarnFreeGiB: 12},
@@ -131,7 +134,7 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	h, err := New(m, c, 121.6, hub, t.TempDir(), guard)
+	h, err := New(m, c, keys, 121.6, hub, t.TempDir(), guard)
 	if err != nil {
 		t.Fatal(err)
 	}

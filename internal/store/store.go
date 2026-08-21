@@ -26,6 +26,10 @@ const (
 	// Overlays are stored flat as "<source>--<recipe>" rather than nested, so
 	// the store's single-segment name guard keeps applying unchanged.
 	KindOverlay Kind = "overlays"
+	// APIKeys are inference-only credentials, stored as hashes. They live in
+	// the same store as everything else because they share its guarantee: a
+	// directory of YAML an operator can read, back up and delete by hand.
+	KindAPIKey Kind = "apikeys"
 	// SeedMarks record the exact content Sous last wrote for a seeded recipe.
 	// Without them an upgrade cannot tell a recipe it wrote itself from one an
 	// operator edited, and so can only ever refuse to touch either.
@@ -33,7 +37,7 @@ const (
 )
 
 var allKinds = []Kind{KindRecipe, KindObservation, KindDeployment,
-	KindExport, KindSource, KindOverlay, KindSeedMark}
+	KindExport, KindSource, KindOverlay, KindSeedMark, KindAPIKey}
 
 type Store struct{ root string }
 

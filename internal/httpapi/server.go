@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/gateway"
 	"html/template"
 	"net/http"
@@ -18,9 +19,10 @@ import (
 )
 
 type Server struct {
-	mgr *deploy.Manager
-	cat *catalog.Catalog
-	tpl *template.Template
+	mgr  *deploy.Manager
+	cat  *catalog.Catalog
+	keys *apikey.Manager
+	tpl  *template.Template
 
 	pool float64
 	// hubDir is the HuggingFace cache under the model directory. The larder
@@ -39,13 +41,13 @@ type Server struct {
 	guard auth.Config
 }
 
-func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sourcesDir string,
-	guard auth.Config) (http.Handler, error) {
+func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, poolGiB float64,
+	hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
+	s := &Server{mgr: m, cat: c, keys: keys, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	// The OpenAI-compatible surface. Every deployed model behind one endpoint,
@@ -85,6 +87,15 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	s.mux.HandleFunc("PUT /api/recipes/{id}", s.updateRecipe)
 	s.mux.HandleFunc("DELETE /api/recipes/{id}", s.deleteRecipe)
 	s.mux.HandleFunc("POST /api/recipes/{id}/diff", s.diffRecipe)
+	// API KEYS. Inference-only credentials, so a client can call a model
+	// without holding something that could undeploy one.
+	s.mux.HandleFunc("GET /api/keys", s.listKeys)
+	s.mux.HandleFunc("POST /api/keys", s.createKey)
+	s.mux.HandleFunc("DELETE /api/keys/{id}", s.revokeKey)
+	s.mux.HandleFunc("POST /keys/{id}/revoke", s.revokeKey)
+	s.mux.HandleFunc("POST /keys", s.createKey)
+	s.mux.HandleFunc("GET /keys", s.pageKeys)
+
 	s.mux.HandleFunc("GET /api/deployments", s.listDeployments)
 	s.mux.HandleFunc("GET /api/status", s.status)
 	s.mux.HandleFunc("GET /api/logs/{id}", s.logs)

@@ -9,6 +9,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"time"
 )
 
 //go:embed templates/*.html
@@ -47,6 +48,25 @@ func Templates() (*template.Template, error) {
 		"sub": func(a, b float64) float64 { return a - b },
 		// dur renders an uptime a person reads at a glance. Seconds matter for
 		// a model that just restarted; days matter for one that has not.
+		// ago renders a timestamp as elapsed time. "3 days ago" answers the
+		// question a key list is actually asked - is this still in use - which
+		// an ISO timestamp makes the reader compute for themselves.
+		"ago": func(t time.Time) string {
+			if t.IsZero() {
+				return "never"
+			}
+			d := time.Since(t)
+			switch {
+			case d < time.Minute:
+				return "just now"
+			case d < time.Hour:
+				return fmt.Sprintf("%dm ago", int(d.Minutes()))
+			case d < 24*time.Hour:
+				return fmt.Sprintf("%dh ago", int(d.Hours()))
+			default:
+				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+			}
+		},
 		"dur": func(sec float64) string {
 			switch {
 			case sec < 90:

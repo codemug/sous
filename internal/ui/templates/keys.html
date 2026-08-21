@@ -1,0 +1,108 @@
+{{define "keys"}}{{template "head" .}}
+
+<h1>API keys</h1>
+<p class="lede">Credentials for calling models. A key reaches the inference API
+and nothing else — it cannot deploy, undeploy, or delete anything, which is why
+it is safe to put one in a notebook or a demo page.</p>
+
+{{with .Keys}}
+
+{{if .Fresh}}
+<div class="panel fresh">
+  <h2>Copy this now — it is not shown again</h2>
+  <p class="note">Sous stores a hash, not the key. Nobody can read it back,
+  including whoever runs this server. If it is lost, revoke it and make another.</p>
+  <pre class="secret" id="fresh">{{.Fresh}}</pre>
+  <button class="btn" type="button" onclick="copyFresh()">Copy</button>
+  <span class="mono" id="copied" hidden>copied</span>
+  <p class="note">Issued as <strong>{{.FreshName}}</strong>. Use it as a bearer
+  token, or as the API key in any OpenAI client pointed at this host.</p>
+</div>
+<script>
+  function copyFresh() {
+    var el = document.getElementById("fresh");
+    navigator.clipboard.writeText(el.textContent.trim()).then(function () {
+      var c = document.getElementById("copied");
+      c.hidden = false;
+      setTimeout(function () { c.hidden = true; }, 2000);
+    });
+  }
+</script>
+{{end}}
+
+<div class="panel">
+  <h2>New key</h2>
+  <form method="post" action="/keys" class="keyform">
+    <label for="kname" class="mono">Name</label>
+    <input id="kname" name="name" type="text" maxlength="64" required
+           placeholder="voice demo, usman's laptop, CI"
+           autocomplete="off" spellcheck="false">
+    <button class="btn-primary" type="submit">Create</button>
+  </form>
+  <p class="note">Name it after whoever holds it. A key nobody can attribute is
+  a key nobody dares revoke.</p>
+</div>
+
+{{if .Keys}}
+<div class="panel">
+  <h2>Issued</h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Ends in</th><th>Created</th><th>Last used</th><th>State</th><th></th></tr>
+      </thead>
+      <tbody>
+        {{range .Keys}}
+        <tr{{if .Disabled}} class="row-off"{{end}}>
+          <td><strong>{{.Name}}</strong><br><span class="mono dim">{{.ID}}</span></td>
+          <td class="mono">…{{.Hint}}</td>
+          <td class="mono">{{ago .CreatedAt}}</td>
+          {{/* Never-used is worth calling out: it is the only key that can be
+               revoked with no thought about what might break. */}}
+          <td class="mono">{{if .LastUsedAt.IsZero}}<span class="dim">never</span>{{else}}{{ago .LastUsedAt}}{{end}}</td>
+          <td>
+            {{if .Disabled}}<span class="chip is-gone">revoked</span>
+            {{else}}<span class="chip is-ready">active</span>{{end}}
+          </td>
+          <td class="acts">
+            {{if not .Disabled}}
+            <form method="post" action="/keys/{{.ID}}/revoke" style="display:inline">
+              <button class="btn-danger" type="submit">Revoke</button>
+            </form>
+            {{else}}
+            <form method="post" action="/keys/{{.ID}}/revoke" style="display:inline">
+              <input type="hidden" name="delete" value="true">
+              <button class="btn" type="submit">Delete</button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Revoking keeps the row, so the record of what existed and when
+  it was last used survives. Deleting removes it entirely — only worth doing to
+  a key that was never used.</p>
+</div>
+{{else}}
+<div class="panel empty">
+  No keys yet. Clients currently need the admin token, which can also deploy and
+  delete — that is the reason to issue one.
+</div>
+{{end}}
+
+<div class="panel">
+  <h2>Using a key</h2>
+  <pre class="snippet">curl {{.BaseURL}}/v1/chat/completions \
+  -H "Authorization: Bearer sk-sous-…" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"…","messages":[{"role":"user","content":"hello"}]}'</pre>
+  <p class="note">Or as the <span class="mono">api_key</span> in any OpenAI
+  client with <span class="mono">base_url</span> set to
+  <span class="mono">{{.BaseURL}}/v1</span>.</p>
+</div>
+
+{{end}}
+
+{{template "foot" .}}{{end}}

@@ -270,6 +270,30 @@ tbody tr:last-child td{border-bottom:none}
 .model.is-starting{border-left:3px solid var(--gold)}
 .model.is-stopping{opacity:.72}
 
+/* API keys. The fresh-secret panel is deliberately loud: it is shown once and
+   a reader who scrolls past it has lost the key. */
+.panel.fresh{border-left:3px solid var(--accent);background:var(--accent-wash)}
+.secret{
+  font-family:var(--font-mono);font-size:var(--text-sm);
+  background:var(--paper);border:1px solid var(--rule-firm);border-radius:var(--radius-sm);
+  padding:.7rem .85rem;margin:.6rem 0;overflow-x:auto;white-space:pre;
+  user-select:all;                     /* one click selects the whole key */
+}
+.snippet{
+  font-family:var(--font-mono);font-size:var(--text-xs);line-height:1.55;
+  background:var(--paper-2);border:1px solid var(--rule);border-radius:var(--radius-sm);
+  padding:.7rem .85rem;overflow-x:auto;
+}
+.keyform{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.keyform input{
+  font-family:var(--font-mono);font-size:var(--text-sm);
+  padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:var(--radius-sm);
+  background:var(--paper);color:var(--ink);min-width:20rem;flex:1 1 20rem;
+}
+.dim{color:var(--ink-faint)}
+tr.row-off{opacity:.55}
+td.acts{text-align:right;white-space:nowrap}
+
 button,.btn{
   display:inline-block;
   font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:.06em;
@@ -323,6 +347,7 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
     <a href="/catalog"{{if eq .Title "Catalog"}} aria-current="page"{{end}}>Catalog</a>
     <a href="/deployments"{{if eq .Title "Deployments"}} aria-current="page"{{end}}>Deployments</a>
     <a href="/larder"{{if eq .Title "Larder"}} aria-current="page"{{end}}>Larder</a>
+    <a href="/keys"{{if eq .Title "API keys"}} aria-current="page"{{end}}>API keys</a>
     <a href="/sources"{{if eq .Title "Sources"}} aria-current="page"{{end}}>Sources</a>
   </nav>
   <div class="rail-foot">

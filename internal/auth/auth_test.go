@@ -283,3 +283,95 @@ func TestFromEnvAcceptsTokenOnly(t *testing.T) {
 		t.Errorf("token = %q", c.Token)
 	}
 }
+
+// fakeKeys is a one-key authenticator scoped to /v1/.
+type fakeKeys struct{ secret string }
+
+func (f fakeKeys) Authenticate(s string) (string, bool) {
+	if s != "" && s == f.secret {
+		return "test-key", true
+	}
+	return "", false
+}
+func (f fakeKeys) Scope(p string) bool { return strings.HasPrefix(p, "/v1/") }
+
+func withKeys() Config {
+	return Config{User: "u", Password: "p", Token: "admin-tok", Keys: fakeKeys{secret: "sk-sous-good"}}
+}
+
+func hit(t *testing.T, c Config, path, bearer string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Accept", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rr := httptest.NewRecorder()
+	c.Middleware(ok(t)).ServeHTTP(rr, req)
+	return rr.Code
+}
+
+func TestAPIKeyReachesInference(t *testing.T) {
+	c := withKeys()
+	for _, p := range []string{"/v1/models", "/v1/chat/completions", "/v1/audio/speech"} {
+		if got := hit(t, c, p, "sk-sous-good"); got != http.StatusOK {
+			t.Errorf("%s with a valid key = %d, want 200", p, got)
+		}
+	}
+}
+
+// THE BOUNDARY THAT MAKES KEYS SAFE TO HAND OUT. A valid key on the control
+// plane must be refused exactly as an invalid one is. If this fails, a key
+// given to a notebook can undeploy a model.
+func TestAPIKeyCannotReachTheControlPlane(t *testing.T) {
+	c := withKeys()
+	for _, p := range []string{
+		"/api/deploy/qwen36", "/api/undeploy/qwen36", "/api/recipes",
+		"/api/larder/delete", "/api/status", "/api/keys", "/",
+	} {
+		if got := hit(t, c, p, "sk-sous-good"); got == http.StatusOK {
+			t.Errorf("SCOPE HOLE: a valid API key reached %s", p)
+		}
+	}
+}
+
+// The admin token keeps working everywhere; keys are an addition, not a
+// replacement.
+func TestAdminTokenStillReachesEverything(t *testing.T) {
+	c := withKeys()
+	for _, p := range []string{"/api/deploy/x", "/api/recipes", "/v1/models"} {
+		if got := hit(t, c, p, "admin-tok"); got != http.StatusOK {
+			t.Errorf("%s with the admin token = %d, want 200", p, got)
+		}
+	}
+}
+
+func TestInvalidAPIKeyIsRefusedOnInferenceToo(t *testing.T) {
+	c := withKeys()
+	if got := hit(t, c, "/v1/chat/completions", "sk-sous-wrong"); got != http.StatusUnauthorized {
+		t.Errorf("an invalid key got %d, want 401", got)
+	}
+}
+
+// An OpenAI SDK pointed at this host puts the key in the basic-auth password,
+// which is the shape most client libraries produce.
+func TestAPIKeyWorksAsBasicPassword(t *testing.T) {
+	c := withKeys()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth("", "sk-sous-good")
+	rr := httptest.NewRecorder()
+	c.Middleware(ok(t)).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("key as basic password = %d, want 200", rr.Code)
+	}
+}
+
+// Without a configured authenticator nothing changes: absent keys must not
+// become an open door.
+func TestNoKeyAuthenticatorMeansNoKeyAccess(t *testing.T) {
+	c := Config{User: "u", Password: "p"}
+	if got := hit(t, c, "/v1/models", "sk-sous-good"); got != http.StatusUnauthorized {
+		t.Errorf("got %d with no authenticator configured, want 401", got)
+	}
+}

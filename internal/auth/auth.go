@@ -50,6 +50,26 @@ type Config struct {
 	// larder deletion already use, where the dangerous path exists but has to
 	// be asked for by name.
 	Disabled bool
+
+	// Keys authenticates issued API keys, which reach the inference surface and
+	// NOTHING ELSE.
+	//
+	// This is the point of them. User, Password and Token are all
+	// root-equivalent: a holder can deploy, undeploy and delete recipes. Giving
+	// one to a notebook so it can call a model hands it the ability to destroy
+	// the node, and revoking it later breaks every other caller at once.
+	// A key issued here spends GPU time and can do nothing else.
+	Keys KeyAuthenticator
+}
+
+// KeyAuthenticator resolves a presented secret to a key. An interface so auth
+// does not depend on the store, and so tests can supply one in a line.
+type KeyAuthenticator interface {
+	Authenticate(secret string) (name string, ok bool)
+	// Scope reports whether a key may reach this path. Asking the key package
+	// rather than deciding here keeps one definition of what "inference only"
+	// means.
+	Scope(path string) bool
 }
 
 func FromEnv() (Config, error) {
@@ -104,7 +124,7 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if c.authorized(r) {
+		if c.authorized(r) || c.authorizedKey(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -139,6 +159,33 @@ func (c Config) Authorized(r *http.Request) bool {
 		return true
 	}
 	return c.authorized(r)
+}
+
+// authorizedKey checks an API key, which is scoped. Separate from authorized
+// because the answer depends on the PATH: the same credential is valid for
+// /v1/chat/completions and invalid for /api/undeploy, and collapsing the two
+// checks into one would lose that.
+func (c Config) authorizedKey(r *http.Request) bool {
+	if c.Keys == nil {
+		return false
+	}
+	tok, ok := bearer(r)
+	if !ok {
+		// curl -u :KEY and most client libraries put a lone secret in the basic
+		// password field, which is how an OpenAI SDK configured with a base URL
+		// will present it.
+		if _, p, has := r.BasicAuth(); has && p != "" {
+			tok = p
+		} else {
+			return false
+		}
+	}
+	if _, ok := c.Keys.Authenticate(tok); !ok {
+		return false
+	}
+	// AUTHENTICATED BUT OUT OF SCOPE IS STILL A REFUSAL. A valid key on
+	// /api/deploy must fail exactly as an invalid one does.
+	return c.Keys.Scope(r.URL.Path)
 }
 
 func (c Config) authorized(r *http.Request) bool {

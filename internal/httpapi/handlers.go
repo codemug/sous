@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/codemug/sous/internal/catalog"
@@ -31,6 +32,11 @@ type pageData struct {
 	IsError     bool
 	Node        *NodeStatus
 	Model       *modelPage
+	Keys        *keysPage
+	// BaseURL is this server as the BROWSER reached it, so a copyable example
+	// works when pasted. Building it from the listen address would print the
+	// bind host, which is frequently not the name anyone uses.
+	BaseURL string
 }
 
 // larderView gathers what the larder needs: the catalog to know what is
@@ -305,6 +311,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, name, title string
 		DeployCount: len(ds), Deployments: ds,
 		Message: r.URL.Query().Get("msg"),
 		IsError: r.URL.Query().Get("err") == "1",
+		BaseURL: baseURL(r),
 	}
 	if fill != nil {
 		if err := fill(&d); err != nil {
@@ -416,4 +423,16 @@ func (s *Server) pageSources(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	})
+}
+
+// baseURL reconstructs how the BROWSER reached this server, so a copyable
+// example works when pasted elsewhere. r.Host is what the client asked for;
+// the listen address would print the bind host, which on this fleet is a
+// tailnet IP nobody types.
+func baseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
