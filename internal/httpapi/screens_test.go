@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -214,5 +215,60 @@ func TestEveryDestructivePathUsesTheSharedConfirmation(t *testing.T) {
 		if !strings.Contains(body, `id="c-`) {
 			t.Errorf("%s still hand-rolls its confirmation instead of calling the partial", c.path)
 		}
+	}
+}
+
+// A FLASH MESSAGE DIED IN A REDIRECT HOP. Creating, deleting and syncing all
+// redirected to /catalog with ?msg=…, and /catalog is a 301 to /models that
+// dropped the query - so the action worked and the page said nothing about it.
+func TestCatalogRedirectKeepsTheMessage(t *testing.T) {
+	h := newTestServer(t)
+	rr := send(t, h, http.MethodGet, "/catalog?msg=created+qwen38", "", "")
+	if rr.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/models") {
+		t.Errorf("Location = %q, want /models", loc)
+	}
+	if !strings.Contains(loc, "msg=created") {
+		t.Errorf("Location = %q dropped the message; the confirmation is lost", loc)
+	}
+}
+
+// And the handlers no longer take that hop at all.
+func TestRecipeCreationLandsOnModelsWithItsMessage(t *testing.T) {
+	h := newTestServer(t)
+	yaml := "id: made-up\nkind: vllm\nmodality: text\n" +
+		"image: vllm/vllm-openai:latest\nmodel: org/Model-Name\n"
+	rr := post(t, h, "/api/recipes", "application/x-www-form-urlencoded",
+		"body="+url.QueryEscape(yaml))
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/models") {
+		t.Errorf("created a recipe and landed on %q, want /models", loc)
+	}
+	if !strings.Contains(loc, "msg=") {
+		t.Errorf("Location = %q carries no confirmation", loc)
+	}
+}
+
+// "The pool is entirely free" sat directly beneath a list of records that had
+// gone wrong. Orphans hold no memory, so Residents is zero - but the pool is
+// not what the operator is looking at.
+func TestEmptyStateDoesNotClaimAFreePoolBesideOrphans(t *testing.T) {
+	h, rt := newTestServerWithRuntime(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	rt.mu.Lock()
+	rt.running = map[string]bool{}
+	rt.mu.Unlock()
+
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+	if strings.Contains(body, "entirely free") {
+		t.Error("the page claims an entirely free pool while listing orphaned records")
+	}
+	if !strings.Contains(body, "Nothing is holding memory") {
+		t.Error("no empty state at all for a node whose only records are orphans")
 	}
 }

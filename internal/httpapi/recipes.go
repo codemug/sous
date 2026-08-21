@@ -104,7 +104,7 @@ func (s *Server) createRecipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/catalog", "created "+rec.ID, false)
+		s.redirect(w, r, "/models", "created "+rec.ID, false)
 		return
 	}
 	writeJSON(w, http.StatusCreated, rec)
@@ -254,7 +254,7 @@ func (s *Server) deleteRecipe(w http.ResponseWriter, r *http.Request) {
 		if undeployed {
 			msg = "stopped and deleted " + id
 		}
-		s.redirect(w, r, "/catalog", msg, false)
+		s.redirect(w, r, "/models", msg, false)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "undeployed": undeployed})

@@ -200,7 +200,7 @@ func (s *Server) syncRecipes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/catalog", fmt.Sprintf(
+		s.redirect(w, r, "/models", fmt.Sprintf(
 			"catalog sync: %d added, %d updated, %d kept, %d already current",
 			len(res.Added), len(res.Updated), len(res.Kept), len(res.Current)), false)
 		return
@@ -457,8 +457,18 @@ func baseURL(r *http.Request) string {
 //
 // 301 rather than a second handler: a renamed page should stop existing, not
 // quietly keep working - two live names for one page is how they drift.
+// redirectTo keeps a renamed route working.
+//
+// IT CARRIES THE QUERY. Every flash message on this UI travels as ?msg=…, so a
+// redirect that dropped it turned "created qwen38" into a silent reload - the
+// action worked and the page said nothing about it. Three handlers redirected
+// through /catalog for exactly that reason; they now point at /models directly
+// and this preserves the query for anything else still on the old path.
 func redirectTo(to string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.RawQuery; q != "" {
+			to += "?" + q
+		}
 		http.Redirect(w, r, to, http.StatusMovedPermanently)
 	}
 }

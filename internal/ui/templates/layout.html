@@ -257,11 +257,6 @@ tbody tr:last-child td{border-bottom:none}
   white-space:nowrap;
 }
 .chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-.chip.is-running{color:var(--ok);border-color:var(--ok);background:var(--ok-wash)}
-.chip.is-drift  {color:var(--drift);border-color:var(--drift);background:var(--drift-wash)}
-/* Square dot, not round: shape carries the distinction for anyone who cannot
-   separate the two hues. */
-.chip.is-drift::before{border-radius:1px}
 .chip.is-idle::before{background:none;border:1px solid currentColor}
 .chip.is-arch{color:var(--ink-faint);border-style:dashed}
 .chip.is-arch::before{background:none;border:1px solid currentColor;border-radius:1px}

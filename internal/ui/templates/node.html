@@ -56,8 +56,13 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
   </div>
 {{else}}
 <div class="panel empty">
-  Nothing deployed. The pool is entirely free —
-  <a href="/models">pick a model</a> to start one.
+  {{if .Pool.Orphans}}
+    Nothing is holding memory. The records above have no container —
+    clear them, or <a href="/models">pick a model</a> to start one.
+  {{else}}
+    Nothing deployed. The pool is entirely free —
+    <a href="/models">pick a model</a> to start one.
+  {{end}}
 </div>
 {{end}}
 
