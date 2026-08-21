@@ -190,16 +190,39 @@ h2{
 }
 
 /* Hairlines do the work. No shadows, no boxed cards. */
+/* A panel draws a border and a background, so it needs the inset to go with
+ * them. Without padding every heading, form and paragraph sits flush against
+ * the line - which is what "the text is next to the border" was.
+ *
+ * The panel used to be a bare grouping rule with no box; it grew a border and a
+ * background and never grew the padding those imply. */
 .panel{
   border:1px solid var(--rule);border-radius:var(--radius-md);
   background:var(--paper-2);
+  padding:var(--space-md);
+  margin-bottom:var(--space-md);
 }
+/* The last child inside a panel should not push the panel taller than its own
+   padding - a trailing paragraph margin reads as uneven bottom inset. */
+.panel > :last-child{margin-bottom:0}
+.panel > h2:first-child{margin-top:0}
 .scroll{overflow-x:auto}
 /* .wrap predates the redesign and is what deployments/larder/sources use for a
    scrollable table surface. Kept as the same thing rather than renamed across
    three templates for no behavioural gain. */
-.wrap{border:1px solid var(--rule);border-radius:var(--radius-md);
-      background:var(--paper-2);overflow-x:auto}
+.wrap{
+  border:1px solid var(--rule);border-radius:var(--radius-md);
+  background:var(--paper-2);
+  /* Same omission as .panel had: a box that draws a border and a background
+     needs the inset that goes with them, or its content sits on the line.
+     .wrap holds a table, whose own cell padding hid it until the table went. */
+  padding:var(--space-md);
+  margin-bottom:var(--space-md);
+  overflow-x:auto;
+}
+.wrap > :last-child{margin-bottom:0}
+/* A table inside a wrap supplies its own edges; the wrap's inset would double. */
+.wrap > table{margin:calc(var(--space-md) * -1) calc(var(--space-md) * -1);width:calc(100% + var(--space-md) * 2)}
 /* A TAG labels a thing; a CHIP reports a state. Same family, deliberately
    different weight: the tag carries no status dot, so a kind never reads as a
    health signal. */
@@ -494,7 +517,7 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 .card-danger{
   border-left:3px solid var(--drift);
   background:var(--paper-3);border-radius:var(--radius-sm);
-  padding:var(--space-xs);margin-top:var(--space-2xs);
+  padding:var(--space-sm) var(--space-md);margin-top:var(--space-2xs);
   display:flex;flex-direction:column;gap:var(--space-2xs);
   min-width:0;max-width:100%;
 }

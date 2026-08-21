@@ -92,3 +92,28 @@ func TestSmallEntriesGetAUsefulUnit(t *testing.T) {
 		t.Errorf("no sub-gigabyte unit anywhere on the larder")
 	}
 }
+
+// A box that draws a border and a background needs the inset that goes with
+// them. .panel and .wrap both grew a border and never grew the padding, so
+// every heading, form and paragraph sat flush against the line.
+func TestBoxesCarryTheirPadding(t *testing.T) {
+	h := newTestServer(t)
+	css := send(t, h, http.MethodGet, "/", "", "").Body.String()
+
+	for _, sel := range []string{".panel{", ".wrap{"} {
+		i := strings.Index(css, sel)
+		if i < 0 {
+			t.Errorf("%s not in the stylesheet", sel)
+			continue
+		}
+		end := strings.Index(css[i:], "}")
+		if end < 0 {
+			t.Errorf("%s rule unterminated", sel)
+			continue
+		}
+		rule := css[i : i+end]
+		if !strings.Contains(rule, "padding") {
+			t.Errorf("%s draws a box with no padding; its text will sit on the border", sel)
+		}
+	}
+}
