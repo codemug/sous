@@ -140,7 +140,13 @@ func (d *Docker) Running(ctx context.Context) ([]string, error) {
 	out := make([]string, 0, len(list))
 	for _, c := range list {
 		for _, n := range c.Names {
-			out = append(out, strings.TrimPrefix(n, "/"))
+			n = strings.TrimPrefix(n, "/")
+			// Same reason as States: the name filter is a substring match, so
+			// job containers match the deployment prefix too.
+			if strings.HasPrefix(n, JobPrefix) {
+				continue
+			}
+			out = append(out, n)
 		}
 	}
 	return out, nil

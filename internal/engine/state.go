@@ -31,6 +31,9 @@ type ContainerState struct {
 	// OOMKilled is called out separately because on this node it is the most
 	// likely way a model dies, and the exit code alone does not say so.
 	OOMKilled bool
+	// Labels carry facts a container NAME cannot, because names must be
+	// lowercase and some identifiers are case-sensitive.
+	Labels map[string]string
 }
 
 // Running reports true for a container Docker considers up. It says nothing
@@ -71,6 +74,15 @@ func (d *Docker) States(ctx context.Context) (map[string]ContainerState, error) 
 			// Docker returns names with a leading slash.
 			n = strings.TrimPrefix(n, "/")
 			if !strings.HasPrefix(n, namePrefix) {
+				continue
+			}
+			// JOBS ARE NOT DEPLOYMENTS. Docker's name filter is a substring
+			// match and "sous-job-…" matches "sous-", so a downloader would
+			// otherwise be listed here. Nothing reads this map by iteration
+			// TODAY - callers look up an exact recipe name - but the day
+			// something counts it, a download would be charged against the GPU
+			// pool it never touches.
+			if strings.HasPrefix(n, JobPrefix) {
 				continue
 			}
 			st := ContainerState{Name: n, Status: c.State}

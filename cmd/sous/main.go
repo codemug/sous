@@ -3,6 +3,7 @@ package main
 
 import (
 	"github.com/codemug/sous/internal/apikey"
+	"github.com/codemug/sous/internal/fetch"
 	"log"
 	"net/http"
 	"os"
@@ -120,9 +121,15 @@ func main() {
 		}
 	}()
 
+	// Weight downloads run in a container carrying huggingface_hub, writing
+	// into the same cache deployments read from. The default image is the one
+	// most recipes already use, so it is present on the node and is the same
+	// client that will later read what it writes.
+	fx := &fetch.Manager{Runtime: rt, ModelDir: cfg.ModelDir, Image: cfg.FetchImage}
+
 	// The larder scans MODEL_DIR/hub, which is where huggingface_hub places
 	// snapshots under the HF_HOME bind mount.
-	h, err := httpapi.New(mgr, cat, keys, mem.TotalGiB,
+	h, err := httpapi.New(mgr, cat, keys, fx, mem.TotalGiB,
 		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard)
 	if err != nil {
 		log.Fatalf("http: %v", err)

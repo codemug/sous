@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/codemug/sous/internal/fetch"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ type pageData struct {
 	Node        *NodeStatus
 	Model       *modelPage
 	Keys        *keysPage
+	Fetches     *fetchView
 	// BaseURL is this server as the BROWSER reached it, so a copyable example
 	// works when pasted. Building it from the listen address would print the
 	// bind host, which is frequently not the name anyone uses.
@@ -124,6 +126,16 @@ func (s *Server) pageLarder(w http.ResponseWriter, r *http.Request) {
 		d.Larder = entries
 		d.LarderTotal = humanBytes(larder.Total(entries))
 		d.Reclaimable = humanBytes(larder.Reclaimable(entries))
+
+		jobs := s.fetch.List(r.Context())
+		fv := &fetchView{Jobs: jobs}
+		for _, j := range jobs {
+			if j.Phase == fetch.PhaseDownloading {
+				fv.Active = true
+				break
+			}
+		}
+		d.Fetches = fv
 		return nil
 	})
 }

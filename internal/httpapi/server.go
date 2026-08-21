@@ -7,6 +7,7 @@ package httpapi
 
 import (
 	"github.com/codemug/sous/internal/apikey"
+	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/gateway"
 	"html/template"
 	"net/http"
@@ -19,10 +20,11 @@ import (
 )
 
 type Server struct {
-	mgr  *deploy.Manager
-	cat  *catalog.Catalog
-	keys *apikey.Manager
-	tpl  *template.Template
+	mgr   *deploy.Manager
+	cat   *catalog.Catalog
+	keys  *apikey.Manager
+	fetch *fetch.Manager
+	tpl   *template.Template
 
 	pool float64
 	// hubDir is the HuggingFace cache under the model directory. The larder
@@ -41,13 +43,13 @@ type Server struct {
 	guard auth.Config
 }
 
-func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, poolGiB float64,
-	hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
+func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.Manager,
+	poolGiB float64, hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{mgr: m, cat: c, keys: keys, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
+	s := &Server{mgr: m, cat: c, keys: keys, fetch: fx, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	// The OpenAI-compatible surface. Every deployed model behind one endpoint,
@@ -89,6 +91,16 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, poolGiB fl
 	s.mux.HandleFunc("POST /api/recipes/{id}/diff", s.diffRecipe)
 	// API KEYS. Inference-only credentials, so a client can call a model
 	// without holding something that could undeploy one.
+	// FETCH. Give it a HuggingFace repo id and it downloads the weights into
+	// the same cache deployments read from. Separate from deploying, because
+	// the alternative is a model server downloading 37 GiB silently during a
+	// window where something else was stopped to make room for it.
+	s.mux.HandleFunc("POST /api/fetch", s.startFetch)
+	s.mux.HandleFunc("GET /api/fetch", s.listFetches)
+	s.mux.HandleFunc("POST /api/fetch/forget", s.forgetFetch)
+	s.mux.HandleFunc("POST /larder/fetch", s.startFetch)
+	s.mux.HandleFunc("POST /larder/fetch/forget", s.forgetFetch)
+
 	s.mux.HandleFunc("GET /api/keys", s.listKeys)
 	s.mux.HandleFunc("POST /api/keys", s.createKey)
 	s.mux.HandleFunc("DELETE /api/keys/{id}", s.revokeKey)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/codemug/sous/internal/apikey"
+	"github.com/codemug/sous/internal/fetch"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ type fakeRuntime struct {
 	mu      sync.Mutex
 	running map[string]bool
 	states  map[string]engine.ContainerState
+	jobs    map[string]engine.ContainerState
 }
 
 func (f *fakeRuntime) Start(_ context.Context, s engine.Spec) (string, error) {
@@ -125,6 +127,7 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 		t.Fatal(err)
 	}
 	keys := &apikey.Manager{Store: s}
+	fx := &fetch.Manager{Runtime: rt, ModelDir: "/models", Image: "test-image"}
 	guard.Keys = apikey.Guard{M: keys}
 	m := &deploy.Manager{
 		Store: s, Catalog: c, Runtime: rt,
@@ -134,7 +137,7 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	h, err := New(m, c, keys, 121.6, hub, t.TempDir(), guard)
+	h, err := New(m, c, keys, fx, 121.6, hub, t.TempDir(), guard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,4 +476,33 @@ func (f *fakeRuntime) States(context.Context) (map[string]engine.ContainerState,
 		out[n] = engine.ContainerState{Name: n, Status: "running"}
 	}
 	return out, nil
+}
+
+// Job methods so the fake also satisfies fetch.Runtime. Downloads are not what
+// the handler tests are about, so these record rather than simulate.
+func (f *fakeRuntime) StartJob(_ context.Context, s engine.JobSpec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.jobs == nil {
+		f.jobs = map[string]engine.ContainerState{}
+	}
+	f.jobs[s.Name] = engine.ContainerState{Name: s.Name, Status: "running", Labels: s.Labels}
+	return "job-" + s.Name, nil
+}
+
+func (f *fakeRuntime) JobStates(context.Context) (map[string]engine.ContainerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]engine.ContainerState{}
+	for k, v := range f.jobs {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeRuntime) RemoveJob(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.jobs, name)
+	return nil
 }

@@ -284,7 +284,13 @@ tbody tr:last-child td{border-bottom:none}
   background:var(--paper-2);border:1px solid var(--rule);border-radius:var(--radius-sm);
   padding:.7rem .85rem;overflow-x:auto;
 }
-.keyform{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.keyform,.fetchform{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.fetchform input{
+  font-family:var(--font-mono);font-size:var(--text-sm);
+  padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:var(--radius-sm);
+  background:var(--paper);color:var(--ink);min-width:22rem;flex:1 1 22rem;
+}
+.fetchform input:invalid{border-color:var(--drift)}
 .keyform input{
   font-family:var(--font-mono);font-size:var(--text-sm);
   padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:var(--radius-sm);

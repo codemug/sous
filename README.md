@@ -182,6 +182,35 @@ connection.
 If this fleet ever grows a second node or a hosted provider to fail over to,
 Envoy is the right answer and this becomes the thing behind it.
 
+## Downloading models
+
+Give it a HuggingFace repo id and it fetches the weights into the same cache
+deployments read from:
+
+```bash
+curl -X POST $SOUS/api/fetch -H "Authorization: Bearer $SOUS_API_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"repo":"Qwen/Qwen3.6-35B-A3B-FP8"}'
+```
+
+Or from the Larder page, which is where the rest of "what is on disk" lives.
+
+**Why this exists rather than letting a deploy pull.** vLLM downloads weights
+itself on first start, inside the serving container, silently. On a node where a
+large model usually needs another one *stopped* to fit, that turns a deploy into
+"stop the chat model, wait twenty minutes for 37 GiB, then start" — with the
+dashboard reporting `starting` throughout and nothing saying a download is even
+happening. Fetching separately makes it visible and moves it out of the window
+where something else is down.
+
+It runs as a one-shot container from an image carrying `huggingface_hub` — the
+host has neither `hf` nor an importable copy — writing into the bind-mounted
+cache, so the same client that writes the weights is the one that later reads
+them. Returns `202` immediately; progress and failures are read back from the
+job's own container state and logs, so there is no record to drift.
+
+Asking twice for the same repo joins the running job rather than starting a
+second container writing into the same directory.
+
 ## API keys
 
 The gateway is behind the same guard as everything else, so a client needs a
