@@ -63,6 +63,12 @@ func TestStartRunsADownloadForTheRepo(t *testing.T) {
 	if len(s.Binds) != 1 || !strings.HasPrefix(s.Binds[0], "/models:") {
 		t.Errorf("binds = %v", s.Binds)
 	}
+	// The image's entrypoint is a model server; without overriding it the
+	// command below arrives as arguments to vLLM and the container dies with
+	// "Failed to infer device type" instead of downloading anything.
+	if len(s.Entrypoint) == 0 {
+		t.Error("no entrypoint override; the image's own server would run instead")
+	}
 	// The repo must arrive as its own argv entry, never spliced into a string.
 	last := s.Cmd[len(s.Cmd)-1]
 	if last != "ornith-ai/Ornith-1.5-35B-A3B-FP8" {

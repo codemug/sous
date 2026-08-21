@@ -29,9 +29,16 @@ func JobName(id string) string { return JobPrefix + id }
 type JobSpec struct {
 	Name  string
 	Image string
-	Cmd   []string
-	Env   []string
-	Binds []string
+	// Entrypoint MUST usually be set. A job runs in an image built to serve
+	// something - the vLLM image's entrypoint is the API server - so leaving it
+	// alone makes Cmd arrive as ARGUMENTS to that server rather than as the
+	// command to run. The observed failure was "Failed to infer device type":
+	// vLLM starting up on a container that was only ever meant to download a
+	// file.
+	Entrypoint []string
+	Cmd        []string
+	Env        []string
+	Binds      []string
 	// Labels carry facts the container name cannot. A Docker name must be
 	// lowercase, so anything case-sensitive - a HuggingFace repo id, which
 	// Qwen/Qwen3.6-35B-A3B-FP8 very much is - cannot survive a round trip
@@ -51,6 +58,9 @@ func (d *Docker) StartJob(ctx context.Context, s JobSpec) (string, error) {
 		Cmd:    s.Cmd,
 		Env:    s.Env,
 		Labels: s.Labels,
+	}
+	if len(s.Entrypoint) > 0 {
+		cfg.Entrypoint = s.Entrypoint
 	}
 	host := &container.HostConfig{
 		Binds: s.Binds,

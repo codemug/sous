@@ -140,11 +140,16 @@ func (m *Manager) Start(ctx context.Context, repo string) (Job, error) {
 		Binds:  []string{m.ModelDir + ":/root/.cache/huggingface"},
 		Env:    []string{"HF_HOME=/root/.cache/huggingface"},
 		Labels: map[string]string{RepoLabel: repo},
+		// The image's own entrypoint is a model server. Without overriding it,
+		// the command below arrives as arguments to vLLM, which starts up and
+		// dies with "Failed to infer device type" on a container that was only
+		// ever meant to download a file.
+		Entrypoint: []string{"python3"},
 		// The repo id is passed as an ARGUMENT, never interpolated into a shell
 		// string. It is validated above as well, but a value that reaches a
 		// command line should not depend on that validation being right.
 		Cmd: []string{
-			"python3", "-c",
+			"-c",
 			`import sys
 from huggingface_hub import snapshot_download
 p = snapshot_download(sys.argv[1], allow_patterns=["*.json","*.safetensors","*.jinja","*.txt","*.model"])
