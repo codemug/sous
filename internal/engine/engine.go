@@ -132,7 +132,7 @@ func (d *Docker) Logs(ctx context.Context, name string) (io.ReadCloser, error) {
 
 func (d *Docker) Running(ctx context.Context) ([]string, error) {
 	list, err := d.cli.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("name", "sous-")),
+		Filters: filters.NewArgs(filters.Arg("name", namePrefix)),
 	})
 	if err != nil {
 		return nil, err

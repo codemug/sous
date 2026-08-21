@@ -9,9 +9,35 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/observe"
 )
+
+// phaseDetail turns a phase into the sentence an operator needs next. A red
+// badge that does not say why sends someone to the logs for something the
+// runtime already reported.
+func phaseDetail(p deploy.Phase, st engine.ContainerState) string {
+	switch p {
+	case deploy.PhaseStarting:
+		return "loading - the container is up but the port is not answering yet"
+	case deploy.PhaseStopping:
+		return "stopping - waiting for the container to release the pool"
+	case deploy.PhaseGone:
+		return "no container behind this record"
+	case deploy.PhaseFailed:
+		switch {
+		case st.OOMKilled:
+			return "OOM-killed - it asked for more memory than the node had"
+		case st.Status == "restarting":
+			return fmt.Sprintf("crash-looping (%d restarts)", st.Restarts)
+		case st.Status == "exited":
+			return fmt.Sprintf("exited with code %d", st.ExitCode)
+		}
+		return "failed"
+	}
+	return ""
+}
 
 // ModelStatus is one deployed model as a dashboard needs it.
 //
@@ -25,6 +51,14 @@ type ModelStatus struct {
 	RecipeID string `json:"recipe_id"`
 	Port     int    `json:"port"`
 	Running  bool   `json:"running"`
+	// Phase is what the deployment is DOING - starting, ready, failed,
+	// stopping, gone. Running only ever said whether a container existed,
+	// which is true for the eight to ten minutes a vLLM model spends loading
+	// and is exactly the window a caller must not send traffic in.
+	Phase deploy.Phase `json:"phase"`
+	// Detail explains a phase that needs explaining, so a red badge is not the
+	// end of the story.
+	Detail string `json:"detail,omitempty"`
 	// Drifted marks a record whose container is gone. Named separately from
 	// !Running so a UI can style it as a fault rather than as "off".
 	Drifted bool `json:"drifted"`
@@ -57,6 +91,15 @@ type NodeStatus struct {
 	DeployedCount int `json:"deployed_count"`
 	RunningCount  int `json:"running_count"`
 	DriftedCount  int `json:"drifted_count"`
+	// Counted separately from Running because "up" and "usable" are different
+	// questions and the dashboard is asked the second one.
+	ReadyCount    int `json:"ready_count"`
+	StartingCount int `json:"starting_count"`
+	FailedCount   int `json:"failed_count"`
+	// Transitioning is true while any phase can still change on its own. The
+	// dashboard polls only while it holds, so watching a model load does not
+	// require reloading by hand and a settled page is left alone.
+	Transitioning bool `json:"transitioning"`
 
 	Models []ModelStatus `json:"models"`
 
@@ -95,13 +138,13 @@ func (s *Server) nodeStatus(r *http.Request) (NodeStatus, error) {
 
 	// One call, not one per model: asking the runtime per deployment turns a
 	// dashboard refresh into N Docker round trips.
-	live := map[string]bool{}
+	// States, not Running: a name list cannot separate loading from serving or
+	// a clean stop from a crash loop, and the dashboard has to show all four.
+	states := map[string]engine.ContainerState{}
 	liveKnown := false
-	if names, err := s.mgr.Runtime.Running(r.Context()); err == nil {
+	if st, err := s.mgr.Runtime.States(r.Context()); err == nil {
 		liveKnown = true
-		for _, n := range names {
-			live[n] = true
-		}
+		states = st
 	}
 
 	out := NodeStatus{
@@ -140,10 +183,13 @@ func (s *Server) nodeStatus(r *http.Request) (NodeStatus, error) {
 		// be reached, the honest answer is "we do not know", and flagging every
 		// model as faulty on a transient Docker hiccup would train the operator
 		// to ignore the indicator.
+		st := states[engine.ContainerName(d.RecipeID)]
 		if liveKnown {
-			m.Running = live[engine.ContainerName(d.RecipeID)]
+			m.Running = st.Running()
 			m.Drifted = !m.Running
 		}
+		m.Phase = s.mgr.Phase(r.Context(), d, st, liveKnown)
+		m.Detail = phaseDetail(m.Phase, st)
 
 		out.Models = append(out.Models, m)
 		out.DeployedCount++
@@ -152,6 +198,17 @@ func (s *Server) nodeStatus(r *http.Request) (NodeStatus, error) {
 		}
 		if m.Drifted {
 			out.DriftedCount++
+		}
+		switch m.Phase {
+		case deploy.PhaseReady:
+			out.ReadyCount++
+		case deploy.PhaseStarting:
+			out.StartingCount++
+		case deploy.PhaseFailed:
+			out.FailedCount++
+		}
+		if m.Phase == deploy.PhaseStarting || m.Phase == deploy.PhaseStopping {
+			out.Transitioning = true
 		}
 		out.CommittedGiB += max(m.ObservedGiB, m.DeclaredGiB)
 	}

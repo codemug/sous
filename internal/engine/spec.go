@@ -117,4 +117,9 @@ func renderArgs(args map[string]any) []string {
 // three places before this existed, and a status view comparing a name built
 // one way against a list built another is exactly the bug that produces a
 // dashboard reporting healthy models as dead.
-func ContainerName(recipeID string) string { return "sous-" + recipeID }
+// namePrefix marks every container Sous owns. Defined once because the
+// container lister filters on it and ContainerName builds it, and those two
+// disagreeing would make Sous blind to its own containers.
+const namePrefix = "sous-"
+
+func ContainerName(recipeID string) string { return namePrefix + recipeID }

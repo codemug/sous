@@ -47,6 +47,11 @@
   --ok-wash:    oklch(95%   0.03  158);
   --drift:      oklch(62%   0.15   62);
   --drift-wash: oklch(96%   0.04   72);
+  /* Starting is its own hue, distinct from both ok and drift: a model that is
+     loading is neither healthy nor faulty, and painting it as either misleads.
+     Sits between them on the wheel so the three read as a progression. */
+  --gold:       oklch(58%   0.12  100);
+  --gold-wash:  oklch(96%   0.03  100);
   --graphite:   oklch(22%   0.016 260);
 
   --font-display: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -83,6 +88,8 @@
     --ok-wash:    oklch(26%   0.05  158);
     --drift:      oklch(76%   0.14   68);
     --drift-wash: oklch(28%   0.06   68);
+    --gold:       oklch(78%   0.12  100);
+    --gold-wash:  oklch(27%   0.05  100);
     --graphite:   oklch(13%   0.012 260);
   }
 }
@@ -235,6 +242,33 @@ tbody tr:last-child td{border-bottom:none}
 .chip.is-idle::before{background:none;border:1px solid currentColor}
 .chip.is-arch{color:var(--ink-faint);border-style:dashed}
 .chip.is-arch::before{background:none;border:1px solid currentColor;border-radius:1px}
+
+/* PHASE CHIPS. Each phase gets its own colour AND its own dot shape, so the
+   states stay distinguishable without relying on hue alone. */
+.chip.is-ready   {color:var(--ok);border-color:var(--ok);background:var(--ok-wash)}
+.chip.is-starting{color:var(--gold);border-color:var(--gold);background:var(--gold-wash)}
+.chip.is-stopping{color:var(--ink-mute)}
+.chip.is-failed  {color:var(--drift);border-color:var(--drift);background:var(--drift-wash)}
+.chip.is-gone    {color:var(--drift);border-color:var(--drift);border-style:dashed}
+.chip.is-failed::before{border-radius:1px}
+.chip.is-gone::before{background:none;border:1px solid currentColor;border-radius:1px}
+/* The spinner replaces the dot for the two phases that are actively moving;
+   a static badge cannot distinguish "working on it" from "stuck". */
+.chip.is-starting::before,.chip.is-stopping::before{display:none}
+.spin{
+  width:8px;height:8px;border-radius:50%;
+  border:1.5px solid currentColor;border-top-color:transparent;
+  display:inline-block;animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  /* Still distinguishable when the animation is off: the ring reads as
+     different from every filled dot. */
+  .spin{animation:none}
+}
+.model.is-failed,.model.is-gone{border-left:3px solid var(--drift)}
+.model.is-starting{border-left:3px solid var(--gold)}
+.model.is-stopping{opacity:.72}
 
 button,.btn{
   display:inline-block;

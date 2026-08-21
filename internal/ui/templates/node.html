@@ -113,7 +113,13 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
     {{end}}
   </div>
   <div class="pool-legend">
-    <span><span class="swatch" style="background:var(--ok)"></span><b>{{.Node.RunningCount}}</b> running</span>
+    <span><span class="swatch" style="background:var(--ok)"></span><b>{{.Node.ReadyCount}}</b> ready</span>
+    {{if gt .Node.StartingCount 0}}
+      <span><span class="swatch" style="background:var(--gold)"></span><b>{{.Node.StartingCount}}</b> starting</span>
+    {{end}}
+    {{if gt .Node.FailedCount 0}}
+      <span class="warn"><span class="swatch" style="background:var(--drift)"></span><b>{{.Node.FailedCount}}</b> failed</span>
+    {{end}}
     {{if gt .Node.DriftedCount 0}}
       <span class="warn"><span class="swatch" style="background:var(--drift)"></span><b>{{.Node.DriftedCount}}</b> drifted — record without a container</span>
     {{end}}
@@ -127,29 +133,35 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
 <h2>Deployed</h2>
 <div class="models">
   {{range .Node.Models}}
-  <article class="model{{if .Drifted}} is-drift{{end}}">
-    <div class="model-top">
-      <span class="model-id">{{.RecipeID}}</span>
-      <span class="model-port">:{{.Port}}</span>
-      {{if .Drifted}}
-        <span class="chip is-drift">drifted</span>
-      {{else}}
-        <span class="chip is-running">running</span>
-      {{end}}
-      {{if .Archived}}<span class="chip is-arch">archived</span>{{end}}
-      <span class="model-acts">
-        <a class="btn" href="/model/{{.RecipeID}}">Open</a>
-        <form method="post" action="/api/undeploy/{{.RecipeID}}" style="display:inline">
-          <button class="btn-danger" type="submit">Undeploy</button>
-        </form>
-      </span>
-    </div>
+    <article class="model is-{{.Phase}}">
+      <div class="model-top">
+        <span class="model-id">{{.RecipeID}}</span>
+        <span class="model-port">:{{.Port}}</span>
+        {{/* ONE chip carrying the phase, not two booleans. "running" was true
+             for the eight to ten minutes a model spends loading, which is
+             precisely the window in which it cannot be used. */}}
+        <span class="chip is-{{.Phase}}">
+          {{if eq .Phase "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
+          {{if eq .Phase "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
+          {{.Phase}}
+        </span>
+        {{if .Archived}}<span class="chip is-arch">archived</span>{{end}}
+        <span class="model-acts">
+          <a class="btn" href="/model/{{.RecipeID}}">Open</a>
+          {{if eq .Phase "stopping"}}
+            <button class="btn-danger" type="button" disabled>Stopping…</button>
+          {{else}}
+            <form method="post" action="/api/undeploy/{{.RecipeID}}" style="display:inline">
+              <button class="btn-danger" type="submit">Undeploy</button>
+            </form>
+          {{end}}
+        </span>
+      </div>
 
-    {{if .Drifted}}
-      <p class="note warn">Sous has a deployment record but no container. It was
-      stopped outside Sous, killed by the OOM reaper, or crash-looped past its
-      restart limit — the logs say which.</p>
-    {{end}}
+      {{if .Detail}}
+        <p class="note{{if eq .Phase "failed"}} warn{{end}}{{if eq .Phase "gone"}} warn{{end}}">{{.Detail}}</p>
+      {{end}}
+
 
     <div class="facts">
       <div class="fact"><span class="k">Modality</span><span class="v">{{if .Modality}}{{.Modality}}{{else}}—{{end}}</span></div>

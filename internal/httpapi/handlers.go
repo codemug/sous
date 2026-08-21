@@ -254,19 +254,31 @@ func (s *Server) undeploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.mgr.Undeploy(r.Context(), v); err != nil {
+	// ASYNCHRONOUS ON PURPOSE. Docker's stop carries a 60 second grace period
+	// and a 61 GiB model spends most of it releasing the pool. Doing that here
+	// left the browser on a hanging POST for a minute with nothing to show for
+	// it, which is indistinguishable from a dead button - so it got clicked
+	// again, and the second click raced the first.
+	//
+	// The work continues in the background; the deployment reports
+	// PhaseStopping until its container is actually gone.
+	if err := s.mgr.UndeployAsync(v); err != nil {
 		if wantsHTML(r) {
 			s.redirect(w, r, "/deployments", err.Error(), true)
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if wantsHTML(r) {
 		s.redirect(w, r, "/deployments", "", false)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// 202, not 204: the caller is being told this was accepted, not finished.
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"recipe_id": v, "phase": string(deploy.PhaseStopping),
+	})
 }
 
 // wantsHTML distinguishes a form post from an API call, so the same routes

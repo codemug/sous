@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/codemug/sous/internal/auth"
 	"github.com/codemug/sous/internal/capacity"
@@ -84,6 +85,11 @@ func main() {
 		BindHost:   cfg.Host(),
 		ModelDir:   cfg.ModelDir,
 		DropCaches: dropCaches,
+		// Readiness is a port that answers, not a container that exists. A
+		// vLLM model here is "running" for eight to ten minutes before it
+		// serves anything, and without this every one of those minutes reads
+		// as healthy.
+		Probe: &deploy.Prober{Host: cfg.Host(), Timeout: 2 * time.Second},
 	}
 
 	// Read BEFORE anything is served. An install that forgot to configure

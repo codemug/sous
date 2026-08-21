@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"github.com/codemug/sous/internal/gateway"
 	"html/template"
 	"net/http"
 
@@ -46,6 +47,26 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 	}
 	s := &Server{mgr: m, cat: c, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
+
+	// The OpenAI-compatible surface. Every deployed model behind one endpoint,
+	// chosen by name, so a client never has to know which port anything landed
+	// on - and never has to discover a model is still loading by getting a
+	// connection refused.
+	gw := &gateway.Gateway{Res: m, Cat: c, Host: m.BindHost}
+	s.mux.HandleFunc("GET /v1/models", gw.ListModels)
+	for _, p := range []string{
+		"POST /v1/chat/completions",
+		"POST /v1/completions",
+		"POST /v1/embeddings",
+		"POST /v1/rerank",
+		// The audio paths matter here: this node serves ASR and TTS through
+		// Sous too, and they were the clients most tied to hardcoded ports.
+		"POST /v1/audio/transcriptions",
+		"POST /v1/audio/translations",
+		"POST /v1/audio/speech",
+	} {
+		s.mux.HandleFunc(p, gw.Proxy)
+	}
 
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

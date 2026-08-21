@@ -24,6 +24,7 @@ import (
 type fakeRuntime struct {
 	mu      sync.Mutex
 	running map[string]bool
+	states  map[string]engine.ContainerState
 }
 
 func (f *fakeRuntime) Start(_ context.Context, s engine.Spec) (string, error) {
@@ -453,4 +454,20 @@ func TestFetchReportsPerSourceErrors(t *testing.T) {
 // port-mapping bug this method exists to fix pass the tests.
 func (f *fakeRuntime) ImageExposedPort(context.Context, string) (int, error) {
 	return 8880, nil
+}
+
+// States mirrors Running for the fake: everything the fake knows about is
+// running. Tests that need a crashed or stopped container set fake.states
+// directly.
+func (f *fakeRuntime) States(context.Context) (map[string]engine.ContainerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.states != nil {
+		return f.states, nil
+	}
+	out := map[string]engine.ContainerState{}
+	for n := range f.running {
+		out[n] = engine.ContainerState{Name: n, Status: "running"}
+	}
+	return out, nil
 }

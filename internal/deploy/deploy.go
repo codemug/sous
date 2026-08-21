@@ -37,6 +37,12 @@ type Runtime interface {
 	Stop(ctx context.Context, name string) error
 	Logs(ctx context.Context, name string) (io.ReadCloser, error)
 	Running(ctx context.Context) ([]string, error)
+	// States reports every Sous container INCLUDING stopped and crashed ones.
+	// Running() answers only "does a container with this name exist", which
+	// cannot separate a model still loading from one serving, nor a clean stop
+	// from a crash loop - four situations that need four different responses
+	// and used to look identical.
+	States(ctx context.Context) (map[string]engine.ContainerState, error)
 	// ImageExposedPort reports the port an image listens on inside the
 	// container. Only KindContainer needs it: for the kinds Sous generates a
 	// command for, it sets the port itself.
@@ -68,7 +74,19 @@ type Manager struct {
 	// exists stays visible at the call site.
 	DropCaches func() error
 
+	// Probe decides whether a deployment is READY as opposed to merely up.
+	// Optional: without it a running container is reported as starting
+	// forever, which is wrong but never claims something is usable when it
+	// is not.
+	Probe *Prober
+
 	mu sync.Mutex // serialises loads; see the package comment
+
+	// stopSet holds undeploys that have been asked for but not finished. It is
+	// the one piece of state with no evidence anywhere else - during a stop,
+	// Docker still reports the container as running.
+	stopMu  sync.Mutex
+	stopSet map[string]time.Time
 }
 
 func (m *Manager) Deploy(ctx context.Context, id string, wantPort int, force bool) (Record, error) {

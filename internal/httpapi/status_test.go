@@ -201,8 +201,15 @@ func TestNodePageDrawsSegmentsToScale(t *testing.T) {
 	if !strings.Contains(body, "style=\"width:") {
 		t.Error("no segment widths rendered; the diagram is not drawn to scale")
 	}
-	if !strings.Contains(body, "chip is-running") {
-		t.Error("running state not encoded on the model card")
+	// The card must encode the PHASE, not merely that a container exists.
+	// "running" was true throughout the eight to ten minutes a model spends
+	// loading, which is exactly when it must not be sent traffic - so the
+	// assertion moved with the semantics.
+	if !strings.Contains(body, "chip is-") {
+		t.Error("no phase encoded on the model card")
+	}
+	if !strings.Contains(body, "is-starting") && !strings.Contains(body, "is-ready") {
+		t.Errorf("expected a starting or ready phase on the card")
 	}
 }
 
@@ -217,7 +224,7 @@ func TestModelPageRendersConfigTelemetryAndLogs(t *testing.T) {
 	}
 	body := rr.Body.String()
 	for _, want := range []string{"Configuration", "Telemetry", "Logs", "Edit",
-		"qwen38", "chip is-running"} {
+		"qwen38", "chip is-"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("model page missing %q", want)
 		}
@@ -431,6 +438,47 @@ func TestLoginRefusesOffOriginNext(t *testing.T) {
 		h.ServeHTTP(rr, req)
 		if loc := rr.Header().Get("Location"); loc != "/" {
 			t.Errorf("next=%q redirected to %q, want /", evil, loc)
+		}
+	}
+}
+
+// The gateway has to be reachable through the real server, behind the real
+// auth middleware. Unit tests on the gateway package prove the routing; this
+// proves it is actually wired in and guarded.
+func TestGatewayIsMountedAndGuarded(t *testing.T) {
+	h := newTestServer(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	rr := send(t, h, http.MethodGet, "/v1/models", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("/v1/models = %d, want 200; body %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `"object":"list"`) {
+		t.Errorf("not an OpenAI list envelope: %s", body)
+	}
+	// The recipe's alias, not its id, is what a client should see offered.
+	if !strings.Contains(body, "qwen38") {
+		t.Errorf("deployed model absent from /v1/models: %s", body)
+	}
+	if !strings.Contains(body, `"phase"`) {
+		t.Errorf("no phase on the model listing; a client cannot tell if it is usable: %s", body)
+	}
+}
+
+// An unauthenticated caller must not reach the inference surface. The gateway
+// proxies to a GPU; leaving it outside the guard would make authentication on
+// everything else pointless.
+func TestGatewayRequiresAuth(t *testing.T) {
+	h := buildServerAuth(t, auth.Config{User: "u", Password: "p"})
+	for _, path := range []string{"/v1/models", "/v1/chat/completions"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Accept", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("%s unauthenticated = %d, want 401", path, rr.Code)
 		}
 	}
 }

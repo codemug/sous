@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/codemug/sous/internal/capacity"
 	"github.com/codemug/sous/internal/catalog"
@@ -21,12 +22,14 @@ import (
 // fakeRuntime records the order of operations so the stop-before-start rule
 // can be asserted directly rather than inferred.
 type fakeRuntime struct {
-	specs    []engine.Spec
-	mu       sync.Mutex
-	events   []string
-	running  map[string]bool
-	logs     string
-	startErr error
+	specs     []engine.Spec
+	mu        sync.Mutex
+	events    []string
+	running   map[string]bool
+	logs      string
+	startErr  error
+	states    map[string]engine.ContainerState
+	stopDelay time.Duration
 }
 
 func newFake() *fakeRuntime {
@@ -53,6 +56,9 @@ func (f *fakeRuntime) Start(_ context.Context, s engine.Spec) (string, error) {
 }
 
 func (f *fakeRuntime) Stop(_ context.Context, name string) error {
+	if f.stopDelay > 0 {
+		time.Sleep(f.stopDelay)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, "stop:"+name)
@@ -451,4 +457,20 @@ func TestUndeployNeverDeployedSucceeds(t *testing.T) {
 	if err := m.Undeploy(context.Background(), "kokoro"); err != nil {
 		t.Fatalf("undeploying a never-deployed recipe must be a no-op, got: %v", err)
 	}
+}
+
+// States mirrors Running for the fake: everything the fake knows about is
+// running. Tests that need a crashed or stopped container set fake.states
+// directly.
+func (f *fakeRuntime) States(context.Context) (map[string]engine.ContainerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.states != nil {
+		return f.states, nil
+	}
+	out := map[string]engine.ContainerState{}
+	for n := range f.running {
+		out[n] = engine.ContainerState{Name: n, Status: "running"}
+	}
+	return out, nil
 }
