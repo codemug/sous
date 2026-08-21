@@ -93,6 +93,14 @@ func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// TYPED, because this throws away tens of gigabytes that take twenty
+	// minutes to fetch again - and unlike a stopped model, nothing brings it
+	// back but the network. The repo id is what has to be typed, so the
+	// confirmation names the exact thing going.
+	if wantsHTML(r) && !s.requireConfirm(w, r, repo, "/larder") {
+		return
+	}
 	freed, err := larder.Delete(s.hubDir, repo, entries, force)
 	if err != nil {
 		var ge *larder.GuardError

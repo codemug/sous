@@ -79,6 +79,11 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Typed: whoever holds this key starts getting 401 on their next request,
+	// and there is no way to tell them beforehand.
+	if wantsHTML(r) && !s.requireConfirm(w, r, id, "/keys") {
+		return
+	}
 	var err error
 	if r.URL.Query().Get("delete") == "true" || strings.EqualFold(r.FormValue("delete"), "true") {
 		err = s.keys.Delete(id)

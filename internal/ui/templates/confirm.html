@@ -1,0 +1,24 @@
+{{/* A typed confirmation for the four paths that destroy something.
+     Takes {Action, ID, Label, Cost}.
+
+     VALIDATED SERVER-SIDE. Disabling the button until the text matches is a
+     courtesy; these are form posts and a form post can arrive from anywhere.
+
+     The cost is stated from real data rather than adjectives - the GiB that
+     goes, the measurements that cannot be recovered, the 401 the holder will
+     start getting. "This cannot be undone" tells an operator nothing they did
+     not assume. */}}
+{{define "confirm-typed"}}
+<details class="drawer danger-drawer">
+  <summary>{{.Label}}</summary>
+  <div class="panel warn-panel">
+    <p class="note warn">{{.Cost}}</p>
+    <form method="post" action="{{.Action}}" class="confirmform">
+      <label for="c-{{.ID}}" class="mono">Type <strong>{{.ID}}</strong> to confirm</label>
+      <input id="c-{{.ID}}" name="confirm" type="text" required
+             autocomplete="off" spellcheck="false" autocapitalize="off">
+      <button class="btn-danger" type="submit">{{.Label}}</button>
+    </form>
+  </div>
+</details>
+{{end}}
