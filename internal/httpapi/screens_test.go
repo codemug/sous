@@ -56,3 +56,25 @@ func TestLarderShowsCardsWithNoDownloadInFlight(t *testing.T) {
 		t.Error("larder truncated")
 	}
 }
+
+// A card is a flex column, and a flex item's default min-width is auto - so any
+// child wider than the card pushes past its border instead of shrinking. The
+// nested .panel was the visible case: a box with its own border, background and
+// margin inside another box, breaking out on the right and bottom.
+func TestCardsDoNotNestPanels(t *testing.T) {
+	h := newTestServerWithHub(t)
+	post(t, h, "/api/keys", "application/json", `{"name":"probe"}`)
+
+	for _, path := range []string{"/keys", "/larder"} {
+		body := send(t, h, http.MethodGet, path, "", "")
+		b := body.Body.String()
+		// A .panel inside a .card is the overflow: panels are sized for the
+		// top level and their margins escape a card.
+		if strings.Contains(b, `class="card `) && strings.Contains(b, `class="panel warn-panel"`) {
+			t.Errorf("%s still nests a panel inside a card", path)
+		}
+		if !strings.Contains(b, "card-danger") && strings.Contains(b, "Delete weights") {
+			t.Errorf("%s uses something other than the card-sized danger block", path)
+		}
+	}
+}

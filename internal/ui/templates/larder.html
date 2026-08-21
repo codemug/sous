@@ -97,7 +97,7 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
     {{if eq (printf "%s" .State) "stale"}}
     <details class="drawer danger-drawer">
       <summary>Delete weights</summary>
-      <div class="panel warn-panel">
+      <div class="card-danger">
         <p class="note warn">This frees {{printf "%.1f" (gibOf .Bytes)}} GiB and the only
         way back is the network. No download rate is recorded here, so how long a
         re-fetch would take is not something this page can honestly tell you.</p>

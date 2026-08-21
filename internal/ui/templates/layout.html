@@ -470,6 +470,38 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 .card.is-failed,.card.is-gone{border-left:3px solid var(--drift)}
 .card.is-idle{border-left:3px solid var(--rule)}
 
+/* OVERFLOW CONTROL. A card is a flex column, and a flex item's default
+ * min-width is auto - so any child wider than the card (a long repo id, an
+ * input with a min-width, a nested panel's padding) pushes past the border
+ * instead of shrinking. Every child is constrained explicitly. */
+.card > *{min-width:0;max-width:100%}
+.card details{min-width:0;max-width:100%}
+
+/* A danger drawer INSIDE a card is not a .panel. Panels are top-level boxes
+ * with their own border, background and margin; nesting one puts a box inside a
+ * box and its margins escape the parent. This is the same affordance sized for
+ * the inside of a card. */
+.card-danger{
+  border-left:3px solid var(--drift);
+  background:var(--paper-3);border-radius:var(--radius-sm);
+  padding:var(--space-xs);margin-top:var(--space-2xs);
+  display:flex;flex-direction:column;gap:var(--space-2xs);
+  min-width:0;max-width:100%;
+}
+.card-danger .note{margin:0;max-width:none;font-size:var(--text-xs)}
+.card-danger .confirmform{margin-top:0}
+
+/* Inputs must be allowed to SHRINK. A min-width inside a 21rem card is a
+ * guarantee of overflow the moment the card is narrower than the input plus its
+ * button plus the gap between them. */
+.confirmform input,.fetchform input,.keyform input{
+  min-width:0;flex:1 1 8rem;max-width:100%;
+}
+.confirmform label,.card-danger label{overflow-wrap:anywhere;min-width:0}
+/* A key id or repo name in a confirmation label is long and unbroken. */
+.confirmform label strong{overflow-wrap:anywhere}
+.card-sub,.card-title,.stat .v{overflow-wrap:anywhere;min-width:0}
+
 </style>
 </head>
 <body>
