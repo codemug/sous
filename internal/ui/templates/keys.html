@@ -52,45 +52,51 @@ it is safe to put one in a notebook or a demo page.</p>
 {{if .Keys}}
 <div class="panel">
   <h2>Issued</h2>
-  <div class="scroll">
-    <table>
-      <thead>
-        <tr><th>Name</th><th>Models</th><th>Ends in</th><th>Created</th><th>Last used</th><th>State</th><th></th></tr>
-      </thead>
-      <tbody>
-        {{range .Keys}}
-        <tr{{if .Disabled}} class="row-off"{{end}}>
-          <td><strong>{{.Name}}</strong><br><span class="mono dim">{{.ID}}</span></td>
-          {{/* "all models" is the truth for an unscoped key, and saying it is
-               better than a blank cell that could mean none. */}}
-          <td class="mono">{{if .Scoped}}{{range $i,$m := .Models}}{{if $i}}, {{end}}{{$m}}{{end}}{{else}}<span class="dim">all models</span>{{end}}</td>
-          <td class="mono">…{{.Hint}}</td>
-          <td class="mono">{{ago .CreatedAt}}</td>
-          {{/* Never-used is worth calling out: it is the only key that can be
-               revoked with no thought about what might break. */}}
-          <td class="mono">{{if .LastUsedAt.IsZero}}<span class="dim">never</span>{{else}}{{ago .LastUsedAt}}{{end}}</td>
-          <td>
-            {{if .Disabled}}<span class="chip is-gone">revoked</span>
-            {{else}}<span class="chip is-ready">active</span>{{end}}
-          </td>
-          <td class="acts">
-            {{if not .Disabled}}
-            <form method="post" action="/keys/{{.ID}}/revoke" style="display:inline">
-              <button class="btn-danger" type="submit">Revoke</button>
-            </form>
-            {{else}}
-            <form method="post" action="/keys/{{.ID}}/revoke" style="display:inline">
-              <input type="hidden" name="delete" value="true">
-              <button class="btn" type="submit">Delete</button>
-            </form>
-            {{end}}
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  <p class="note">Revoking keeps the row, so the record of what existed and when
+  <div class="cards narrow">
+    {{range .Keys}}
+    <article class="card{{if .Disabled}} is-gone{{else}} is-ready{{end}}">
+      <div class="card-head">
+        <span class="card-title">{{.Name}}</span>
+        {{if .Disabled}}<span class="chip is-gone">revoked</span>
+        {{else}}<span class="chip is-ready">active</span>{{end}}
+      </div>
+      <span class="card-sub">{{.ID}} · ends in …{{.Hint}}</span>
+      <div class="card-foot">
+        <span class="stat">
+          <span class="mlabel">Models</span>
+          <span class="v">{{if .Scoped}}{{range $i,$m := .Models}}{{if $i}}, {{end}}{{$m}}{{end}}{{else}}all models{{end}}</span>
+        </span>
+        <span class="stat"><span class="mlabel">Created</span><span class="v">{{ago .CreatedAt}}</span></span>
+        <span class="stat">
+          <span class="mlabel">Last used</span>
+          {{/* Never-used is the only key that can be revoked without wondering
+               what breaks, so it is worth calling out rather than blanking. */}}
+          <span class="v">{{if .LastUsedAt.IsZero}}never{{else}}{{ago .LastUsedAt}}{{end}}</span>
+        </span>
+      </div>
+      {{if not .Disabled}}
+      <details class="drawer danger-drawer">
+        <summary>Revoke</summary>
+        <div class="panel warn-panel">
+          <p class="note warn">Whoever holds this key starts getting 401 on their
+          next request, and there is no way to tell them beforehand.</p>
+          <form method="post" action="/keys/{{.ID}}/revoke" class="confirmform">
+            <label class="mono">Type <strong>{{.ID}}</strong> to confirm</label>
+            <input name="confirm" type="text" required autocomplete="off" spellcheck="false">
+            <button class="btn-danger" type="submit">Revoke</button>
+          </form>
+        </div>
+      </details>
+      {{else}}
+      <form method="post" action="/keys/{{.ID}}/revoke">
+        <input type="hidden" name="delete" value="true">
+        <input type="hidden" name="confirm" value="{{.ID}}">
+        <button class="btn" type="submit">Delete record</button>
+      </form>
+      {{end}}
+    </article>
+    {{end}}
+  </div><p class="note">Revoking keeps the row, so the record of what existed and when
   it was last used survives. Deleting removes it entirely — only worth doing to
   a key that was never used.</p>
 </div>
@@ -103,13 +109,13 @@ it is safe to put one in a notebook or a demo page.</p>
 
 <div class="panel">
   <h2>Using a key</h2>
-  <pre class="snippet">curl {{.BaseURL}}/v1/chat/completions \
+  <pre class="snippet">curl {{$.BaseURL}}/v1/chat/completions \
   -H "Authorization: Bearer sk-sous-…" \
   -H 'Content-Type: application/json' \
   -d '{"model":"…","messages":[{"role":"user","content":"hello"}]}'</pre>
   <p class="note">Or as the <span class="mono">api_key</span> in any OpenAI
   client with <span class="mono">base_url</span> set to
-  <span class="mono">{{.BaseURL}}/v1</span>.</p>
+  <span class="mono">{{$.BaseURL}}/v1</span>.</p>
 </div>
 
 {{end}}

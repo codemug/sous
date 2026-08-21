@@ -407,6 +407,69 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
   header.bar{padding:var(--space-sm) var(--space-md);gap:var(--space-sm)}
   .bar-meta{margin-left:0;width:100%}
 }
+
+/* ---- The designer's system -------------------------------------------------
+ *
+ * Translated from the prototype's inline styles rather than copied: it is a
+ * canvas export with 349 style attributes and no classes, so the components
+ * only exist as repeated declarations. These are those declarations, named.
+ *
+ * It reuses the token set already here - the palette did not change, the
+ * structure did. */
+
+/* CARDS, not rows. The screens were tables built for a desktop; a wrapping grid
+ * reflows instead of collapsing, which is what the notes asked for. */
+.cards{
+  display:grid;gap:var(--space-md);
+  grid-template-columns:repeat(auto-fit,minmax(21rem,1fr));
+  align-items:start;
+}
+.cards.narrow{grid-template-columns:repeat(auto-fit,minmax(20rem,1fr))}
+.cards.wide{grid-template-columns:repeat(auto-fit,minmax(22rem,1fr))}
+
+.card{
+  background:var(--paper-2);border:1px solid var(--rule);border-radius:10px;
+  padding:var(--space-md);display:flex;flex-direction:column;gap:var(--space-xs);
+  min-width:0;
+}
+.card-head{display:flex;align-items:baseline;gap:var(--space-xs);flex-wrap:wrap}
+.card-title{
+  font-family:var(--font-mono);font-size:1.125rem;font-weight:600;
+  color:var(--ink);letter-spacing:-.01em;overflow-wrap:anywhere;
+}
+.card-title a{color:inherit;text-decoration:none}
+.card-title a:hover{color:var(--accent-ink)}
+.card-sub{
+  font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint);
+  overflow-wrap:anywhere;
+}
+.card-acts{margin-left:auto;display:flex;gap:var(--space-2xs);flex-wrap:wrap}
+.card-foot{
+  margin-top:auto;padding-top:var(--space-xs);border-top:1px solid var(--rule);
+  display:flex;gap:var(--space-xs) var(--space-md);flex-wrap:wrap;
+}
+
+/* The micro-label. 99 occurrences in the prototype, which makes it the single
+ * most load-bearing piece of type in the design. */
+.mlabel{
+  font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-faint);font-weight:600;
+}
+/* A figure and its label, stacked. Numbers align because they are compared. */
+.stat{display:flex;flex-direction:column;gap:.1rem;min-width:0}
+.stat .v{
+  font-family:var(--font-mono);font-size:.8125rem;color:var(--ink);
+  font-variant-numeric:tabular-nums;overflow-wrap:anywhere;
+}
+.stat .v.gap{color:var(--drift)}
+.stat .v.good{color:var(--ok)}
+
+.card.is-ready{border-left:3px solid var(--ok)}
+.card.is-starting{border-left:3px solid var(--gold)}
+.card.is-stopping{border-left:3px solid var(--rule-firm);opacity:.75}
+.card.is-failed,.card.is-gone{border-left:3px solid var(--drift)}
+.card.is-idle{border-left:3px solid var(--rule)}
+
 </style>
 </head>
 <body>

@@ -104,64 +104,56 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
 
   {{if .Pool.Residents}}
   <h2>Deployed</h2>
-  <div class="models">
+  <div class="cards">
   {{range .Models}}{{if .Resident}}
-    <article class="model is-{{.Phase}}" data-model="{{.Recipe.ID}}">
-      <div class="model-top">
-        <span class="model-id">{{.Recipe.ID}}</span>
-        <span class="model-port">:{{.Port}}</span>
-        {{/* ONE chip carrying the phase, not two booleans. "running" was true
-             for the eight to ten minutes a model spends loading, which is
-             precisely the window in which it cannot be used. */}}
+    <article class="card is-{{.Phase}}" data-model="{{.Recipe.ID}}">
+      <div class="card-head">
+        <span class="card-title"><a href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a></span>
         <span class="chip is-{{.Phase}}" data-phase>
-          {{if eq .Phase "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
-          {{if eq .Phase "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
+          {{if eq (printf "%s" .Phase) "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
+          {{if eq (printf "%s" .Phase) "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
           {{.Phase}}
         </span>
-        {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
-        <span class="model-acts">
-          <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
-          {{if eq .Phase "stopping"}}
+        <span class="card-acts">
+          {{if eq (printf "%s" .Phase) "stopping"}}
             <button class="btn-danger" type="button" disabled>Stopping…</button>
           {{else}}
             <form method="post" action="/api/undeploy/{{.Recipe.ID}}" style="display:inline">
-              <button class="btn-danger" type="submit">Undeploy</button>
+              <button class="btn-danger" type="submit">Stop</button>
             </form>
           {{end}}
         </span>
       </div>
+      <span class="card-sub">{{.Recipe.Model}}</span>
 
       {{if .Progress}}
-        {{/* While starting, the stages replace the sentence: "loading" for ten
-             minutes says nothing about where it has got to. */}}
         {{template "stage-stepper" .Progress}}
       {{else if .Detail}}
-        <p class="note{{if eq (printf "%s" .Phase) "failed"}} warn{{end}}{{if eq (printf "%s" .Phase) "gone"}} warn{{end}}">{{.Detail}}</p>
+        <p class="note" data-detail>{{.Detail}}</p>
       {{end}}
 
-
-    <div class="facts">
-      <div class="fact"><span class="k">Modality</span><span class="v">{{if .Recipe.Modality}}{{.Recipe.Modality}}{{else}}—{{end}}</span></div>
-      <div class="fact"><span class="k">Served as</span><span class="v">{{if .Recipe.ServedAs}}{{range $i,$n := .Recipe.ServedAs}}{{if $i}}, {{end}}{{$n}}{{end}}{{else}}—{{end}}</span></div>
-      <div class="fact"><span class="k">Uptime</span><span class="v">{{dur .UptimeSec}}</span></div>
-      <div class="fact"><span class="k">Declared</span><span class="v">{{gib .DeclaredGiB}}</span></div>
-      <div class="fact">
-        <span class="k">Observed</span>
-        <span class="v{{if .Observed}}{{if gt (sub .ObservedGiB .DeclaredGiB) 2.0}} gap{{end}}{{end}}">{{gib .ObservedGiB}}</span>
+      <div class="card-foot">
+        <span class="stat"><span class="mlabel">Port</span><span class="v">{{if .Port}}:{{.Port}}{{else}}—{{end}}</span></span>
+        <span class="stat"><span class="mlabel">Uptime</span><span class="v">{{secs .UptimeSec}}</span></span>
+        <span class="stat"><span class="mlabel">Declared</span><span class="v">{{gib1 .DeclaredGiB}} GiB</span></span>
+        <span class="stat">
+          <span class="mlabel">Observed</span>
+          {{/* The gap between promised and measured is how a capacity plan goes
+               wrong, so it is coloured rather than left to be spotted. */}}
+          <span class="v{{if .Observed}}{{if gt (sub .ObservedGiB .DeclaredGiB) 2.0}} gap{{end}}{{end}}">{{if .ObservedGiB}}{{gib1 .ObservedGiB}} GiB{{else}}—{{end}}</span>
+        </span>
+        {{if .Observed}}
+        <span class="stat"><span class="mlabel">KV / token</span><span class="v">{{if gt .Observed.KVKiBPerToken 0.0}}{{printf "%.1f" .Observed.KVKiBPerToken}} KiB{{else}}—{{end}}</span></span>
+        <span class="stat"><span class="mlabel">Backend</span><span class="v">{{if .Observed.Backend}}{{.Observed.Backend}}{{else}}—{{end}}</span></span>
+        {{end}}
       </div>
-      {{if .Observed}}
-        <div class="fact"><span class="k">KV / token</span><span class="v">{{if gt .Observed.KVKiBPerToken 0.0}}{{printf "%.1f" .Observed.KVKiBPerToken}} KiB{{else}}—{{end}}</span></div>
-        <div class="fact"><span class="k">Backend</span><span class="v">{{if .Observed.Backend}}{{.Observed.Backend}}{{else}}—{{end}}</span></div>
-        <div class="fact"><span class="k">CUDA graphs</span><span class="v">{{if .Observed.CUDAGraphs}}{{.Observed.CUDAGraphs}}{{else}}—{{end}}</span></div>
-      {{end}}
-    </div>
-  </article>
-{{end}}{{end}}
-</div>
+    </article>
+  {{end}}{{end}}
+  </div>
 {{else}}
 <div class="panel empty">
   Nothing deployed. The pool is entirely free —
-  <a href="/catalog">pick a recipe</a> to start a model.
+  <a href="/models">pick a model</a> to start one.
 </div>
 {{end}}
 

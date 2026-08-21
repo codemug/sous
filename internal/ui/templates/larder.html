@@ -31,34 +31,41 @@ the disk holds what landed. On this fleet that distinction was worth 206 GB.</p>
 <div class="panel">
   <h2>Downloads</h2>
   <div class="scroll">
-    <table>
-      <thead><tr><th>Repo</th><th>State</th><th>Detail</th><th></th></tr></thead>
-      <tbody>
-        {{range .Jobs}}
-        <tr>
-          <td class="mono">{{.Repo}}</td>
-          <td>
-            {{if eq (printf "%s" .Phase) "downloading"}}
-              <span class="chip is-starting"><span class="spin" aria-hidden="true"></span>downloading</span>
-            {{else if eq (printf "%s" .Phase) "done"}}
-              <span class="chip is-ready">done</span>
-            {{else}}
-              <span class="chip is-failed">failed</span>
-            {{end}}
-          </td>
-          <td class="mono dim">{{if .Detail}}{{.Detail}}{{else}}—{{end}}</td>
-          <td class="acts">
-            {{if ne (printf "%s" .Phase) "downloading"}}
-            <form method="post" action="/larder/fetch/forget" style="display:inline">
-              <input type="hidden" name="repo" value="{{.Repo}}">
-              <button class="btn" type="submit">Clear</button>
-            </form>
-            {{end}}
-          </td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
+    <div class="cards">
+  {{range .Larder}}
+    <article class="card{{if eq (printf "%s" .State) "orphan"}} is-gone{{else}} is-ready{{end}}">
+      <div class="card-head">
+        <span class="card-title">{{.Repo}}</span>
+        <span class="chip{{if eq (printf "%s" .State) "orphan"}} is-gone{{else}} is-ready{{end}}">{{.State}}</span>
+      </div>
+      <div class="card-foot">
+        <span class="stat"><span class="mlabel">On disk</span><span class="v">{{gibOf .Bytes | printf "%.1f"}} GiB</span></span>
+        <span class="stat">
+          <span class="mlabel">Used by</span>
+          <span class="v">{{if .ReferencedBy}}{{range $i,$r := .ReferencedBy}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}nothing{{end}}</span>
+        </span>
+      </div>
+      {{/* A set a container is holding is not deletable at all, so its card
+           offers no armed state rather than a button that will refuse. */}}
+      {{if not .ReferencedBy}}
+      <details class="drawer danger-drawer">
+        <summary>Delete weights</summary>
+        <div class="panel warn-panel">
+          <p class="note warn">This frees {{gibOf .Bytes | printf "%.1f"}} GiB and the only
+          way back is the network. No download rate is recorded here, so how long
+          a re-fetch takes is not something this page can honestly tell you.</p>
+          <form method="post" action="/api/larder/delete" class="confirmform">
+            <input type="hidden" name="repo" value="{{.Repo}}">
+            <label class="mono">Type <strong>{{.Repo}}</strong> to confirm</label>
+            <input name="confirm" type="text" required autocomplete="off" spellcheck="false">
+            <button class="btn-danger" type="submit">Delete</button>
+          </form>
+        </div>
+      </details>
+      {{end}}
+    </article>
+  {{end}}
+  </div>
   </div>
 </div>
 {{end}}{{end}}

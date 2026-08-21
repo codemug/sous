@@ -71,52 +71,39 @@ args:
 </details>
 
 <div class="panel scroll">
-<table>
-  <thead>
-    <tr>
-      <th>Recipe</th><th>Kind</th><th>Modality</th>
-      <th class="n">Declared</th><th>State</th><th></th>
-    </tr>
-  </thead>
-  <tbody>
+<div class="cards wide">
   {{range .Models}}
-    <tr{{if .Recipe.Archived}} class="arch"{{end}}>
-      <td>
-        <a class="rid" href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a>
-        {{if .Recipe.Model}}<span class="rmodel">{{.Recipe.Model}}</span>{{end}}
-      </td>
-      <td><span class="chip">{{.Recipe.Kind}}</span></td>
-      <td>{{.Recipe.Modality}}</td>
-      <td class="n">
-        {{if .Recipe.Declared.TotalGiB}}{{printf "%.2f GiB" .Recipe.Declared.TotalGiB}}{{else}}CPU only{{end}}
-      </td>
-      <td>
+    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}">
+      <div class="card-head">
+        <span class="card-title"><a href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a></span>
         {{if .Deployed}}
           <span class="chip is-{{.Phase}}">
             {{if eq (printf "%s" .Phase) "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
-            {{if eq (printf "%s" .Phase) "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
             {{.Phase}}
           </span>
-          {{if .Port}}<span class="mono dim">:{{.Port}}</span>{{end}}
         {{else}}
           <span class="chip is-idle">not deployed</span>
         {{end}}
         {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
-      </td>
-      <td>
-        <span class="row-acts">
+      </div>
+      <span class="card-sub">{{.Recipe.Model}}</span>
+
+      <div class="card-foot">
+        <span class="stat"><span class="mlabel">Kind</span><span class="v">{{.Recipe.Kind}}</span></span>
+        <span class="stat"><span class="mlabel">Modality</span><span class="v">{{if .Recipe.Modality}}{{.Recipe.Modality}}{{else}}—{{end}}</span></span>
+        <span class="stat"><span class="mlabel">Footprint</span><span class="v">{{if .Recipe.Declared.TotalGiB}}{{gib1 .Recipe.Declared.TotalGiB}} GiB{{else}}CPU only{{end}}</span></span>
+        {{if .Port}}<span class="stat"><span class="mlabel">Port</span><span class="v">:{{.Port}}</span></span>{{end}}
+        <span class="card-acts">
           <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
           {{if and (not .Recipe.Archived) (not .Deployed)}}
-          {{/* Through the plan, not straight to deploy: the projection is
-               worth seeing before a ten-minute start, and a refusal explains
-               itself there rather than as a banner. */}}
-          <a class="btn" href="/model/{{.Recipe.ID}}/plan">Deploy…</a>
+            {{/* Through the plan: the projection is worth seeing before a
+                 ten-minute start, and a refusal explains itself there. */}}
+            <a class="btn-primary" href="/model/{{.Recipe.ID}}/plan">Deploy…</a>
           {{end}}
         </span>
-      </td>
-    </tr>
+      </div>
+    </article>
   {{end}}
-  </tbody>
-</table>
+  </div>
 </div>
 {{template "foot" .}}{{end}}
