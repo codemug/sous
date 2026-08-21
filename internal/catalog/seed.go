@@ -237,6 +237,17 @@ func Seeds() []recipe.Recipe {
 				// "index out of bounds" - the instant the drafter first runs,
 				// which reads like an FP8 or sm_121 fault and is neither.
 				"speculative-config": `{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}`,
+				// LOAD-BEARING, and missing until 2026-08-21. Without these the
+				// model still answers, so nothing looks broken - it just stops
+				// making tool calls and streams its reasoning into content as
+				// if it were the answer. qwen36's recipe records the same trap:
+				// it reads as the model getting dumber rather than as a
+				// configuration error.
+				//
+				// Same base model as qwen38, so the same parsers apply.
+				"reasoning-parser":        "qwen3",
+				"enable-auto-tool-choice": true,
+				"tool-call-parser":        "qwen3_coder",
 			},
 			Env: map[string]string{
 				"TORCH_CUDA_ARCH_LIST": "12.1a",
