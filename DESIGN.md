@@ -1,7 +1,8 @@
 # Design constraints
 
-Full brief, with specimens and screen inventory:
-<https://claude.ai/code/artifact/99ff2b52-0927-43e9-bb5a-baaebfa82df9>
+Full brief — screens, vocabulary, the existing token system, and what is worth
+fixing: [`docs/design-brief.md`](docs/design-brief.md).
+Rendered version: <https://claude.ai/code/artifact/99ff2b52-0927-43e9-bb5a-baaebfa82df9>
 
 This file holds only the parts that must survive a redesign. Everything here is
 a property the interface **claims**, so changing it silently changes what Sous
