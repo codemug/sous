@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,10 @@ func browserGet(t *testing.T, h http.Handler, path string) *httptest.ResponseRec
 // recoverable afterwards - not from a reload, not from the store, not by
 // whoever runs the server. A page that could show it again would make the
 // hashing pointless.
+// A minted secret is the prefix plus 43 base64url characters. The usage example
+// on the page is the prefix plus an ellipsis, and the two must not be confused.
+var realSecret = regexp.MustCompile(`sk-sous-[A-Za-z0-9_-]{20,}`)
+
 func TestKeysPageShowsTheSecretExactlyOnce(t *testing.T) {
 	h := newTestServer(t)
 
@@ -49,7 +54,11 @@ func TestKeysPageShowsTheSecretExactlyOnce(t *testing.T) {
 	}
 
 	again := browserGet(t, h, "/keys").Body.String()
-	if strings.Contains(again, "sk-sous-") {
+	// A REAL secret, not the placeholder. The page shows "sk-sous-…" as an
+	// example in the usage snippet, so a bare prefix match reports the example
+	// as a leak - and worse, it passed for years only because the page was
+	// truncating before it reached that snippet.
+	if realSecret.MatchString(again) {
 		t.Error("the secret came back on a later page load")
 	}
 	if !strings.Contains(again, "voice demo") {
