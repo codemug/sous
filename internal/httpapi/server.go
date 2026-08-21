@@ -59,6 +59,13 @@ func New(m *deploy.Manager, c *catalog.Catalog, poolGiB float64, hubDir, sources
 		"POST /v1/completions",
 		"POST /v1/embeddings",
 		"POST /v1/rerank",
+		// vLLM exposes these and they carry the model in the body like every
+		// other path here, so routing them costs nothing. /v1/messages is the
+		// Anthropic-shaped surface; Envoy AI Gateway serves the same thing
+		// under /anthropic/v1/messages, but there is no second provider here to
+		// disambiguate from, so it keeps the path the upstream actually uses.
+		"POST /v1/responses",
+		"POST /v1/messages",
 		// The audio paths matter here: this node serves ASR and TTS through
 		// Sous too, and they were the clients most tied to hardcoded ports.
 		"POST /v1/audio/transcriptions",

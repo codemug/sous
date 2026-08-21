@@ -164,6 +164,13 @@ providers; this fronts one node where each model is a singleton. A request that
 cannot be served says so immediately rather than being queued, and is never
 quietly sent to a different model than the one asked for.
 
+Envoy AI Gateway was the reference for the surface, and covers most of it —
+chat, completions, embeddings, responses, transcriptions, translations, images,
+rerank, models, and Anthropic messages. It does **not** serve
+`/v1/audio/speech`, which is text-to-speech and therefore one of the three
+services on this node. That gap is the practical reason for a local gateway
+rather than pointing Envoy at these ports.
+
 ## Phases, and why "running" was not enough
 
 A container that exists is not a model that works. On this hardware a vLLM
