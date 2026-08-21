@@ -120,13 +120,22 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	s.mux.HandleFunc("POST /api/sources", s.addSource)
 	s.mux.HandleFunc("POST /api/sources/fetch", s.fetchSources)
 	s.mux.HandleFunc("GET /sources", s.pageSources)
-	s.mux.HandleFunc("GET /deployments", s.pageDeployments)
+	// RETIRED. Deployments listed the running set, which is what the Node page
+	// already shows with more context. Two lists of the same objects is how the
+	// pool bar and the cards came to disagree in the first place.
+	s.mux.HandleFunc("GET /deployments", redirectTo("/"))
 	s.mux.HandleFunc("GET /larder", s.pageLarder)
 	// The Node dashboard is the landing page: the first question on opening
 	// this panel is "what is running and is it healthy", not "what could I
 	// run next".
 	s.mux.HandleFunc("GET /", s.pageNode)
-	s.mux.HandleFunc("GET /catalog", s.pageCatalog)
+	// MODELS, not Catalog. One list of recipes carrying phase, because a recipe
+	// and a deployment are the same object in two states and splitting them
+	// across two pages made an operator hold that distinction themselves.
+	s.mux.HandleFunc("GET /models", s.pageModels)
+	// 301, not a duplicate handler: the old name should stop existing rather
+	// than quietly keep working and drift.
+	s.mux.HandleFunc("GET /catalog", redirectTo("/models"))
 	s.mux.HandleFunc("GET /login", s.pageLogin)
 	s.mux.HandleFunc("POST /login", s.doLogin)
 	s.mux.HandleFunc("POST /logout", s.doLogout)
@@ -136,6 +145,9 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// actually submit to.
 	s.mux.HandleFunc("POST /model/{id}/update", s.formUpdate)
 	s.mux.HandleFunc("POST /model/{id}/delete", s.formDelete)
+	// Clearing a record is NOT stopping a container - the container is already
+	// gone, which is what makes the record an orphan.
+	s.mux.HandleFunc("POST /model/{id}/forget", s.forgetRecord)
 	s.mux.HandleFunc("POST /model/{id}/deploy", s.formDeploy)
 	s.mux.HandleFunc("POST /model/{id}/undeploy", s.undeploy)
 	// Auth wraps the WHOLE mux rather than being applied per route, so a

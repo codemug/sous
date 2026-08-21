@@ -9,6 +9,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"strconv"
 	"time"
 )
 
@@ -51,6 +52,11 @@ func Templates() (*template.Template, error) {
 		// ago renders a timestamp as elapsed time. "3 days ago" answers the
 		// question a key list is actually asked - is this still in use - which
 		// an ISO timestamp makes the reader compute for themselves.
+		// gib1 formats a GiB figure to one decimal. The pool is 121.6 and the
+		// difference between 24 and 24.9 matters; nothing finer does.
+		"gib1": func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) },
+		// pctf keeps a CSS width from carrying fifteen decimals.
+		"pctf": func(f float64) string { return strconv.FormatFloat(f, 'f', 2, 64) },
 		"ago": func(t time.Time) string {
 			if t.IsZero() {
 				return "never"

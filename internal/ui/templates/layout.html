@@ -270,6 +270,31 @@ tbody tr:last-child td{border-bottom:none}
 .model.is-starting{border-left:3px solid var(--gold)}
 .model.is-stopping{opacity:.72}
 
+/* Pool ruler: numbers under the bar so a segment is read, not estimated. */
+.pool-ruler{
+  display:flex;justify-content:space-between;
+  font-family:var(--font-mono);font-size:var(--text-xs);color:var(--ink-faint);
+  margin-top:.3rem;font-variant-numeric:tabular-nums;
+}
+.swatch{width:11px;height:11px;border-radius:2px;display:inline-block;border:1px solid transparent}
+.sw-ready{background:var(--ok)}
+.sw-starting{background:repeating-linear-gradient(45deg,var(--gold) 0 4px,var(--gold-wash) 4px 8px)}
+.sw-stopping{background:var(--rule-firm)}
+/* Square for failed, hollow for gone: shape distinguishes them from ready for
+   anyone who cannot separate the hues. */
+.sw-failed{background:var(--drift);border-radius:1px}
+.sw-gone{background:none;border:1px solid var(--drift);border-radius:1px}
+.sw-free{background:var(--paper-3);border-color:var(--rule-firm)}
+
+.orphans{border-left:3px solid var(--drift)}
+.orphan{
+  display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:baseline;
+  padding:.55rem 0;border-bottom:1px solid var(--rule);
+}
+.orphan:last-child{border-bottom:none}
+.orphan-act{margin-left:auto;display:flex;gap:.4rem}
+.note.dim{color:var(--ink-faint)}
+
 /* API keys. The fresh-secret panel is deliberately loud: it is shown once and
    a reader who scrolls past it has lost the key. */
 .panel.fresh{border-left:3px solid var(--accent);background:var(--accent-wash)}
@@ -350,8 +375,7 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
   <a class="mark" href="/">SOUS</a>
   <nav class="links">
     <a href="/"{{if eq .Title "Node"}} aria-current="page"{{end}}>Node</a>
-    <a href="/catalog"{{if eq .Title "Catalog"}} aria-current="page"{{end}}>Catalog</a>
-    <a href="/deployments"{{if eq .Title "Deployments"}} aria-current="page"{{end}}>Deployments</a>
+    <a href="/models"{{if eq .Title "Models"}} aria-current="page"{{end}}>Models</a>
     <a href="/larder"{{if eq .Title "Larder"}} aria-current="page"{{end}}>Larder</a>
     <a href="/keys"{{if eq .Title "API keys"}} aria-current="page"{{end}}>API keys</a>
     <a href="/sources"{{if eq .Title "Sources"}} aria-current="page"{{end}}>Sources</a>

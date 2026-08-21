@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"github.com/codemug/sous/internal/store"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -231,5 +232,52 @@ func TestUndeployAsyncRejectsBadID(t *testing.T) {
 	m := &Manager{}
 	if err := m.UndeployAsync("../escape"); err == nil {
 		t.Fatal("accepted a traversal id")
+	}
+}
+
+// Resident decides what counts against the pool. Getting this wrong makes the
+// node look full when it is empty, or empty when it is full.
+func TestResidentCountsOnlyPhasesHoldingMemory(t *testing.T) {
+	hold := []Phase{PhaseStarting, PhaseReady, PhaseStopping}
+	free := []Phase{PhaseFailed, PhaseGone}
+	for _, p := range hold {
+		if !Resident(p) {
+			t.Errorf("%q holds memory but is not resident", p)
+		}
+	}
+	for _, p := range free {
+		if Resident(p) {
+			t.Errorf("%q has no container yet counts against the pool", p)
+		}
+	}
+}
+
+// Clearing a record is not the same as stopping a container, and the button
+// that says "clear the record" must not stop anything.
+func TestForgetRecordLeavesContainersAlone(t *testing.T) {
+	f := newFake()
+	m := newManager(t, f)
+	if _, err := m.Deploy(context.Background(), "kokoro", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.seen())
+	if err := m.ForgetRecord("kokoro"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.seen()) != before {
+		t.Errorf("ForgetRecord touched the runtime: %v", f.seen()[before:])
+	}
+	if err := m.Store.ReadYAML(store.KindDeployment, "kokoro", &Record{}); err == nil {
+		t.Error("the record survived")
+	}
+}
+
+func TestForgetRecordIsIdempotentAndRejectsBadID(t *testing.T) {
+	m := newManager(t, newFake())
+	if err := m.ForgetRecord("kokoro"); err != nil {
+		t.Errorf("forgetting an absent record errored: %v", err)
+	}
+	if err := m.ForgetRecord("../escape"); err == nil {
+		t.Error("accepted a traversal id")
 	}
 }

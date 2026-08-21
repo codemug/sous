@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;-webkit-font-smoothing:antialiased}
+:root{
+  --paper:oklch(98.5% 0.004 250);--paper-2:oklch(96.5% 0.005 250);--paper-3:oklch(93.5% 0.006 252);
+  --ink:oklch(24% 0.02 258);--ink-body:oklch(34% 0.018 257);--ink-mute:oklch(52% 0.014 255);--ink-faint:oklch(64% 0.012 255);
+  --rule:oklch(89% 0.008 252);--rule-firm:oklch(80% 0.010 252);
+  --accent:oklch(58% 0.20 256);--accent-ink:oklch(46% 0.18 256);--accent-wash:oklch(95% 0.03 256);
+  --ok:oklch(52% 0.13 158);--ok-wash:oklch(95% 0.03 158);
+  --gold:oklch(58% 0.12 100);--gold-wash:oklch(96% 0.03 100);
+  --drift:oklch(62% 0.15 62);--drift-wash:oklch(96% 0.04 72);
+  --graphite:oklch(22% 0.016 260);
+  --font-body:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --paper:oklch(16% 0.014 260);--paper-2:oklch(19.5% 0.015 260);--paper-3:oklch(24% 0.016 260);
+  --ink:oklch(94% 0.008 250);--ink-body:oklch(84% 0.010 252);--ink-mute:oklch(66% 0.012 254);--ink-faint:oklch(54% 0.012 255);
+  --rule:oklch(29% 0.014 258);--rule-firm:oklch(38% 0.016 258);
+  --accent:oklch(70% 0.17 256);--accent-ink:oklch(80% 0.14 256);--accent-wash:oklch(28% 0.06 256);
+  --ok:oklch(70% 0.15 158);--ok-wash:oklch(26% 0.05 158);
+  --gold:oklch(78% 0.12 100);--gold-wash:oklch(27% 0.05 100);
+  --drift:oklch(76% 0.14 68);--drift-wash:oklch(28% 0.06 68);
+  --graphite:oklch(13% 0.012 260);
+}}
+[data-sous="light"]{
+  --paper:oklch(98.5% 0.004 250);--paper-2:oklch(96.5% 0.005 250);--paper-3:oklch(93.5% 0.006 252);
+  --ink:oklch(24% 0.02 258);--ink-body:oklch(34% 0.018 257);--ink-mute:oklch(52% 0.014 255);--ink-faint:oklch(64% 0.012 255);
+  --rule:oklch(89% 0.008 252);--rule-firm:oklch(80% 0.010 252);
+  --accent:oklch(58% 0.20 256);--accent-ink:oklch(46% 0.18 256);--accent-wash:oklch(95% 0.03 256);
+  --ok:oklch(52% 0.13 158);--ok-wash:oklch(95% 0.03 158);
+  --gold:oklch(58% 0.12 100);--gold-wash:oklch(96% 0.03 100);
+  --drift:oklch(62% 0.15 62);--drift-wash:oklch(96% 0.04 72);
+  --graphite:oklch(22% 0.016 260);
+}
+[data-sous="dark"]{
+  --paper:oklch(16% 0.014 260);--paper-2:oklch(19.5% 0.015 260);--paper-3:oklch(24% 0.016 260);
+  --ink:oklch(94% 0.008 250);--ink-body:oklch(84% 0.010 252);--ink-mute:oklch(66% 0.012 254);--ink-faint:oklch(54% 0.012 255);
+  --rule:oklch(29% 0.014 258);--rule-firm:oklch(38% 0.016 258);
+  --accent:oklch(70% 0.17 256);--accent-ink:oklch(80% 0.14 256);--accent-wash:oklch(28% 0.06 256);
+  --ok:oklch(70% 0.15 158);--ok-wash:oklch(26% 0.05 158);
+  --gold:oklch(78% 0.12 100);--gold-wash:oklch(27% 0.05 100);
+  --drift:oklch(76% 0.14 68);--drift-wash:oklch(28% 0.06 68);
+  --graphite:oklch(13% 0.012 260);
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes crawl{to{background-position:28px 0}}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms !important;transition-duration:.01ms !important}}
+</style>
+</helmet>
+
+<div data-sous="{{theme}}" style="min-height:100dvh;background:var(--paper);color:var(--ink-body);font-family:var(--font-body);font-size:.9375rem;line-height:1.55">
+
+<sc-if value="{{signedOut}}" hint-placeholder-val="{{ false }}">
+<section data-screen-label="Sign in" style="min-height:100dvh;display:grid;place-items:center;padding:2rem">
+  <div style="width:100%;max-width:26rem">
+    <div style="display:flex;align-items:center;gap:.45rem;margin-bottom:1.5rem">
+      <span style="font-weight:600;font-size:.9375rem;letter-spacing:-.01em;color:var(--ink)">SOUS</span>
+      <span style="width:5px;height:5px;border-radius:50%;background:var(--accent)"></span>
+    </div>
+    <h1 style="font-size:1.5rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0 0 .25rem">Sign in</h1>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;font-size:.8125rem">asus-gx10 · one operator, one machine. A session can be dropped; basic auth could not.</p>
+    <div style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem">
+      <label style="display:block;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem">Operator</label>
+      <input value="usman" readonly style="width:100%;font-family:var(--font-mono);font-size:.8125rem;padding:.5rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);margin-bottom:.9rem" />
+      <label style="display:block;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem">Passphrase</label>
+      <input type="password" value="························" readonly style="width:100%;font-family:var(--font-mono);font-size:.8125rem;padding:.5rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);margin-bottom:1.1rem" />
+      <button onClick="{{signIn}}" style="width:100%;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.55rem .7rem;cursor:pointer;background:var(--accent);color:oklch(99% 0 0);border:1px solid var(--accent);border-radius:6px" style-hover="background:var(--accent-ink);border-color:var(--accent-ink)">Sign in</button>
+    </div>
+    <p style="color:var(--ink-faint);font-size:.6875rem;font-family:var(--font-mono);margin:1rem 0 0">A real form, deliberately: nothing here works without a POST.</p>
+  </div>
+</section>
+</sc-if>
+
+<sc-if value="{{signedIn}}" hint-placeholder-val="{{ true }}">
+<div style="display:grid;grid-template-columns:14rem minmax(0,1fr);min-height:100dvh">
+
+  <aside style="border-right:1px solid var(--rule);background:var(--paper-2);padding:1.5rem 1rem;display:flex;flex-direction:column;gap:1.5rem;position:sticky;top:0;height:100dvh;overflow-y:auto">
+    <a href="#" onClick="{{goNode}}" style="display:flex;align-items:center;gap:.45rem;font-weight:600;font-size:.9375rem;letter-spacing:-.01em;color:var(--ink);text-decoration:none">SOUS<span style="width:5px;height:5px;border-radius:50%;background:var(--accent)"></span></a>
+
+    <nav style="display:flex;flex-direction:column;gap:.1rem">
+      <sc-for list="{{navItems}}" as="n" hint-placeholder-count="5">
+        <a href="#" onClick="{{n.go}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;text-decoration:none;padding:.45rem .55rem;border-radius:6px;border-left:2px solid {{n.edge}};color:{{n.fg}};background:{{n.bg}};display:flex;align-items:center;gap:.4rem" style-hover="color:var(--ink)">
+          <span>{{n.label}}</span>
+          <span style="margin-left:auto;font-size:.6875rem;color:{{n.countFg}}">{{n.count}}</span>
+        </a>
+      </sc-for>
+    </nav>
+
+    <div style="margin-top:auto;display:flex;flex-direction:column;gap:.75rem">
+      <div style="border-top:1px solid var(--rule);padding-top:.75rem">
+        <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.4rem">Pool</div>
+        <div style="display:flex;height:.4rem;border-radius:2px;overflow:hidden;background:var(--paper-3);border:1px solid var(--rule)">
+          <sc-for list="{{segs}}" as="s" hint-placeholder-count="4">
+            <div style="width:{{s.pct}}%;background:{{s.bg}};border-right:1px solid var(--paper-2)"></div>
+          </sc-for>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint);font-variant-numeric:tabular-nums;line-height:1.7;margin-top:.4rem">
+          <span style="color:{{marginFg}}">{{marginStr}}</span> GiB margin<br />
+          <span style="color:var(--ink-mute)">{{committedStr}}</span> committed · <span style="color:var(--ink-mute)">24</span> reserved<br />
+          <span style="color:var(--ink-mute)">{{residentCount}}</span> in the pool
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.4rem;font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">
+        <span style="width:6px;height:6px;border-radius:50%;background:{{liveDot}};animation:{{liveAnim}}"></span>
+        <span>{{liveLabel}}</span>
+      </div>
+      <button onClick="{{signOut}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px" style-hover="border-color:var(--accent);color:var(--accent-ink)">Sign out</button>
+    </div>
+  </aside>
+
+  <main style="padding:2rem;max-width:78rem;min-width:0">
+
+  <sc-if value="{{isNode}}" hint-placeholder-val="{{ true }}">
+  <section data-screen-label="Node">
+    <div style="display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap;margin-bottom:.25rem">
+      <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0">Node</h1>
+      <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);padding:.1rem .4rem;border-radius:6px;background:var(--paper-3)">asus-gx10 · GB10 · v0.9.1</span>
+    </div>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;max-width:62ch">One pool of 121.6 GiB. The bar is drawn to scale and coloured by phase — the same five phases as the rows below it, so nothing can read amber above and green beneath.</p>
+
+    <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:2rem">
+      <div style="display:flex;align-items:flex-end;gap:1.5rem;flex-wrap:wrap;margin-bottom:.9rem">
+        <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Memory pool</div>
+        <div style="margin-left:auto;display:flex;gap:1.75rem;flex-wrap:wrap">
+          <div>
+            <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Committed</div>
+            <div style="font-family:var(--font-mono);font-size:1.125rem;color:var(--ink);font-variant-numeric:tabular-nums">{{committedStr}} <span style="font-size:.8125rem;color:var(--ink-faint)">GiB</span></div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Reserve</div>
+            <div style="font-family:var(--font-mono);font-size:1.125rem;color:var(--ink-mute);font-variant-numeric:tabular-nums">24.0 <span style="font-size:.8125rem;color:var(--ink-faint)">GiB</span></div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Margin</div>
+            <div style="font-family:var(--font-mono);font-size:1.125rem;color:{{marginFg}};font-variant-numeric:tabular-nums">{{marginStr}} <span style="font-size:.8125rem;color:var(--ink-faint)">GiB</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div role="img" aria-label="{{poolAria}}" style="display:flex;width:100%;height:2.75rem;overflow:hidden;border:1px solid var(--rule-firm);border-radius:10px;background:var(--paper-3)">
+        <sc-for list="{{segs}}" as="s" hint-placeholder-count="4">
+          <div title="{{s.title}}" style="width:{{s.pct}}%;background:{{s.bg}};color:{{s.fg}};display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.04em;overflow:hidden;white-space:nowrap;border-right:1px solid var(--paper);min-width:0;animation:{{s.anim}}">{{s.label}}</div>
+        </sc-for>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;margin-top:.3rem;font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint);font-variant-numeric:tabular-nums">
+        <span>0</span><span>30.4</span><span>60.8</span><span>91.2</span><span>121.6 GiB</span>
+      </div>
+
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.9rem;font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-mute)">
+        <sc-for list="{{legend}}" as="l" hint-placeholder-count="4">
+          <span style="display:inline-flex;align-items:center;gap:.35rem;color:{{l.fg}}">
+            <span style="width:.7rem;height:.7rem;border-radius:{{l.radius}};background:{{l.bg}};border:1px solid {{l.border}}"></span>
+            <b style="color:var(--ink);font-weight:500">{{l.count}}</b> {{l.label}}
+          </span>
+        </sc-for>
+        <span>ports <b style="color:var(--ink);font-weight:500">8000–8199</b></span>
+      </div>
+
+      <sc-if value="{{warnText}}" hint-placeholder-val="{{ false }}">
+        <p style="margin:.9rem 0 0;padding:.6rem .75rem;border:1px solid var(--drift);background:var(--drift-wash);border-radius:6px;font-size:.8125rem;color:var(--ink)">{{warnText}}</p>
+      </sc-if>
+      <p style="margin:.75rem 0 0;font-size:.8125rem;color:var(--ink-faint);max-width:70ch">The 24 GiB reserve is a calibration, not a formula: overhead ran 10.8–22.0 GiB across five measured combinations, and the process-count theory that explained it was falsified by the next measurement. It sits above the observed maximum.</p>
+    </section>
+
+    <div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:.75rem">
+      <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0;letter-spacing:-.01em">In the pool</h2>
+      <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-faint)">{{residentCount}} · holding memory right now</span>
+    </div>
+
+    <div style="display:grid;gap:.75rem;margin-bottom:2rem">
+      <sc-for list="{{residentRows}}" as="r" hint-placeholder-count="4">
+        <article style="border:1px solid var(--rule);border-left:3px solid {{r.edge}};border-radius:10px;background:var(--paper-2);padding:.9rem 1.25rem;opacity:{{r.opacity}}">
+          <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap">
+            <a href="#" onClick="{{r.open}}" style="font-size:1.125rem;font-weight:600;color:var(--ink);letter-spacing:-.01em;text-decoration:none" style-hover="color:var(--accent-ink)">{{r.id}}</a>
+            <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--accent-ink)">:{{r.port}}</span>
+            <span style="display:inline-flex;align-items:center;gap:.35rem;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .45rem;border-radius:6px;border:1px solid {{r.chipBorder}};border-style:{{r.chipBorderStyle}};color:{{r.chipFg}};background:{{r.chipBg}}">
+              <sc-if value="{{r.spins}}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;border:1.5px solid currentColor;border-top-color:transparent;display:inline-block;animation:spin .8s linear infinite"></span></sc-if>
+              <sc-if value="{{r.dot}}" hint-placeholder-val="{{ true }}"><span style="width:6px;height:6px;border-radius:{{r.dotRadius}};background:{{r.dotBg}};border:1px solid currentColor"></span></sc-if>
+              {{r.phase}}
+            </span>
+            <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.1rem .4rem;border-radius:6px;background:var(--accent-wash);color:var(--accent-ink)">{{r.modality}}</span>
+            <span style="margin-left:auto;display:flex;gap:.4rem;flex-wrap:wrap">
+              <a href="#" onClick="{{r.open}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;text-decoration:none" style-hover="border-color:var(--accent);color:var(--accent-ink)">Open</a>
+              <button onClick="{{r.stop}}" disabled="{{r.stopDisabled}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:{{r.stopCursor}};background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;opacity:{{r.stopOpacity}}" style-hover="border-color:var(--drift);color:var(--drift)">{{r.stopLabel}}</button>
+            </span>
+          </div>
+
+          <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.5rem;font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-mute);font-variant-numeric:tabular-nums">
+            <span>holds <b style="color:var(--ink);font-weight:500">{{r.holdsStr}}</b> GiB</span>
+            <span>declared <span style="color:var(--ink-body)">{{r.declStr}}</span></span>
+            <span style="color:{{r.obsFg}}">observed {{r.obsStr}}</span>
+            <span>{{r.uptimeLabel}} <span style="color:var(--ink-body)">{{r.uptimeStr}}</span></span>
+            <span style="color:var(--ink-faint)">{{r.kind}} · {{r.modality}}</span>
+            <sc-if value="{{r.backend}}" hint-placeholder-val="{{ true }}"><span style="color:var(--ink-faint)">{{r.backend}}</span></sc-if>
+          </div>
+
+          <sc-if value="{{r.detail}}" hint-placeholder-val="{{ false }}">
+            <p style="margin:.5rem 0 0;font-size:.8125rem;color:{{r.detailFg}};max-width:78ch">{{r.detail}}</p>
+          </sc-if>
+
+          <sc-if value="{{r.isStarting}}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:.9rem;padding-top:.9rem;border-top:1px solid var(--rule)">
+              <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.7rem">
+                <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Start progress</span>
+                <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink);font-variant-numeric:tabular-nums">{{r.elapsedStr}} elapsed</span>
+                <span style="font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">{{r.historyNote}}</span>
+              </div>
+              <div style="display:grid;gap:.35rem">
+                <sc-for list="{{r.stages}}" as="st" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:baseline;gap:.6rem;font-family:var(--font-mono);font-size:.8125rem;color:{{st.fg}};font-variant-numeric:tabular-nums">
+                    <span style="width:1.1rem;display:inline-flex;justify-content:center;flex:0 0 auto">
+                      <sc-if value="{{st.isLive}}" hint-placeholder-val="{{ false }}"><span style="width:9px;height:9px;border-radius:50%;border:1.5px solid var(--gold);border-top-color:transparent;display:inline-block;animation:spin .8s linear infinite"></span></sc-if>
+                      <sc-if value="{{st.isStatic}}" hint-placeholder-val="{{ true }}"><span style="width:7px;height:7px;border-radius:{{st.markRadius}};background:{{st.markBg}};border:1px solid {{st.markBorder}};display:inline-block"></span></sc-if>
+                    </span>
+                    <span style="min-width:11rem;color:{{st.nameFg}}">{{st.name}}</span>
+                    <span style="min-width:4.5rem;color:{{st.timeFg}}">{{st.time}}</span>
+                    <span style="color:var(--ink-faint);min-width:0;overflow-wrap:anywhere">{{st.note}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+        </article>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{hasOrphans}}" hint-placeholder-val="{{ true }}">
+    <div>
+      <div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:.4rem">
+        <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0;letter-spacing:-.01em">Records without a container</h2>
+        <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-faint)">{{orphanCount}} · holding no memory</span>
+      </div>
+      <p style="color:var(--ink-mute);font-size:.8125rem;margin:0 0 .75rem;max-width:70ch">These are not in the bar above, because nothing of theirs is resident. Sous kept the record so the failure can be read; the memory came back when the container died.</p>
+      <div style="display:grid;gap:.75rem;margin-bottom:2rem">
+        <sc-for list="{{orphanRows}}" as="r" hint-placeholder-count="1">
+          <article style="border:1px dashed var(--drift);border-radius:10px;background:var(--paper-2);padding:.9rem 1.25rem">
+            <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap">
+              <a href="#" onClick="{{r.open}}" style="font-size:1.125rem;font-weight:600;color:var(--ink);letter-spacing:-.01em;text-decoration:none" style-hover="color:var(--accent-ink)">{{r.id}}</a>
+              <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-faint)">:{{r.port}}</span>
+              <span style="display:inline-flex;align-items:center;gap:.35rem;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .45rem;border-radius:6px;border:1px dashed var(--drift);color:var(--drift)">
+                <span style="width:6px;height:6px;border-radius:1px;border:1px solid currentColor"></span>{{r.phase}}
+              </span>
+              <span style="margin-left:auto;display:flex;gap:.4rem;flex-wrap:wrap">
+                <a href="#" onClick="{{r.open}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;text-decoration:none" style-hover="border-color:var(--accent);color:var(--accent-ink)">Open</a>
+                <a href="#" onClick="{{r.plan}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;text-decoration:none" style-hover="border-color:var(--accent);color:var(--accent-ink)">Plan restart</a>
+                <button onClick="{{r.clear}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px" style-hover="border-color:var(--drift);color:var(--drift)">Clear record</button>
+              </span>
+            </div>
+            <p style="margin:.5rem 0 0;font-size:.8125rem;color:var(--drift);max-width:78ch">{{r.detail}}</p>
+            <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.4rem;font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-mute);font-variant-numeric:tabular-nums">
+              <span>released <span style="color:var(--ink-body)">{{r.declStr}}</span></span>
+              <span>{{r.uptimeLabel}} <span style="color:var(--ink-body)">{{r.uptimeStr}}</span></span>
+            </div>
+          </article>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{isModels}}" hint-placeholder-val="{{ false }}">
+  <section data-screen-label="Models">
+    <div style="display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap;margin-bottom:.25rem">
+      <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0">Models</h1>
+      <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);padding:.1rem .4rem;border-radius:6px;background:var(--paper-3)">was Catalog + Deployments</span>
+    </div>
+    <p style="color:var(--ink-mute);margin:0 0 1.25rem;max-width:66ch">One list. A recipe is the configuration; a deployment is that same recipe holding a port and a share of the pool. Phase is the only difference, so it is a column here rather than a second page.</p>
+
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem">
+      <sc-for list="{{filters}}" as="f" hint-placeholder-count="4">
+        <button onClick="{{f.pick}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:{{f.bg}};color:{{f.fg}};border:1px solid {{f.border}};border-radius:6px">{{f.label}} <span style="color:var(--ink-faint)">{{f.count}}</span></button>
+      </sc-for>
+      <span style="margin-left:auto;display:flex;gap:.4rem">
+        <button onClick="{{noop}}" title="Adds recipes this binary carries that are missing here. Edited recipes are kept." style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px" style-hover="border-color:var(--accent);color:var(--accent-ink)">Sync seeds</button>
+      </span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(21rem,1fr));gap:.75rem">
+      <sc-for list="{{listRows}}" as="r" hint-placeholder-count="6">
+        <article style="border:1px solid var(--rule);border-left:3px solid {{r.edge}};border-radius:10px;background:var(--paper-2);padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.45rem;opacity:{{r.rowOpacity}}">
+          <div style="display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap">
+            <a href="#" onClick="{{r.open}}" style="font-size:1.125rem;font-weight:600;color:var(--ink);text-decoration:none;letter-spacing:-.01em" style-hover="color:var(--accent-ink)">{{r.id}}</a>
+            <span style="display:inline-flex;align-items:center;gap:.35rem;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .45rem;border-radius:6px;border:1px solid {{r.chipBorder}};border-style:{{r.chipBorderStyle}};color:{{r.chipFg}};background:{{r.chipBg}};margin-left:auto">
+              <sc-if value="{{r.spins}}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;border:1.5px solid currentColor;border-top-color:transparent;display:inline-block;animation:spin .8s linear infinite"></span></sc-if>
+              <sc-if value="{{r.dot}}" hint-placeholder-val="{{ true }}"><span style="width:6px;height:6px;border-radius:{{r.dotRadius}};background:{{r.dotBg}};border:1px solid currentColor"></span></sc-if>
+              {{r.phase}}
+            </span>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint);overflow-wrap:anywhere">{{r.model}}</div>
+          <div style="display:flex;gap:1rem;align-items:baseline;flex-wrap:wrap;margin-top:.15rem;padding-top:.55rem;border-top:1px solid var(--rule);font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-mute);font-variant-numeric:tabular-nums">
+            <span>declared <span style="color:var(--ink)">{{r.declStr}}</span></span>
+            <span style="color:var(--ink-faint)">{{r.kind}} · {{r.modality}}</span>
+            <span style="margin-left:auto;color:{{r.subFg}};font-size:.6875rem">{{r.sub}}</span>
+          </div>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.25rem">
+            <a href="#" onClick="{{r.open}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;text-decoration:none" style-hover="border-color:var(--accent);color:var(--accent-ink)">Open</a>
+            <sc-if value="{{r.canPlan}}" hint-placeholder-val="{{ true }}">
+              <a href="#" onClick="{{r.plan}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;text-decoration:none" style-hover="border-color:var(--accent);color:var(--accent-ink)">Deploy…</a>
+            </sc-if>
+            <sc-if value="{{r.canStop}}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{r.stop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px" style-hover="border-color:var(--drift);color:var(--drift)">{{r.stopLabel}}</button>
+            </sc-if>
+          </div>
+        </article>
+      </sc-for>
+    </div>
+
+    <details style="margin-top:1.25rem">
+      <summary style="cursor:pointer;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-mute);padding:.5rem 0">+ New recipe / import YAML</summary>
+      <div style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1rem;margin-top:.5rem">
+        <p style="color:var(--ink-mute);font-size:.8125rem;margin:0 0 .75rem;max-width:62ch">Paste a recipe as published in <span style="font-family:var(--font-mono)">recipes/</span>. Creating never overwrites: an existing id returns a conflict and a link to its edit form, so importing an older copy cannot quietly replace a tuned one.</p>
+        <textarea spellcheck="false" placeholder="id: my-model&#10;kind: vllm&#10;modality: text&#10;image: vllm/vllm-openai:latest&#10;model: org/Model-Name&#10;declared:&#10;  weights_gib: 10&#10;  kv_gib: 4" style="width:100%;min-height:11rem;font-family:var(--font-mono);font-size:.8125rem;color:var(--ink);background:var(--paper);border:1px solid var(--rule-firm);border-radius:6px;padding:.75rem;resize:vertical;line-height:1.5"></textarea>
+        <div style="margin-top:.75rem"><button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--accent);color:oklch(99% 0 0);border:1px solid var(--accent);border-radius:6px">Create</button></div>
+      </div>
+    </details>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{isPlan}}" hint-placeholder-val="{{ false }}">
+  <section data-screen-label="Plan">
+    <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.25rem">
+      <a href="#" onClick="{{p.cancel}}" style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-faint);text-decoration:none" style-hover="color:var(--accent-ink)">Models</a>
+      <span style="color:var(--ink-faint)">/</span>
+      <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0">Deploy {{p.id}}</h1>
+      <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.15rem .5rem;border-radius:6px;color:{{p.verdictFg}};background:{{p.verdictBg}};border:1px solid {{p.verdictFg}}">{{p.verdict}}</span>
+    </div>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;max-width:64ch">Nothing has started yet. This is the plan: the pool as it would be, with {{p.id}} in it. The planner reports a margin rather than a verdict, because a 2 GiB pass and a 30 GiB pass are different decisions.</p>
+
+    <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:1.25rem">
+      <div style="display:flex;align-items:flex-end;gap:1.5rem;flex-wrap:wrap;margin-bottom:.9rem">
+        <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Projected pool</div>
+        <div style="margin-left:auto;display:flex;gap:1.75rem;flex-wrap:wrap">
+          <div>
+            <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Requested</div>
+            <div style="font-family:var(--font-mono);font-size:1.125rem;color:var(--ink);font-variant-numeric:tabular-nums">{{p.declStr}}</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Committed after</div>
+            <div style="font-family:var(--font-mono);font-size:1.125rem;color:var(--ink);font-variant-numeric:tabular-nums">{{p.committedStr}} <span style="font-size:.8125rem;color:var(--ink-faint)">/ 97.6</span></div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Margin</div>
+            <div style="font-family:var(--font-mono);font-size:2rem;line-height:1.1;color:{{p.marginFg}};font-variant-numeric:tabular-nums">{{p.marginStr}} <span style="font-size:.8125rem;color:var(--ink-faint)">GiB</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="position:relative">
+        <div style="display:flex;width:100%;height:2.75rem;overflow:hidden;border:1px solid var(--rule-firm);border-radius:10px;background:var(--paper-3)">
+          <sc-for list="{{p.segs}}" as="s" hint-placeholder-count="5">
+            <div title="{{s.title}}" style="width:{{s.pct}}%;background:{{s.bg}};color:{{s.fg}};display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.04em;overflow:hidden;white-space:nowrap;border-right:1px solid var(--paper);min-width:0">{{s.label}}</div>
+          </sc-for>
+        </div>
+        <sc-if value="{{p.overflows}}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;top:-.45rem;bottom:-.45rem;left:{{p.edgePct}}%;width:0;border-left:2px dashed var(--drift)"></div>
+        </sc-if>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:.3rem;font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">
+        <span>0</span>
+        <sc-if value="{{p.overflows}}" hint-placeholder-val="{{ true }}"><span style="color:var(--drift)">↑ 121.6 GiB — the pool ends here</span></sc-if>
+        <span>{{p.declStr}} requested</span>
+      </div>
+
+      <sc-if value="{{p.warning}}" hint-placeholder-val="{{ false }}">
+        <p style="margin:.9rem 0 0;padding:.6rem .75rem;border:1px solid var(--gold);background:var(--gold-wash);border-radius:6px;font-size:.8125rem;color:var(--ink)">{{p.warning}}</p>
+      </sc-if>
+    </section>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1.25rem;align-items:start">
+      <sc-if value="{{p.hasMustFree}}" hint-placeholder-val="{{ true }}">
+      <section style="border:1px solid var(--drift);border-radius:10px;background:var(--paper-2);padding:1.25rem">
+        <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .35rem;letter-spacing:-.01em">What would have to stop</h2>
+        <p style="color:var(--ink-mute);font-size:.8125rem;margin:0 0 1rem;max-width:52ch">Largest first — the shortest route back to a set that fits. Stopping one here recomputes the margin above; the plan is live.</p>
+        <div style="display:grid;gap:.6rem">
+          <sc-for list="{{p.mustFree}}" as="mf" hint-placeholder-count="1">
+            <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:.6rem .75rem;border:1px solid var(--rule);border-radius:6px;background:var(--paper)">
+              <span style="min-width:0">
+                <span style="font-weight:600;color:var(--ink)">{{mf.id}}</span>
+                <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-mute);margin-left:.5rem">{{mf.declStr}}</span>
+                <span style="display:block;font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">{{mf.sub}}</span>
+              </span>
+              <button onClick="{{mf.stop}}" disabled="{{mf.isStopping}}" style="margin-left:auto;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--drift);border:1px solid var(--drift);border-radius:6px" style-hover="background:var(--drift-wash)">{{mf.label}}</button>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+      </sc-if>
+
+      <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem">
+        <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .75rem;letter-spacing:-.01em">What you are starting</h2>
+        <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:.25rem 1rem;font-size:.8125rem">
+          <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Model</span>
+          <span style="font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere">{{p.model}}</span>
+          <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Weights</span>
+          <span style="font-family:var(--font-mono);color:var(--ink)">{{p.weightsStr}}</span>
+          <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">KV cache</span>
+          <span style="font-family:var(--font-mono);color:var(--ink)">{{p.kvStr}}</span>
+          <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Kind</span>
+          <span style="font-family:var(--font-mono);color:var(--ink)">{{p.kind}} · {{p.modality}}</span>
+        </div>
+        <p style="color:var(--ink-mute);font-size:.8125rem;margin:1rem 0 0">{{p.loadNote}} Nothing answers on the port until then.</p>
+
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule)">
+          <button onClick="{{p.deploy}}" disabled="{{p.refused}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.5rem .9rem;cursor:{{p.deployCursor}};background:{{p.deployBg}};color:{{p.deployFg}};border:1px solid {{p.deployBorder}};border-radius:6px">Deploy {{p.id}}</button>
+          <button onClick="{{p.cancel}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.5rem .9rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px" style-hover="border-color:var(--accent);color:var(--accent-ink)">Cancel</button>
+        </div>
+
+        <sc-if value="{{p.refused}}" hint-placeholder-val="{{ true }}">
+        <details style="margin-top:1rem">
+          <summary style="cursor:pointer;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--drift);padding:.4rem 0">Overrule the refusal</summary>
+          <div style="border:1px solid var(--drift);border-radius:6px;background:var(--drift-wash);padding:.9rem;margin-top:.5rem">
+            <p style="margin:0 0 .75rem;font-size:.8125rem;color:var(--ink);max-width:52ch">The reserve is guesswork above the observed maximum, so a refusal can be wrong. Forcing past this one asks the pool for {{p.declStr}} it does not have: the likely outcome is swap, then the OOM reaper taking whichever model it prefers — not necessarily this one.</p>
+            <label style="display:block;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem">Type {{p.id}} to confirm</label>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+              <input value="{{p.forceTyped}}" onChange="{{p.onForceType}}" placeholder="{{p.id}}" style="font-family:var(--font-mono);font-size:.8125rem;padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);flex:1 1 12rem;min-width:0" />
+              <button onClick="{{p.deploy}}" disabled="{{p.forceLocked}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:{{p.forceBg}};color:{{p.forceFg}};border:1px solid {{p.forceBorder}};border-radius:6px">Force deploy</button>
+            </div>
+          </div>
+        </details>
+        </sc-if>
+      </section>
+    </div>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{isModel}}" hint-placeholder-val="{{ false }}">
+  <section data-screen-label="Model">
+    <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.25rem">
+      <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0">{{m.id}}</h1>
+      <span style="display:inline-flex;align-items:center;gap:.35rem;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .45rem;border-radius:6px;border:1px solid {{m.chipBorder}};border-style:{{m.chipBorderStyle}};color:{{m.chipFg}};background:{{m.chipBg}}">
+        <sc-if value="{{m.spins}}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;border:1.5px solid currentColor;border-top-color:transparent;display:inline-block;animation:spin .8s linear infinite"></span></sc-if>
+        <sc-if value="{{m.dot}}" hint-placeholder-val="{{ true }}"><span style="width:6px;height:6px;border-radius:{{m.dotRadius}};background:{{m.dotBg}};border:1px solid currentColor"></span></sc-if>
+        {{m.phase}}
+      </span>
+      <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--accent-ink)">:{{m.port}}</span>
+      <span style="margin-left:auto;display:flex;gap:.4rem;flex-wrap:wrap">
+        <a href="#" onClick="{{goModels}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;text-decoration:none" style-hover="border-color:var(--accent);color:var(--accent-ink)">← Models</a>
+        <sc-if value="{{m.canPlan}}" hint-placeholder-val="{{ false }}">
+          <a href="#" onClick="{{m.plan}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;background:var(--accent);color:oklch(99% 0 0);border:1px solid var(--accent);border-radius:6px;text-decoration:none">Deploy…</a>
+        </sc-if>
+        <sc-if value="{{m.isDeployed}}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{m.stop}}" disabled="{{m.stopDisabled}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:{{m.stopCursor}};background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px;opacity:{{m.stopOpacity}}" style-hover="border-color:var(--drift);color:var(--drift)">{{m.stopLabel}}</button>
+        </sc-if>
+      </span>
+    </div>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;font-size:.8125rem;font-family:var(--font-mono);overflow-wrap:anywhere">{{m.kind}} · {{m.modality}} · {{m.model}}</p>
+
+    <sc-if value="{{m.detail}}" hint-placeholder-val="{{ false }}">
+      <p style="margin:0 0 1.25rem;padding:.7rem .9rem;border:1px solid {{m.edge}};border-radius:6px;background:var(--paper-2);font-size:.8125rem;color:{{m.detailFg}};max-width:80ch">{{m.detail}}</p>
+    </sc-if>
+
+    <sc-if value="{{m.isStarting}}" hint-placeholder-val="{{ false }}">
+    <section style="border:1px solid var(--gold);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:1.25rem">
+      <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem">
+        <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Start progress</span>
+        <span style="font-family:var(--font-mono);font-size:1.125rem;color:var(--ink);font-variant-numeric:tabular-nums">{{m.elapsedStr}}</span>
+        <span style="font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">{{m.historyNote}}</span>
+      </div>
+      <div style="display:grid;gap:.45rem">
+        <sc-for list="{{m.stages}}" as="st" hint-placeholder-count="6">
+          <div style="display:flex;align-items:baseline;gap:.6rem;font-family:var(--font-mono);font-size:.8125rem;color:{{st.fg}};font-variant-numeric:tabular-nums;flex-wrap:wrap">
+            <span style="width:1.1rem;display:inline-flex;justify-content:center;flex:0 0 auto">
+              <sc-if value="{{st.isLive}}" hint-placeholder-val="{{ false }}"><span style="width:9px;height:9px;border-radius:50%;border:1.5px solid var(--gold);border-top-color:transparent;display:inline-block;animation:spin .8s linear infinite"></span></sc-if>
+              <sc-if value="{{st.isStatic}}" hint-placeholder-val="{{ true }}"><span style="width:7px;height:7px;border-radius:{{st.markRadius}};background:{{st.markBg}};border:1px solid {{st.markBorder}};display:inline-block"></span></sc-if>
+            </span>
+            <span style="min-width:11rem;color:{{st.nameFg}}">{{st.name}}</span>
+            <span style="min-width:4.5rem;color:{{st.timeFg}}">{{st.time}}</span>
+            <span style="color:var(--ink-faint);min-width:0;overflow-wrap:anywhere">{{st.note}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+    </sc-if>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(22rem,1fr));gap:1.25rem;align-items:start">
+      <div>
+        <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:1.25rem">
+          <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .75rem;letter-spacing:-.01em">Configuration</h2>
+          <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:.25rem 1rem;font-size:.8125rem">
+            <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Image</span>
+            <span style="font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere">{{m.image}}</span>
+            <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Served as</span>
+            <span style="font-family:var(--font-mono);color:var(--ink)">{{m.served}}</span>
+            <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Declared</span>
+            <span style="font-family:var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums">{{m.declWeights}} weights · {{m.declKV}} KV</span>
+            <sc-for list="{{m.args}}" as="a" hint-placeholder-count="5">
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);overflow-wrap:anywhere">{{a.k}}</span>
+              <span style="font-family:var(--font-mono);color:var(--ink);overflow-wrap:anywhere">{{a.v}}</span>
+            </sc-for>
+            <sc-for list="{{m.env}}" as="e" hint-placeholder-count="3">
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);overflow-wrap:anywhere">env {{e.k}}</span>
+              <span style="font-family:var(--font-mono);color:var(--ink-mute);overflow-wrap:anywhere">{{e.v}}</span>
+            </sc-for>
+          </div>
+        </section>
+
+        <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:1.25rem">
+          <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .5rem;letter-spacing:-.01em">Telemetry</h2>
+          <sc-if value="{{m.hasObs}}" hint-placeholder-val="{{ true }}">
+            <p style="color:var(--ink-mute);font-size:.8125rem;margin:0 0 .75rem;max-width:52ch">Measured from this container's boot log. These are facts about this box and this engine build, never written back into the recipe.</p>
+            <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:.25rem 1rem;font-size:.8125rem">
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Weights</span>
+              <span style="font-family:var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums">{{m.obsWeights}}</span>
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">KV cache</span>
+              <span style="font-family:var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums">{{m.obsKV}}</span>
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">KV / token</span>
+              <span style="font-family:var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums">{{m.obsPerToken}}</span>
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Load time</span>
+              <span style="font-family:var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums">{{m.obsLoad}}</span>
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Attention</span>
+              <span style="font-family:var(--font-mono);color:var(--ink)">{{m.obsBackend}}</span>
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">CUDA graphs</span>
+              <span style="font-family:var(--font-mono);color:var(--ink)">{{m.obsGraphs}}</span>
+              <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Max concurrency</span>
+              <span style="font-family:var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums">{{m.obsConc}}</span>
+            </div>
+            <sc-if value="{{m.gapNote}}" hint-placeholder-val="{{ false }}">
+              <p style="margin:.75rem 0 0;font-size:.8125rem;color:var(--drift)">{{m.gapNote}}</p>
+            </sc-if>
+          </sc-if>
+          <sc-if value="{{m.hasObs}}" hint-placeholder-val="{{ false }}">
+            <p style="color:var(--ink-mute);font-size:.8125rem;margin:0;max-width:52ch">No observation recorded — this kind emits no vLLM boot log to parse, so capacity planning runs on the recipe's declared estimate alone.</p>
+          </sc-if>
+        </section>
+
+        <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem">
+          <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .5rem;letter-spacing:-.01em">Notes</h2>
+          <p style="white-space:pre-wrap;font-size:.8125rem;color:var(--ink-body);margin:0;overflow-wrap:anywhere">{{m.notes}}</p>
+        </section>
+      </div>
+
+      <div>
+        <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:1.25rem">
+          <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .5rem;letter-spacing:-.01em">Logs</h2>
+          <sc-if value="{{m.noLogs}}" hint-placeholder-val="{{ false }}">
+            <p style="color:var(--ink-mute);font-size:.8125rem;margin:0">No logs — this recipe has no running container.</p>
+          </sc-if>
+          <sc-if value="{{m.logs}}" hint-placeholder-val="{{ true }}">
+            <pre style="background:var(--graphite);color:oklch(88% 0.01 250);border:1px solid var(--rule-firm);border-radius:10px;padding:1rem;overflow:auto;max-height:22rem;font-family:var(--font-mono);font-size:.6875rem;line-height:1.55;white-space:pre;margin:0">{{m.logs}}</pre>
+          </sc-if>
+        </section>
+
+        <section style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1.25rem;margin-bottom:1.25rem">
+          <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0 0 .5rem;letter-spacing:-.01em">Edit</h2>
+          <p style="color:var(--ink-mute);font-size:.8125rem;margin:0 0 .75rem;max-width:52ch">Saving reports what changed and whether the running container now disagrees with its recipe. Image, args, env and model force a restart to take effect; notes, archived and the declared footprint do not.</p>
+          <textarea spellcheck="false" style="width:100%;min-height:16rem;font-family:var(--font-mono);font-size:.8125rem;color:var(--ink);background:var(--paper);border:1px solid var(--rule-firm);border-radius:6px;padding:.75rem;resize:vertical;line-height:1.5">{{m.yaml}}</textarea>
+          <div style="margin-top:.75rem"><button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--accent);color:oklch(99% 0 0);border:1px solid var(--accent);border-radius:6px">Save</button></div>
+        </section>
+
+        <section style="border:1px dashed var(--drift);border-radius:10px;background:var(--paper-2);padding:1.25rem">
+          <h2 style="font-size:1.125rem;font-weight:600;color:var(--drift);margin:0 0 .5rem;letter-spacing:-.01em">Delete this recipe</h2>
+          <p style="color:var(--ink-mute);font-size:.8125rem;margin:0 0 .9rem;max-width:52ch">The configuration goes with it. Weights stay in the larder, so the model can be re-imported, but every measured footprint, argument and note recorded here is gone and cannot be recovered from the image.</p>
+          <label style="display:block;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem">Type {{m.id}} to confirm</label>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+            <input value="{{m.delTyped}}" onChange="{{m.onDelType}}" placeholder="{{m.id}}" style="font-family:var(--font-mono);font-size:.8125rem;padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);flex:1 1 12rem;min-width:0" />
+            <button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:{{m.delCursor}};background:{{m.delBg}};color:{{m.delFg}};border:1px solid {{m.delBorder}};border-radius:6px">Delete recipe</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{isLarder}}" hint-placeholder-val="{{ false }}">
+  <section data-screen-label="Larder">
+    <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0 0 .25rem">Larder</h1>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;max-width:64ch">Weights on disk. Separate from whether anything runs — this page exists to reclaim space, and everything on it is expensive to get back.</p>
+
+    <div style="display:flex;gap:2rem;flex-wrap:wrap;border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1rem 1.25rem;margin-bottom:1.25rem">
+      <div>
+        <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">On disk</div>
+        <div style="font-family:var(--font-mono);font-size:1.5rem;color:var(--ink);font-variant-numeric:tabular-nums">{{larderTotal}} <span style="font-size:.8125rem;color:var(--ink-faint)">GiB</span></div>
+      </div>
+      <div>
+        <div style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint)">Reclaimable</div>
+        <div style="font-family:var(--font-mono);font-size:1.5rem;color:var(--drift);font-variant-numeric:tabular-nums">{{larderFree}} <span style="font-size:.8125rem;color:var(--ink-faint)">GiB</span></div>
+      </div>
+      <p style="margin:0;align-self:center;color:var(--ink-mute);font-size:.8125rem;max-width:40ch">{{larderCount}} sets belong only to recipes that are archived or retired. Nothing here is deleted by archiving a recipe.</p>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:.75rem">
+      <sc-for list="{{larderRows}}" as="w" hint-placeholder-count="9">
+        <article style="border:1px solid var(--rule);border-left:3px solid {{w.border}};border-radius:10px;background:var(--paper-2);padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.45rem">
+          <div style="display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap">
+            <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink);overflow-wrap:anywhere;min-width:0;flex:1 1 12rem">{{w.repo}}</span>
+            <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.05em;text-transform:uppercase;padding:.15rem .45rem;border-radius:6px;color:{{w.fg}};background:{{w.bg}};border:1px solid {{w.border}}">{{w.state}}</span>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:1.5rem;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1.1">{{w.gibStr}}</div>
+          <div style="display:flex;gap:1rem;align-items:baseline;flex-wrap:wrap;padding-top:.55rem;border-top:1px solid var(--rule);font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">
+            <span>recipe <span style="color:var(--ink-mute)">{{w.owner}}</span></span>
+            <span style="margin-left:auto">re-fetch ~{{w.fetch}}</span>
+          </div>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <sc-if value="{{w.canDelete}}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{w.arm}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:transparent;color:var(--ink-faint);border:1px solid var(--rule);border-radius:6px" style-hover="border-color:var(--drift);color:var(--drift)">Delete weights…</button>
+            </sc-if>
+            <sc-if value="{{w.armed}}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{w.cancel}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink-mute);border:1px solid var(--rule-firm);border-radius:6px">Cancel</button>
+            </sc-if>
+          </div>
+          <sc-if value="{{w.armed}}" hint-placeholder-val="{{ false }}">
+            <div style="border:1px solid var(--drift);border-radius:6px;background:var(--drift-wash);padding:.9rem">
+              <p style="margin:0 0 .6rem;font-size:.8125rem;color:var(--ink)">{{w.cost}}</p>
+              <label style="display:block;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem">Type {{w.expect}} to confirm</label>
+              <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                <input value="{{w.typedText}}" onChange="{{w.onTypeText}}" placeholder="{{w.expect}}" style="font-family:var(--font-mono);font-size:.8125rem;padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);flex:1 1 9rem;min-width:0" />
+                <button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:{{w.okBg}};color:{{w.okFg}};border:1px solid {{w.okBorder}};border-radius:6px">Delete</button>
+              </div>
+            </div>
+          </sc-if>
+        </article>
+      </sc-for>
+    </div>
+    <p style="color:var(--ink-faint);font-size:.8125rem;margin:1rem 0 0;max-width:64ch">Deleting weights is the only action in Sous with no undo and no local copy to fall back on. A set in use by a running container cannot be deleted at all.</p>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{isKeys}}" hint-placeholder-val="{{ false }}">
+  <section data-screen-label="API keys">
+    <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0 0 .25rem">API keys</h1>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;max-width:64ch">Credentials for the inference gateway. Only a SHA-256 is stored, so a key is legible exactly once — at creation, on this page.</p>
+
+    <sc-if value="{{freshKey}}" hint-placeholder-val="{{ true }}">
+    <section style="border:1px solid var(--accent);border-left:3px solid var(--accent);border-radius:10px;background:var(--accent-wash);padding:1.25rem;margin-bottom:1.5rem">
+      <div style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.5rem">
+        <h2 style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0;letter-spacing:-.01em">agent-harness</h2>
+        <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-ink)">created just now · shown once</span>
+        <button onClick="{{dismissKey}}" style="margin-left:auto;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.3rem .6rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px">I have copied it</button>
+      </div>
+      <p style="margin:0 0 .5rem;font-size:.8125rem;color:var(--ink);max-width:60ch">Copy it now. There is no reveal button to design here: the plaintext does not exist after this render, and leaving this page loses it.</p>
+      <div style="font-family:var(--font-mono);font-size:.8125rem;background:var(--paper);border:1px solid var(--rule-firm);border-radius:6px;padding:.7rem .85rem;margin:.6rem 0;overflow-x:auto;white-space:pre;user-select:all">sk-sous-3d91c47a8be25f06a1d4e77b0c9f5a3e</div>
+      <div style="font-family:var(--font-mono);font-size:.6875rem;line-height:1.55;background:var(--paper-2);border:1px solid var(--rule);border-radius:6px;padding:.7rem .85rem;overflow-x:auto;white-space:pre">curl http://asus-gx10:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-sous-3d91c47a8be25f06a1d4e77b0c9f5a3e" \
+  -d '{"model":"qwen","messages":[{"role":"user","content":"hello"}]}'</div>
+    </section>
+    </sc-if>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:.75rem">
+      <sc-for list="{{keyRows}}" as="k" hint-placeholder-count="3">
+        <article style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.45rem">
+          <div style="display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap">
+            <span style="font-size:1.125rem;font-weight:600;color:var(--ink);letter-spacing:-.01em">{{k.name}}</span>
+            <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-mute);margin-left:auto">{{k.prefix}}</span>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint)">scoped to {{k.scope}}</div>
+          <div style="display:flex;gap:1rem;align-items:baseline;flex-wrap:wrap;padding-top:.55rem;border-top:1px solid var(--rule);font-family:var(--font-mono);font-size:.6875rem;color:var(--ink-faint);font-variant-numeric:tabular-nums">
+            <span>created <span style="color:var(--ink-mute)">{{k.created}}</span></span>
+            <span style="margin-left:auto">last used <span style="color:{{k.usedFg}}">{{k.used}}</span></span>
+          </div>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <sc-if value="{{k.canRevoke}}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{k.arm}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:transparent;color:var(--ink-faint);border:1px solid var(--rule);border-radius:6px" style-hover="border-color:var(--drift);color:var(--drift)">Revoke…</button>
+            </sc-if>
+            <sc-if value="{{k.armed}}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{k.cancel}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink-mute);border:1px solid var(--rule-firm);border-radius:6px">Cancel</button>
+            </sc-if>
+          </div>
+          <sc-if value="{{k.armed}}" hint-placeholder-val="{{ false }}">
+            <div style="border:1px solid var(--drift);border-radius:6px;background:var(--drift-wash);padding:.9rem">
+              <p style="margin:0 0 .6rem;font-size:.8125rem;color:var(--ink)">Revoking takes effect on the next request. Anything holding this key gets 401 with no way to restore it — a replacement is a new key and a new secret.</p>
+              <label style="display:block;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:.35rem">Type {{k.name}} to confirm</label>
+              <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                <input value="{{k.typedText}}" onChange="{{k.onTypeText}}" placeholder="{{k.name}}" style="font-family:var(--font-mono);font-size:.8125rem;padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);flex:1 1 12rem;min-width:0" />
+                <button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:{{k.okBg}};color:{{k.okFg}};border:1px solid {{k.okBorder}};border-radius:6px">Revoke</button>
+              </div>
+            </div>
+          </sc-if>
+        </article>
+      </sc-for>
+    </div>
+
+    <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-top:1.25rem">
+      <input placeholder="name for a new key" style="font-family:var(--font-mono);font-size:.8125rem;padding:.4rem .6rem;border:1px solid var(--rule-firm);border-radius:6px;background:var(--paper);color:var(--ink);flex:1 1 20rem;min-width:0" />
+      <button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--accent);color:oklch(99% 0 0);border:1px solid var(--accent);border-radius:6px">Create key</button>
+    </div>
+  </section>
+  </sc-if>
+
+  <sc-if value="{{isSources}}" hint-placeholder-val="{{ false }}">
+  <section data-screen-label="Sources">
+    <h1 style="font-size:2rem;font-weight:600;letter-spacing:-.02em;color:var(--ink);margin:0 0 .25rem">Sources</h1>
+    <p style="color:var(--ink-mute);margin:0 0 1.5rem;max-width:64ch">Git repositories of recipes. A fetch adds and updates configurations; nothing is ever deployed by a fetch, and nothing running is touched.</p>
+    <div style="display:grid;gap:.75rem">
+      <sc-for list="{{sourceRows}}" as="src" hint-placeholder-count="2">
+        <article style="border:1px solid var(--rule);border-radius:10px;background:var(--paper-2);padding:1rem 1.25rem">
+          <div style="display:flex;gap:.75rem;align-items:baseline;flex-wrap:wrap">
+            <span style="font-family:var(--font-mono);font-size:.8125rem;color:var(--ink);overflow-wrap:anywhere;min-width:0">{{src.url}}</span>
+            <span style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.1rem .4rem;border-radius:6px;background:var(--paper-3);color:var(--ink-mute)">{{src.ref}}</span>
+            <span style="margin-left:auto;display:flex;gap:.4rem">
+              <button onClick="{{noop}}" style="font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;padding:.4rem .7rem;cursor:pointer;background:var(--paper);color:var(--ink);border:1px solid var(--rule-firm);border-radius:6px" style-hover="border-color:var(--accent);color:var(--accent-ink)">Fetch</button>
+            </span>
+          </div>
+          <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.4rem;font-family:var(--font-mono);font-size:.8125rem;color:var(--ink-mute);font-variant-numeric:tabular-nums">
+            <span>fetched <span style="color:var(--ink-body)">{{src.fetched}}</span></span>
+            <span><span style="color:var(--ink-body)">{{src.recipes}}</span> recipes</span>
+          </div>
+          <p style="margin:.4rem 0 0;font-size:.8125rem;color:var(--ink-faint);max-width:70ch">{{src.note}}</p>
+        </article>
+      </sc-for>
+    </div>
+  </section>
+  </sc-if>
+  </main>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1400,&quot;height&quot;:980},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;auto&quot;,&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;auto&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Prototype&quot;},&quot;live&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototype&quot;}}">
+const POOL = 121.6, RESERVE = 24, WARN = 12;
+const USABLE = POOL - RESERVE;
+
+const RECIPES = [
+  {id:'asr', kind:'transformers', modality:'asr', model:'nvidia/nemotron-3.5-asr-streaming-0.6b',
+   image:'fleet/nemotron-asr:0.6b', w:1.19, kv:0, loadSec:26, served:['asr'],
+   notes:'0.42s mean for ~3.7s clips (RTF 0.11), 0.0% WER, 35 languages. A hand-written FastAPI service because vLLM registers every ASR architecture but ships no transcription entrypoint.'},
+  {id:'kokoro', kind:'container', modality:'tts', model:'hexgrad/Kokoro-82M',
+   image:'ghcr.io/remsky/kokoro-fastapi-gpu:latest', w:3, kv:0, loadSec:34, served:['kokoro'],
+   notes:'Moved to GPU 2026-08-16, after measuring: 202 ms against 1194 ms on CPU, for 3 GiB resident. The declared footprint is load-bearing — a 0 here withholds the device rather than merely misreporting the plan.'},
+  {id:'nemotron35', kind:'vllm', modality:'text', model:'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4',
+   image:'vllm/vllm-openai:v0.27.1-aarch64', w:17.86, kv:4, loadSec:214, served:['nemotron'],
+   notes:'78–79 tok/s single-stream, flat across 20 / 1.5k / 9k context. The DSpark drafter is a 48% loss on this box and must not be re-added without re-measuring.'},
+  {id:'qwen36', kind:'vllm', modality:'text', model:'Qwen/Qwen3.6-35B-A3B-FP8',
+   image:'vllm/vllm-openai@sha256:d5a8e53a', w:35.02, kv:26, loadSec:461, served:['qwen'],
+   notes:'MoE, ~3B active per token: 60.6 tok/s, roughly 4x qwen38 on prose. 88.3 KiB/token KV, 308,736 tokens at the 26 GiB pin.'},
+  {id:'qwen38', kind:'vllm', modality:'text', model:'Inferact/Qwen3.8-27B-NVFP4',
+   image:'vllm/vllm-openai@sha256:d5a8e53a', w:24.87, kv:45.67, loadSec:503, served:['qwen38','qwen'],
+   notes:'Dense 27B but hybrid: 48 Gated DeltaNet + 16 full-attention layers. KV costs ~3.1x per token despite the smaller parameter count — "27B dense is cheaper" is exactly backwards here.'},
+  {id:'ornith15', kind:'vllm', modality:'text', model:'ornith-ai/Ornith-1.5-35B-A3B-FP8',
+   image:'vllm/vllm-openai@sha256:d5a8e53a', w:36.66, kv:26, loadSec:488, served:['ornith'],
+   notes:'Same slot as qwen36 — the planner refuses it alongside, must_free=[qwen36]. Decode about 19% under qwen36; vendor claims large agentic-coding gains, unverified here.'},
+  {id:'qwen3-omni', kind:'vllm', modality:'omni', model:'YihongJin/Qwen3-Omni-30B-A3B-Instruct-NVFP4-W4A4-full-thinker-awqclip',
+   image:'vllm/vllm-omni:nightly-61a678bd', w:19.53, kv:11.28, loadSec:372, served:['qwen3omni'],
+   notes:'Real speech out: 7.82s of 24 kHz audio in 2.77s. Text is slow, 7.6–8.2 tok/s. It fails silently — an unknown voice returns a fallback voice with no error, and requesting audio suppresses tool calls.'},
+  {id:'qwen38-fp8', kind:'vllm', modality:'text', model:'Qwen/Qwen3.8-27B-FP8', archived:true,
+   image:'vllm/vllm-openai@sha256:d5a8e53a', w:28.95, kv:62.03, loadSec:534, served:['qwen38'],
+   notes:'Superseded by qwen38 (NVFP4). Kept as evidence, not nostalgia: util 0.80 left the box at 113/121 GiB with 4.2 GiB of swap engaged.'},
+  {id:'omni', kind:'vllm', modality:'omni', model:'nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4', archived:true,
+   image:'fleet/vllm-omni-gcc12:v0.27.1-aarch64', w:21.59, kv:4, loadSec:398, served:['omni'],
+   notes:'Retired 2026-08-14. Used 25.6 GiB to do ASR that a 1.19 GiB model does better and faster.'}
+];
+
+const OBS = {
+  qwen36:{weights:35.02, kv:26.0, tokens:308736, perToken:88.3, load:461, backend:'FLASH_ATTN', graphs:'FULL_AND_PIECEWISE', conc:1.18},
+  qwen38:{weights:24.87, kv:45.67, tokens:352000, perToken:136.0, load:503, backend:'FLASHINFER', graphs:'PIECEWISE', conc:1.34},
+  nemotron35:{weights:17.86, kv:4.0, tokens:60416, perToken:69.5, load:214, backend:'FLASHINFER', graphs:'PIECEWISE', conc:0.23},
+  'qwen3-omni':{weights:19.53, kv:11.28, tokens:98304, perToken:120.4, load:372, backend:'FLASHINFER_CUTLASS', graphs:'PIECEWISE', conc:3.00},
+  ornith15:{weights:36.66, kv:26.0, tokens:290816, perToken:93.8, load:488, backend:'FLASH_ATTN', graphs:'FULL_AND_PIECEWISE', conc:1.11}
+};
+
+const ARGS = {
+  qwen36:[['gpu-memory-utilization','0.46'],['kv-cache-dtype','auto'],['kv-cache-memory-bytes','27917287424'],['max-model-len','262144'],['max-num-seqs','4'],['speculative-config','{"method":"mtp","num_speculative_tokens":2}'],['tool-call-parser','qwen3_coder'],['reasoning-parser','qwen3']],
+  qwen38:[['gpu-memory-utilization','0.62'],['kv-cache-dtype','fp8'],['max-model-len','262144'],['max-num-batched-tokens','8192'],['max-num-seqs','4'],['speculative-config','{"method":"mtp","num_speculative_tokens":3}'],['tool-call-parser','qwen3_coder']],
+  nemotron35:[['gpu-memory-utilization','0.38'],['kv-cache-dtype','fp8'],['kv-cache-memory-bytes','4294967296'],['mamba-cache-mode','align'],['max-model-len','262144'],['reasoning-parser','nemotron_v3']],
+  ornith15:[['gpu-memory-utilization','0.48'],['kv-cache-dtype','auto'],['kv-cache-memory-bytes','27917287424'],['max-model-len','262144'],['speculative-config','{"method":"mtp","num_speculative_tokens":1}'],['tool-call-parser','qwen3_coder']],
+  'qwen3-omni':[['gpu-memory-utilization','0.3'],['max-model-len','32768'],['omni','true'],['stage-overrides','{"0":{"gpu_memory_utilization":0.30},"1":{"enforce_eager":true},"2":{"enforce_eager":true}}'],['tool-call-parser','hermes']],
+  'qwen38-fp8':[['gpu-memory-utilization','0.8'],['kv-cache-dtype','auto'],['max-model-len','131072']],
+  omni:[['gpu-memory-utilization','0.45'],['kv-cache-dtype','fp8'],['trust-remote-code','true']],
+  asr:[['entrypoint','python3 -m uvicorn app:app --port 8000']],
+  kokoro:[['container-port','8880']]
+};
+
+const ENVS = {
+  vllm:[['CUTE_DSL_ARCH','sm_121a'],['TORCH_CUDA_ARCH_LIST','12.1a'],['HF_HOME','/root/.cache/huggingface'],['VLLM_LOGGING_LEVEL','INFO']],
+  transformers:[['ASR_DEVICE','cuda'],['HF_HOME','/root/.cache/huggingface']],
+  container:[['HF_HOME','/root/.cache/huggingface']]
+};
+
+const LOGS = "(APIServer pid=1) INFO 08-21 10:54:02 [api_server.py:1487] vLLM API server version 0.28.0\n(EngineCore_DP0 pid=142) INFO 08-21 10:54:31 [gpu_model_runner.py:2680] Starting to load model Qwen/Qwen3.6-35B-A3B-FP8...\n(EngineCore_DP0 pid=142) INFO 08-21 10:57:40 [gpu_model_runner.py:2712] Model loading took 35.02 GiB memory and 189.114 seconds\n(EngineCore_DP0 pid=142) INFO 08-21 10:57:41 [backends.py:530] Using FLASH_ATTN attention backend\n(EngineCore_DP0 pid=142) INFO 08-21 10:58:12 [backends.py:602] Dynamo bytecode transform time: 8.42 s\n(EngineCore_DP0 pid=142) INFO 08-21 11:01:12 [monitor.py:34] torch.compile takes 211.30 s in total\n(EngineCore_DP0 pid=142) INFO 08-21 11:01:19 [gpu_worker.py:298] Available KV cache memory: 26.00 GiB\n(EngineCore_DP0 pid=142) INFO 08-21 11:01:19 [kv_cache_utils.py:1028] GPU KV cache size: 308,736 tokens\n(EngineCore_DP0 pid=142) INFO 08-21 11:01:19 [kv_cache_utils.py:1032] Maximum concurrency for 262,144 tokens per request: 1.18x\n(EngineCore_DP0 pid=142) INFO 08-21 11:01:20 [gpu_model_runner.py:3480] Profiling CUDA graph memory: PIECEWISE=5 FULL=3";
+
+const SOURCES = [
+  {url:'git@github.com:codemug/sous-recipes.git', ref:'main', fetched:'2026-08-19 09:12', recipes:9, note:'The seed set this binary carries.'},
+  {url:'https://github.com/codemug/skillet.git', ref:'main', fetched:'2026-07-28 22:04', recipes:2, note:'Two experimental omni recipes. Not fetched since the qwen3-omni pairing was settled.'}
+];
+
+const LARDER = [
+  {repo:'Qwen/Qwen3.6-35B-A3B-FP8', gib:35.02, owner:'qwen36', state:'in use', fetch:'18 min'},
+  {repo:'ornith-ai/Ornith-1.5-35B-A3B-FP8', gib:36.66, owner:'ornith15', state:'held', fetch:'19 min'},
+  {repo:'Qwen/Qwen3.8-27B-FP8', gib:28.95, owner:'qwen38-fp8 (archived)', state:'reclaimable', fetch:'15 min'},
+  {repo:'Inferact/Qwen3.8-27B-NVFP4', gib:24.87, owner:'qwen38', state:'held', fetch:'13 min'},
+  {repo:'nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4', gib:21.59, owner:'omni (retired)', state:'reclaimable', fetch:'11 min'},
+  {repo:'YihongJin/Qwen3-Omni-30B-A3B-…-awqclip', gib:19.53, owner:'qwen3-omni', state:'held', fetch:'10 min'},
+  {repo:'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4', gib:17.86, owner:'nemotron35', state:'in use', fetch:'9 min'},
+  {repo:'nvidia/nemotron-3.5-asr-streaming-0.6b', gib:1.19, owner:'asr', state:'in use', fetch:'1 min'},
+  {repo:'hexgrad/Kokoro-82M', gib:0.31, owner:'kokoro', state:'in use', fetch:'1 min'}
+];
+
+const KEYS = [
+  {name:'voice-loop', prefix:'sk-sous-7f2a…', created:'2026-07-02', used:'4 min ago', scope:'asr, kokoro, qwen38'},
+  {name:'obsidian-plugin', prefix:'sk-sous-b91c…', created:'2026-06-11', used:'3 days ago', scope:'qwen36'},
+  {name:'bench-scripts', prefix:'sk-sous-04de…', created:'2026-08-19', used:'never', scope:'all'}
+];
+
+const PHASE = {
+  ready:    {fg:'var(--ok)',       bg:'var(--ok-wash)',    border:'var(--ok)',       style:'solid',  dot:'50%', fill:'currentColor'},
+  starting: {fg:'var(--gold)',     bg:'var(--gold-wash)',  border:'var(--gold)',     style:'solid',  spin:true},
+  stopping: {fg:'var(--ink-mute)', bg:'var(--paper)',      border:'var(--rule-firm)',style:'solid',  spin:true},
+  failed:   {fg:'var(--drift)',    bg:'var(--drift-wash)', border:'var(--drift)',    style:'solid',  dot:'1px', fill:'currentColor'},
+  gone:     {fg:'var(--drift)',    bg:'var(--paper)',      border:'var(--drift)',    style:'dashed', dot:'1px', fill:'none'},
+  library:  {fg:'var(--ink-faint)',bg:'var(--paper)',      border:'var(--rule-firm)',style:'solid',  dot:'50%', fill:'none'},
+  archived: {fg:'var(--ink-faint)',bg:'var(--paper)',      border:'var(--rule-firm)',style:'dashed', dot:'1px', fill:'none'}
+};
+
+function f1(n){ return (Math.round(n * 10) / 10).toFixed(1); }
+function f2(n){ return (Math.round(n * 100) / 100).toFixed(2); }
+function signed(n){ const s = f1(Math.abs(n)); return (n < 0 ? '\u2212' : '') + s; }
+function clock(sec){
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return sec + 's';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  if (m < 60) return m + 'm ' + String(s).padStart(2,'0') + 's';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + String(m % 60).padStart(2,'0') + 'm';
+}
+
+class Component extends DCLogic {
+  state = {
+    screen: 'node',
+    signedIn: true,
+    modelId: 'qwen36',
+    planId: 'ornith15',
+    filter: 'all',
+    tick: 0,
+    confirm: {},
+    freshKey: true,
+    deps: {
+      asr:        {port:8020, phase:'ready',    age:183600},
+      kokoro:     {port:8030, phase:'ready',    age:183600},
+      nemotron35: {port:8101, phase:'ready',    age:22320},
+      qwen36:     {port:8110, phase:'starting', age:252},
+      qwen38:     {port:8102, phase:'gone',     age:0,
+                   detail:'OOM-killed 6 min ago. The reaper took it while qwen36 was loading; 70.5 GiB came back to the pool and the record was kept so this sentence exists.'}
+    }
+  };
+
+  componentDidMount(){
+    this.timer = setInterval(() => {
+      if (this.props.live === false) return;
+      this.setState(s => {
+        const deps = {};
+        let changed = false;
+        Object.keys(s.deps).forEach(id => {
+          const d = Object.assign({}, s.deps[id]);
+          if (d.phase === 'ready' || d.phase === 'starting') d.age += 1;
+          if (d.phase === 'starting' && d.age >= this.recipe(id).loadSec) { d.phase = 'ready'; d.age = 1; changed = true; }
+          if (d.phase === 'stopping') { d.stopAge = (d.stopAge || 0) + 1; if (d.stopAge > 6) { d.phase = 'gone'; d.detail = 'Stopped by the operator. Docker took ' + clock(d.stopAge * 6) + ' to release the pool; the record is kept until cleared.'; changed = true; } }
+          deps[id] = d;
+        });
+        return {deps: deps, tick: s.tick + 1};
+      });
+    }, 1000);
+  }
+  componentWillUnmount(){ clearInterval(this.timer); }
+
+  recipe(id){ return RECIPES.find(r => r.id === id) || RECIPES[0]; }
+  declared(r){ return r.w + r.kv; }
+  isResident(d){ return d && (d.phase === 'ready' || d.phase === 'starting' || d.phase === 'stopping'); }
+
+  residents(deps){
+    return Object.keys(deps).filter(id => this.isResident(deps[id])).map(id => ({id: id, d: deps[id], r: this.recipe(id)}));
+  }
+  committed(deps){ return this.residents(deps).reduce((a, e) => a + this.declared(e.r), 0); }
+
+  plan(id, deps){
+    const inc = this.recipe(id);
+    const resident = this.residents(deps).filter(e => e.id !== id);
+    const committed = resident.reduce((a, e) => a + this.declared(e.r), 0) + this.declared(inc);
+    const margin = USABLE - committed;
+    const out = {incoming: inc, committed: committed, margin: margin, fits: margin >= 0, mustFree: [], warning: ''};
+    if (!out.fits) {
+      let need = -margin, freed = 0;
+      resident.slice().sort((a, b) => this.declared(b.r) - this.declared(a.r)).forEach(e => {
+        if (freed >= need) return;
+        out.mustFree.push(e);
+        freed += this.declared(e.r);
+      });
+    } else if (margin < WARN) {
+      out.warning = 'only ~' + f1(margin) + ' GiB projected free; both configurations that engaged swap on this node sat below ' + WARN + ' GiB';
+    }
+    return out;
+  }
+
+  go(screen, extra){ return (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState(Object.assign({screen: screen}, extra || {})); }; }
+
+  stop(id){
+    return (e) => {
+      if (e && e.preventDefault) e.preventDefault();
+      this.setState(s => {
+        const d = s.deps[id]; if (!d || d.phase === 'stopping') return {};
+        const deps = Object.assign({}, s.deps);
+        deps[id] = Object.assign({}, d, {phase: 'stopping', stopAge: 0});
+        return {deps: deps};
+      });
+    };
+  }
+  clear(id){
+    return (e) => {
+      if (e && e.preventDefault) e.preventDefault();
+      this.setState(s => { const deps = Object.assign({}, s.deps); delete deps[id]; return {deps: deps}; });
+    };
+  }
+  deploy(id){
+    return (e) => {
+      if (e && e.preventDefault) e.preventDefault();
+      this.setState(s => {
+        const deps = Object.assign({}, s.deps);
+        const used = Object.keys(deps).map(k => deps[k].port);
+        let port = 8100; while (used.indexOf(port) >= 0) port += 1;
+        deps[id] = {port: port, phase: 'starting', age: 0};
+        return {deps: deps, screen: 'node', confirm: {}};
+      });
+    };
+  }
+
+  stages(id, d){
+    const r = this.recipe(id);
+    const total = r.loadSec;
+    const marks = [
+      {name: 'pull image', dur: 0, note: 'digest cached — ' + r.image.split('@')[0]},
+      {name: 'download weights', dur: 0, note: f1(r.w) + ' GiB already in the larder'},
+      {name: 'load weights', dur: Math.round(total * 0.41), note: f2(r.w) + ' GiB into device memory'},
+      {name: 'compile', dur: Math.round(total * 0.46), note: 'torch.compile · FlashInfer chosen from four candidates'},
+      {name: 'capture CUDA graphs', dur: total - Math.round(total * 0.41) - Math.round(total * 0.46), note: 'PIECEWISE=5, no FULL under spec-decode'},
+      {name: 'answers /health', dur: 0, note: 'a port that answers 200, not a container that exists'}
+    ];
+    let cum = 0, live = false;
+    return marks.map((m, i) => {
+      const start = cum; cum += m.dur;
+      const done = d.age >= cum && (m.dur > 0 || d.age > 0) && i < marks.length - 1;
+      const isLast = i === marks.length - 1;
+      let st = 'pending';
+      if (isLast) st = 'pending';
+      else if (m.dur === 0) st = 'skipped';
+      else if (d.age >= cum) st = 'done';
+      else if (d.age >= start && !live) { st = 'live'; live = true; }
+      const el = st === 'live' ? d.age - start : m.dur;
+      return {
+        name: m.name,
+        note: m.note,
+        isLive: st === 'live',
+        isStatic: st !== 'live',
+        markRadius: st === 'done' ? '50%' : '1px',
+        markBg: st === 'done' ? 'var(--ok)' : 'none',
+        markBorder: st === 'done' ? 'var(--ok)' : (st === 'skipped' ? 'var(--rule-firm)' : 'var(--rule-firm)'),
+        fg: st === 'live' ? 'var(--ink)' : 'var(--ink-mute)',
+        nameFg: st === 'live' ? 'var(--gold)' : (st === 'done' ? 'var(--ink-body)' : 'var(--ink-faint)'),
+        timeFg: st === 'live' ? 'var(--ink)' : 'var(--ink-faint)',
+        time: st === 'skipped' ? 'skipped' : (st === 'pending' ? '~' + clock(m.dur) : clock(el))
+      };
+    });
+  }
+
+  chip(kind){
+    const p = PHASE[kind] || PHASE.library;
+    return {
+      chipFg: p.fg, chipBg: p.bg, chipBorder: p.border, chipBorderStyle: p.style,
+      spins: !!p.spin, dot: !p.spin, dotRadius: p.dot || '50%', dotBg: p.fill || 'none'
+    };
+  }
+
+  row(id, d){
+    const r = this.recipe(id);
+    const kind = d ? d.phase : (r.archived ? 'archived' : 'library');
+    const decl = this.declared(r);
+    const o = OBS[id];
+    const obs = d && d.phase === 'ready' && o ? o.weights + o.kv : 0;
+    return Object.assign({
+      id: id, port: d ? d.port : '—', phase: kind, modality: r.modality, kind: r.kind, model: r.model,
+      declStr: f2(decl) + ' GiB', holdsStr: f1(decl),
+      obsStr: obs ? f2(obs) + ' GiB' : '—',
+      obsFg: obs && obs - decl > 2 ? 'var(--drift)' : 'var(--ink-mute)',
+      uptimeLabel: kind === 'starting' ? 'starting for' : (kind === 'gone' || kind === 'stopping' ? 'ran for' : 'up'),
+      uptimeStr: d ? clock(d.age) : '—',
+      backend: o ? o.backend + ' · ' + o.graphs : '',
+      detail: d ? d.detail || (kind === 'starting' ? 'The port is bound but /health answers 503. Do not send traffic yet — that is what this phase is for.' : '') : '',
+      detailFg: kind === 'failed' || kind === 'gone' ? 'var(--drift)' : 'var(--ink-mute)',
+      edge: kind === 'ready' ? 'var(--ok)' : kind === 'starting' ? 'var(--gold)' : kind === 'stopping' ? 'var(--rule-firm)' : (kind === 'failed' || kind === 'gone') ? 'var(--drift)' : 'var(--rule)',
+      opacity: kind === 'stopping' ? '.72' : '1',
+      isStarting: kind === 'starting',
+      elapsedStr: d ? clock(d.age) : '',
+      historyNote: 'last start took ' + clock(r.loadSec) + ', measured',
+      stages: kind === 'starting' ? this.stages(id, d) : [],
+      stopLabel: kind === 'stopping' ? 'Stopping…' : 'Stop',
+      stopDisabled: kind === 'stopping',
+      stopCursor: kind === 'stopping' ? 'default' : 'pointer',
+      stopOpacity: kind === 'stopping' ? '.45' : '1',
+      open: this.go('model', {modelId: id}),
+      plan: this.go('plan', {planId: id, confirm: {}}),
+      stop: this.stop(id),
+      clear: this.clear(id)
+    }, this.chip(kind));
+  }
+
+  yaml(r){
+    const lines = ['id: ' + r.id, 'kind: ' + r.kind, 'modality: ' + r.modality, 'model: ' + r.model, 'image: ' + r.image];
+    if (r.served) lines.push('served_as:', ...r.served.map(n => '    - ' + n));
+    lines.push('declared:', '    weights_gib: ' + r.w, '    kv_gib: ' + r.kv);
+    const a = ARGS[r.id] || [];
+    if (a.length) { lines.push('args:'); a.forEach(p => lines.push('    ' + p[0] + ': ' + p[1])); }
+    if (r.archived) lines.push('archived: true');
+    return lines.join('\n');
+  }
+
+  typed(key){ return this.state.confirm[key] || ''; }
+  onType(key){ return (e) => { const v = e.target.value; this.setState(s => ({confirm: Object.assign({}, s.confirm, {[key]: v})})); }; }
+
+  modelVals(){
+    const s = this.state, r = this.recipe(s.modelId), d = s.deps[s.modelId];
+    const row = this.row(r.id, d);
+    const o = OBS[r.id];
+    const env = ENVS[r.kind] || [];
+    return Object.assign(row, {
+      declWeights: f2(r.w) + ' GiB', declKV: f2(r.kv) + ' GiB', declTotal: f2(this.declared(r)) + ' GiB',
+      image: r.image, notes: r.notes, served: (r.served || []).join(', ') || '—',
+      args: (ARGS[r.id] || []).map(p => ({k: p[0], v: p[1]})),
+      env: env.map(p => ({k: p[0], v: p[1]})),
+      yaml: this.yaml(r),
+      hasObs: !!o,
+      obsWeights: o ? f2(o.weights) + ' GiB' : '—',
+      obsKV: o ? f2(o.kv) + ' GiB' + (o.tokens ? ' · ' + o.tokens.toLocaleString() + ' tokens' : '') : '—',
+      obsPerToken: o ? f1(o.perToken) + ' KiB' : '—',
+      obsLoad: o ? clock(o.load) : '—',
+      obsBackend: o ? o.backend : '—', obsGraphs: o ? o.graphs : '—',
+      obsConc: o ? f2(o.conc) + 'x' : '—',
+      gapNote: o && (o.weights + o.kv) - this.declared(r) > 2 ? 'Measured ' + f1((o.weights + o.kv) - this.declared(r)) + ' GiB above the declared footprint. The measurement is the truth; the recipe is the estimate that needs correcting.' : '',
+      logs: d && (d.phase === 'starting' || d.phase === 'ready') ? LOGS : '',
+      noLogs: !(d && (d.phase === 'starting' || d.phase === 'ready')),
+      isDeployed: !!d,
+      canPlan: !d && !r.archived,
+      archived: !!r.archived,
+      delTyped: this.typed('del'), onDelType: this.onType('del'),
+      delArmed: this.typed('del') === r.id,
+      delBg: this.typed('del') === r.id ? 'var(--drift)' : 'var(--paper)',
+      delFg: this.typed('del') === r.id ? 'oklch(99% 0 0)' : 'var(--ink-faint)',
+      delBorder: this.typed('del') === r.id ? 'var(--drift)' : 'var(--rule-firm)',
+      delCursor: this.typed('del') === r.id ? 'pointer' : 'not-allowed'
+    });
+  }
+
+  planVals(){
+    const s = this.state, deps = s.deps, id = s.planId;
+    const p = this.plan(id, deps);
+    const inc = p.incoming;
+    const scale = Math.max(POOL, p.committed + RESERVE);
+    const resident = this.residents(deps).filter(e => e.id !== id);
+    const segs = resident.map(e => {
+      const g = this.declared(e.r), ph = e.d.phase;
+      const doomed = p.mustFree.some(m => m.id === e.id);
+      return {
+        pct: f1((g / scale) * 100),
+        bg: doomed ? 'repeating-linear-gradient(45deg,var(--drift) 0 7px,var(--drift-wash) 7px 14px)'
+           : ph === 'ready' ? 'var(--ok)'
+           : ph === 'starting' ? 'repeating-linear-gradient(45deg,var(--gold) 0 7px,var(--gold-wash) 7px 14px)'
+           : 'var(--rule-firm)',
+        fg: 'oklch(99% 0 0)',
+        label: (g / scale) * 100 > 11 ? e.id : '',
+        title: e.id + ' — ' + f1(g) + ' GiB · ' + ph + (doomed ? ' · would have to stop' : '')
+      };
+    });
+    segs.push({pct: f1((RESERVE / scale) * 100), bg: 'repeating-linear-gradient(45deg,var(--paper-3) 0 5px,var(--rule-firm) 5px 10px)', fg: 'var(--ink-faint)', label: 'reserved', title: 'reserve — 24 GiB'});
+    segs.push({pct: f1((this.declared(inc) / scale) * 100), bg: 'repeating-linear-gradient(45deg,var(--accent) 0 7px,var(--accent-wash) 7px 14px)', fg: 'oklch(99% 0 0)', label: inc.id + ' (incoming)', title: inc.id + ' — ' + f1(this.declared(inc)) + ' GiB requested'});
+    if (p.margin > 0) segs.push({pct: f1((p.margin / scale) * 100), bg: 'var(--paper-3)', fg: 'var(--ink-faint)', label: (p.margin / scale) * 100 > 11 ? f1(p.margin) + ' GiB left' : '', title: 'projected free — ' + f1(p.margin) + ' GiB'});
+    return {
+      id: id, model: inc.model, kind: inc.kind, modality: inc.modality,
+      declStr: f2(this.declared(inc)) + ' GiB', weightsStr: f2(inc.w) + ' GiB', kvStr: f2(inc.kv) + ' GiB',
+      committedStr: f1(p.committed), marginStr: signed(p.margin),
+      marginFg: p.margin < 0 ? 'var(--drift)' : p.margin < WARN ? 'var(--gold)' : 'var(--ok)',
+      fits: p.fits, refused: !p.fits,
+      verdict: p.fits ? 'Fits' : 'Refused — ' + f1(-p.margin) + ' GiB short',
+      verdictFg: p.fits ? 'var(--ok)' : 'var(--drift)',
+      verdictBg: p.fits ? 'var(--ok-wash)' : 'var(--drift-wash)',
+      segs: segs, edgePct: f1((POOL / scale) * 100), overflows: scale > POOL,
+      loadNote: 'This one took ' + clock(inc.loadSec) + ' to reach ready the last time it was measured.',
+      mustFree: p.mustFree.map(e => ({
+        id: e.id, declStr: f2(this.declared(e.r)) + ' GiB', phase: e.d.phase,
+        isStopping: e.d.phase === 'stopping',
+        label: e.d.phase === 'stopping' ? 'Stopping…' : 'Stop ' + e.id,
+        sub: e.d.phase === 'stopping' ? 'Docker has up to 60s to release the pool. The plan updates when it does.' : 'up ' + clock(e.d.age) + ' on :' + e.d.port,
+        stop: this.stop(e.id)
+      })),
+      hasMustFree: p.mustFree.length > 0,
+      warning: p.warning || '',
+      deploy: this.deploy(id), cancel: this.go('models'),
+      deployBg: p.fits ? 'var(--accent)' : 'var(--paper-3)',
+      deployFg: p.fits ? 'oklch(99% 0 0)' : 'var(--ink-faint)',
+      deployBorder: p.fits ? 'var(--accent)' : 'var(--rule-firm)',
+      deployCursor: p.fits ? 'pointer' : 'not-allowed',
+      forceTyped: this.typed('force'), onForceType: this.onType('force'),
+      forceArmed: this.typed('force') === id,
+      forceLocked: this.typed('force') !== id,
+      forceBg: this.typed('force') === id ? 'var(--drift)' : 'var(--paper)',
+      forceFg: this.typed('force') === id ? 'oklch(99% 0 0)' : 'var(--ink-faint)',
+      forceBorder: this.typed('force') === id ? 'var(--drift)' : 'var(--rule-firm)'
+    };
+  }
+
+  renderVals(){
+    const s = this.state;
+    const deps = s.deps;
+    const committed = this.committed(deps);
+    const margin = USABLE - committed;
+    const res = this.residents(deps);
+
+    const segs = res.map(e => {
+      const g = this.declared(e.r);
+      const pct = (g / POOL) * 100;
+      const ph = e.d.phase;
+      return {
+        pct: f1(pct),
+        bg: ph === 'ready' ? 'var(--ok)'
+          : ph === 'starting' ? 'repeating-linear-gradient(45deg,var(--gold) 0 7px,var(--gold-wash) 7px 14px)'
+          : 'var(--rule-firm)',
+        fg: 'oklch(99% 0 0)',
+        anim: ph === 'starting' ? 'crawl 1.6s linear infinite' : 'none',
+        label: pct > 11 ? e.id : '',
+        title: e.id + ' — ' + f1(g) + ' GiB · ' + ph
+      };
+    });
+    segs.push({pct: f1((RESERVE / POOL) * 100), bg: 'repeating-linear-gradient(45deg,var(--paper-3) 0 5px,var(--rule-firm) 5px 10px)', fg: 'var(--ink-faint)', anim: 'none', label: 'reserved', title: 'reserved for OS, containers and CUDA contexts — 24 GiB'});
+    if (margin > 0) segs.push({pct: f1((margin / POOL) * 100), bg: 'var(--paper-3)', fg: 'var(--ink-faint)', anim: 'none', label: (margin / POOL) * 100 > 11 ? f1(margin) + ' GiB free' : '', title: 'free — ' + f1(margin) + ' GiB'});
+
+    const count = ph => Object.keys(deps).filter(k => deps[k].phase === ph).length;
+    const legend = [];
+    legend.push({count: count('ready'), label: 'ready', fg: 'var(--ink-mute)', bg: 'var(--ok)', border: 'var(--ok)', radius: '2px'});
+    if (count('starting')) legend.push({count: count('starting'), label: 'starting — bound, not serving', fg: 'var(--ink-mute)', bg: 'var(--gold)', border: 'var(--gold)', radius: '2px'});
+    if (count('stopping')) legend.push({count: count('stopping'), label: 'stopping', fg: 'var(--ink-mute)', bg: 'var(--rule-firm)', border: 'var(--rule-firm)', radius: '2px'});
+    if (count('failed')) legend.push({count: count('failed'), label: 'failed', fg: 'var(--drift)', bg: 'var(--drift)', border: 'var(--drift)', radius: '1px'});
+    if (count('gone')) legend.push({count: count('gone'), label: 'gone — record without a container', fg: 'var(--drift)', bg: 'none', border: 'var(--drift)', radius: '1px'});
+    legend.push({count: f1(margin), label: 'GiB free', fg: 'var(--ink-mute)', bg: 'var(--paper-3)', border: 'var(--rule-firm)', radius: '2px'});
+
+    const orphans = Object.keys(deps).filter(id => !this.isResident(deps[id]));
+    const listAll = RECIPES.map(r => {
+      const d = deps[r.id];
+      const row = this.row(r.id, d);
+      const kind = row.phase;
+      row.canPlan = !d && !r.archived;
+      row.canStop = !!d && (kind === 'ready' || kind === 'starting' || kind === 'stopping');
+      row.rowOpacity = r.archived ? '.6' : '1';
+      row.sub = d ? (kind === 'starting' ? clock(d.age) + ' in' : kind === 'ready' ? 'up ' + clock(d.age) : kind === 'gone' ? 'record only' : clock(d.age)) : (r.archived ? 'archived' : 'not deployed');
+      row.subFg = kind === 'gone' || kind === 'failed' ? 'var(--drift)' : 'var(--ink-faint)';
+      return row;
+    });
+    const inPool = listAll.filter(r => r.canStop);
+    const library = listAll.filter(r => r.canPlan);
+    const archived = listAll.filter(r => this.recipe(r.id).archived);
+    const sets = {all: listAll, pool: inPool, library: library, archived: archived};
+
+    const nav = [
+      {key: 'node', label: 'Node', count: res.length},
+      {key: 'models', label: 'Models', count: RECIPES.length},
+      {key: 'larder', label: 'Larder', count: LARDER.length},
+      {key: 'keys', label: 'API keys', count: KEYS.length},
+      {key: 'sources', label: 'Sources', count: 2}
+    ];
+    const cur = s.screen === 'model' ? 'models' : s.screen === 'plan' ? 'models' : s.screen;
+
+    const live = this.props.live !== false;
+
+    return {
+      theme: this.props.theme || 'auto',
+      signedIn: s.signedIn, signedOut: !s.signedIn,
+      signIn: () => this.setState({signedIn: true, screen: 'node'}),
+      signOut: () => this.setState({signedIn: false}),
+      noop: (e) => { if (e && e.preventDefault) e.preventDefault(); },
+      goNode: this.go('node'),
+      goModels: this.go('models'),
+      isNode: s.screen === 'node', isModels: s.screen === 'models', isModel: s.screen === 'model',
+      isPlan: s.screen === 'plan', isLarder: s.screen === 'larder', isKeys: s.screen === 'keys',
+      isSources: s.screen === 'sources',
+      navItems: nav.map(n => ({
+        label: n.label, count: n.count, go: this.go(n.key),
+        fg: cur === n.key ? 'var(--accent-ink)' : 'var(--ink-mute)',
+        bg: cur === n.key ? 'var(--accent-wash)' : 'transparent',
+        edge: cur === n.key ? 'var(--accent)' : 'transparent',
+        countFg: cur === n.key ? 'var(--accent-ink)' : 'var(--ink-faint)'
+      })),
+      committedStr: f1(committed), marginStr: signed(margin),
+      marginFg: margin < 0 ? 'var(--drift)' : margin < WARN ? 'var(--gold)' : 'var(--ink)',
+      residentCount: res.length,
+      segs: segs, legend: legend,
+      poolAria: f1(committed) + ' GiB committed to ' + res.length + ' containers, 24 reserved, ' + f1(margin) + ' free of 121.6.',
+      warnText: margin >= 0 && margin < WARN ? 'Only ' + f1(margin) + ' GiB projected free. Both configurations that engaged swap on this node sat below ' + WARN + ' GiB — the 91.0 GiB FP8 set measured 8 GiB available with 4.2 GiB of swap in use.' : null,
+      residentRows: res.map(e => this.row(e.id, e.d)),
+      orphanRows: orphans.map(id => this.row(id, deps[id])),
+      orphanCount: orphans.length, hasOrphans: orphans.length > 0,
+      liveDot: live ? 'var(--ok)' : 'var(--ink-faint)',
+      liveAnim: live ? 'breathe 2.4s ease-in-out infinite' : 'none',
+      liveLabel: live ? 'streaming · /events' : 'polling paused',
+      filters: [
+        {key: 'all', label: 'All'}, {key: 'pool', label: 'In the pool'},
+        {key: 'library', label: 'Library'}, {key: 'archived', label: 'Archived'}
+      ].map(f => ({
+        label: f.label, count: sets[f.key].length,
+        pick: () => this.setState({filter: f.key}),
+        bg: s.filter === f.key ? 'var(--accent-wash)' : 'var(--paper)',
+        fg: s.filter === f.key ? 'var(--accent-ink)' : 'var(--ink-mute)',
+        border: s.filter === f.key ? 'var(--accent)' : 'var(--rule-firm)'
+      })),
+      listRows: sets[s.filter] || listAll,
+      m: this.modelVals(),
+      p: this.planVals(),
+      larderTotal: f1(LARDER.reduce((a, e) => a + e.gib, 0)),
+      larderFree: f1(LARDER.filter(e => e.state === 'reclaimable').reduce((a, e) => a + e.gib, 0)),
+      larderCount: LARDER.filter(e => e.state === 'reclaimable').length,
+      larderRows: LARDER.map(e => ({
+        repo: e.repo, gibStr: f2(e.gib) + ' GiB', owner: e.owner, state: e.state, fetch: e.fetch,
+        fg: e.state === 'reclaimable' ? 'var(--drift)' : e.state === 'in use' ? 'var(--ok)' : 'var(--ink-faint)',
+        border: e.state === 'reclaimable' ? 'var(--drift)' : e.state === 'in use' ? 'var(--ok)' : 'var(--rule-firm)',
+        bg: e.state === 'reclaimable' ? 'var(--drift-wash)' : e.state === 'in use' ? 'var(--ok-wash)' : 'var(--paper)',
+        locked: e.state === 'in use',
+        canDelete: e.state !== 'in use' && s.confirm.larder !== e.repo,
+        armed: s.confirm.larder === e.repo,
+        arm: () => this.setState(st => ({confirm: Object.assign({}, st.confirm, {larder: e.repo, larderText: ''})})),
+        cancel: () => this.setState(st => ({confirm: Object.assign({}, st.confirm, {larder: null})})),
+        cost: f1(e.gib) + ' GiB deleted from disk · ~' + e.fetch + ' to re-fetch over this uplink',
+        typedText: s.confirm.larderText || '',
+        onTypeText: this.onType('larderText'),
+        matched: (s.confirm.larderText || '') === e.owner.split(' ')[0],
+        expect: e.owner.split(' ')[0],
+        okBg: (s.confirm.larderText || '') === e.owner.split(' ')[0] ? 'var(--drift)' : 'var(--paper)',
+        okFg: (s.confirm.larderText || '') === e.owner.split(' ')[0] ? 'oklch(99% 0 0)' : 'var(--ink-faint)',
+        okBorder: (s.confirm.larderText || '') === e.owner.split(' ')[0] ? 'var(--drift)' : 'var(--rule-firm)'
+      })),
+      freshKey: s.freshKey,
+      dismissKey: () => this.setState({freshKey: false}),
+      keyRows: KEYS.map(k => ({
+        name: k.name, prefix: k.prefix, created: k.created, used: k.used, scope: k.scope,
+        usedFg: k.used === 'never' ? 'var(--ink-faint)' : 'var(--ink-body)',
+        armed: s.confirm.key === k.name,
+        canRevoke: s.confirm.key !== k.name,
+        arm: () => this.setState(st => ({confirm: Object.assign({}, st.confirm, {key: k.name, keyText: ''})})),
+        cancel: () => this.setState(st => ({confirm: Object.assign({}, st.confirm, {key: null})})),
+        typedText: s.confirm.keyText || '',
+        onTypeText: this.onType('keyText'),
+        matched: (s.confirm.keyText || '') === k.name,
+        okBg: (s.confirm.keyText || '') === k.name ? 'var(--drift)' : 'var(--paper)',
+        okFg: (s.confirm.keyText || '') === k.name ? 'oklch(99% 0 0)' : 'var(--ink-faint)',
+        okBorder: (s.confirm.keyText || '') === k.name ? 'var(--drift)' : 'var(--rule-firm)'
+      })),
+      sourceRows: SOURCES.map(x => ({url: x.url, ref: x.ref, fetched: x.fetched, recipes: x.recipes, note: x.note}))
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -233,6 +233,17 @@ func (s *Server) pageNode(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		d.Node = &n
+
+		// The bar and the cards are built from the SAME view, so the two
+		// cannot disagree about a model's state - which is exactly what
+		// happened when the bar read a binary flag and the cards read a phase.
+		vs, err := s.models(r)
+		if err != nil {
+			return err
+		}
+		d.Models = vs
+		pb := poolBar(vs, s.pool, s.mgr.Planner.ReserveGiB)
+		d.Pool = &pb
 		return nil
 	})
 }

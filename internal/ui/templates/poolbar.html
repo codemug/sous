@@ -1,0 +1,75 @@
+{{/* The pool bar. ONE source of truth with the cards below it: every segment
+     is coloured from the same Phase field the chip uses. It previously drew
+     from a binary Drifted flag, so a model could read amber above and green
+     below on the same screen. */}}
+{{define "pool-bar"}}
+<div class="pool-map">
+  <div class="pool-bar" role="img"
+       aria-label="{{gib1 .PoolGiB}} GiB pool: {{gib1 .MarginGiB}} GiB free">
+    {{range .Segments}}
+      <div class="seg{{if .Reserve}} seg-reserve{{else if .Free}} seg-free{{else}} seg-{{.Phase}}{{end}}"
+           style="width:{{pctf .Pct}}%"
+           title="{{if .ID}}{{.ID}} — {{gib1 .GiB}} GiB · {{.Phase}}{{else if .Reserve}}reserved for the OS, containers and CUDA contexts — {{gib1 .GiB}} GiB{{else}}free — {{gib1 .GiB}} GiB{{end}}">
+        {{.Label}}
+      </div>
+    {{end}}
+  </div>
+
+  {{/* A ruler, so a segment can be read against a number rather than guessed. */}}
+  <div class="pool-ruler" aria-hidden="true">
+    {{range .Ticks}}<span>{{gib1 .}}</span>{{end}}
+  </div>
+
+  <div class="pool-legend">
+    {{if gt (index .Counts "ready") 0}}
+      <span><i class="swatch sw-ready"></i><b>{{index .Counts "ready"}}</b> ready</span>
+    {{end}}
+    {{if gt (index .Counts "starting") 0}}
+      <span><i class="swatch sw-starting"></i><b>{{index .Counts "starting"}}</b> starting — bound, not serving</span>
+    {{end}}
+    {{if gt (index .Counts "stopping") 0}}
+      <span><i class="swatch sw-stopping"></i><b>{{index .Counts "stopping"}}</b> stopping</span>
+    {{end}}
+    {{if gt (index .Counts "failed") 0}}
+      <span class="warn"><i class="swatch sw-failed"></i><b>{{index .Counts "failed"}}</b> failed</span>
+    {{end}}
+    {{if gt (index .Counts "gone") 0}}
+      <span class="warn"><i class="swatch sw-gone"></i><b>{{index .Counts "gone"}}</b> gone — record without a container</span>
+    {{end}}
+    <span><i class="swatch sw-free"></i><b>{{gib1 .MarginGiB}}</b> GiB free</span>
+  </div>
+
+  {{/* The reserve has no formula behind it and the page should say so rather
+       than implying a precision the number does not have. */}}
+  <p class="note dim">{{gib1 .ReserveGiB}} GiB is held back for the OS, containers and CUDA
+  contexts. Calibrated on measured combinations, deliberately conservative, and
+  with no formula behind it — it will sometimes refuse a set that would in fact fit.</p>
+</div>
+{{end}}
+
+{{/* Records whose container is gone. Below the bar, never in it: they hold no
+     memory, and drawing them would show the node as full when it is empty. */}}
+{{define "orphans"}}
+{{if .}}
+<div class="panel orphans">
+  <h2>Records without a container</h2>
+  <p class="note">Sous has a deployment record but nothing is running. Stopped
+  outside Sous, killed by the OOM reaper, or crash-looped past its restart
+  limit — the detail says which. The memory is already released.</p>
+  {{range .}}
+  <div class="orphan">
+    <span class="mono"><strong>{{.Recipe.ID}}</strong></span>
+    <span class="chip is-{{.Phase}}">{{.Phase}}</span>
+    <span class="note">released {{gib1 .FootprintGiB}} GiB</span>
+    <span class="note dim">{{.Detail}}</span>
+    <span class="orphan-act">
+      <a class="btn" href="/model/{{.Recipe.ID}}">Logs</a>
+      <form method="post" action="/model/{{.Recipe.ID}}/forget" style="display:inline">
+        <button class="btn" type="submit">Clear record</button>
+      </form>
+    </span>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}

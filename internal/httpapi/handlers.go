@@ -33,6 +33,8 @@ type pageData struct {
 	IsError     bool
 	Node        *NodeStatus
 	Model       *modelPage
+	Models      []ModelView
+	Pool        *PoolBar
 	Keys        *keysPage
 	Fetches     *fetchView
 	// BaseURL is this server as the BROWSER reached it, so a copyable example
@@ -337,21 +339,6 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, name, title string
 	}
 }
 
-func (s *Server) pageCatalog(w http.ResponseWriter, r *http.Request) {
-	s.page(w, r, "catalog", "Catalog", func(d *pageData) error {
-		rs, err := s.cat.List()
-		if err != nil {
-			return err
-		}
-		d.Recipes = rs
-		return nil
-	})
-}
-
-func (s *Server) pageDeployments(w http.ResponseWriter, r *http.Request) {
-	s.page(w, r, "deployments", "Deployments", nil)
-}
-
 // ---------- sources ----------
 
 func (s *Server) listSources(w http.ResponseWriter, _ *http.Request) {
@@ -447,4 +434,47 @@ func baseURL(r *http.Request) string {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host
+}
+
+// redirectTo permanently moves an old route.
+//
+// 301 rather than a second handler: a renamed page should stop existing, not
+// quietly keep working - two live names for one page is how they drift.
+func redirectTo(to string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, to, http.StatusMovedPermanently)
+	}
+}
+
+// forgetRecord clears a deployment record whose container is gone.
+func (s *Server) forgetRecord(w http.ResponseWriter, r *http.Request) {
+	id, ok := id(r, w)
+	if !ok {
+		return
+	}
+	if err := s.mgr.ForgetRecord(id); err != nil {
+		if wantsHTML(r) {
+			s.redirect(w, r, "/", err.Error(), true)
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if wantsHTML(r) {
+		s.redirect(w, r, "/", "", false)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// pageModels lists every recipe with whatever is happening to it.
+func (s *Server) pageModels(w http.ResponseWriter, r *http.Request) {
+	s.page(w, r, "models", "Models", func(d *pageData) error {
+		vs, err := s.models(r)
+		if err != nil {
+			return err
+		}
+		d.Models = vs
+		return nil
+	})
 }

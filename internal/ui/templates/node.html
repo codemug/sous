@@ -19,13 +19,21 @@
   border-right:1px solid var(--paper);min-width:0;
 }
 .seg:last-child{border-right:none}
-.seg-run  {background:var(--ok)}
-/* Drift is HATCHED, not just amber: a container that vanished should not be
- * distinguishable from a healthy one by hue alone. */
-.seg-drift{
+/* ONE CLASS PER PHASE, from the same field the chip below uses.
+ *
+ * STARTING IS HATCHED, not solid. The memory is claimed the moment the
+ * container starts, but the model cannot serve for another eight to ten
+ * minutes - and a solid green segment says something false for that whole
+ * window. The hatch reads as "occupied, not yet usable".
+ *
+ * failed and gone are NOT segments at all; they hold no memory and are listed
+ * under the bar instead. */
+.seg-ready {background:var(--ok)}
+.seg-starting{
   background:repeating-linear-gradient(45deg,
-    var(--drift) 0 6px, oklch(from var(--drift) calc(l - .08) c h) 6px 12px);
+    var(--gold) 0 7px, var(--gold-wash) 7px 14px);
 }
+.seg-stopping{background:var(--rule-firm);color:var(--ink)}
 .seg-reserve{
   background:repeating-linear-gradient(45deg,
     var(--paper-3) 0 5px, var(--rule) 5px 10px);
@@ -91,51 +99,16 @@
 <p class="lede">One pool, {{printf "%.1f" .Node.PoolGiB}} GiB. Every model below holds a
 share of it — the bar is drawn to scale, so what is left is what you can deploy.</p>
 
-<section class="pool-map">
-  <div class="pool-bar" role="img" aria-label="Memory pool: {{printf "%.1f" .Node.CommittedGiB}} GiB committed to {{.Node.DeployedCount}} model(s), {{printf "%.0f" .Node.ReserveGiB}} GiB reserved, {{printf "%.1f" .Node.MarginGiB}} GiB free of {{printf "%.1f" .Node.PoolGiB}} GiB.">
-    {{$pool := .Node.PoolGiB}}
-    {{range .Node.Models}}
-      {{$gib := .DeclaredGiB}}{{if gt .ObservedGiB 0.0}}{{$gib = .ObservedGiB}}{{end}}
-      <div class="seg {{if .Drifted}}seg-drift{{else}}seg-run{{end}}"
-           style="width:{{pct $gib $pool}}%" title="{{.RecipeID}} — {{printf "%.1f" $gib}} GiB">
-        {{if gt (pct $gib $pool) 11.0}}{{.RecipeID}}{{end}}
-      </div>
-    {{end}}
-    <div class="seg seg-reserve" style="width:{{pct .Node.ReserveGiB $pool}}%"
-         title="reserved for OS, containers and CUDA contexts — {{printf "%.0f" .Node.ReserveGiB}} GiB">
-      {{if gt (pct .Node.ReserveGiB $pool) 11.0}}reserved{{end}}
-    </div>
-    {{if gt .Node.MarginGiB 0.0}}
-      <div class="seg seg-free" style="width:{{pct .Node.MarginGiB $pool}}%"
-           title="free — {{printf "%.1f" .Node.MarginGiB}} GiB">
-        {{if gt (pct .Node.MarginGiB $pool) 11.0}}{{printf "%.1f" .Node.MarginGiB}} GiB free{{end}}
-      </div>
-    {{end}}
-  </div>
-  <div class="pool-legend">
-    <span><span class="swatch" style="background:var(--ok)"></span><b>{{.Node.ReadyCount}}</b> ready</span>
-    {{if gt .Node.StartingCount 0}}
-      <span><span class="swatch" style="background:var(--gold)"></span><b>{{.Node.StartingCount}}</b> starting</span>
-    {{end}}
-    {{if gt .Node.FailedCount 0}}
-      <span class="warn"><span class="swatch" style="background:var(--drift)"></span><b>{{.Node.FailedCount}}</b> failed</span>
-    {{end}}
-    {{if gt .Node.DriftedCount 0}}
-      <span class="warn"><span class="swatch" style="background:var(--drift)"></span><b>{{.Node.DriftedCount}}</b> drifted — record without a container</span>
-    {{end}}
-    <span><span class="swatch" style="background:var(--paper-3)"></span><b>{{printf "%.1f" .Node.MarginGiB}}</b> GiB free</span>
-    <span>ports <b>{{.Node.PortLow}}–{{.Node.PortHigh}}</b></span>
-    <span><b>{{.Node.RecipeCount}}</b> recipes, {{.Node.ArchivedCount}} archived</span>
-  </div>
-</section>
+  {{template "pool-bar" .Pool}}
+  {{template "orphans" .Pool.Orphans}}
 
-{{if .Node.Models}}
-<h2>Deployed</h2>
-<div class="models">
-  {{range .Node.Models}}
+  {{if .Pool.Residents}}
+  <h2>Deployed</h2>
+  <div class="models">
+  {{range .Models}}{{if .Resident}}
     <article class="model is-{{.Phase}}">
       <div class="model-top">
-        <span class="model-id">{{.RecipeID}}</span>
+        <span class="model-id">{{.Recipe.ID}}</span>
         <span class="model-port">:{{.Port}}</span>
         {{/* ONE chip carrying the phase, not two booleans. "running" was true
              for the eight to ten minutes a model spends loading, which is
@@ -145,13 +118,13 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
           {{if eq .Phase "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
           {{.Phase}}
         </span>
-        {{if .Archived}}<span class="chip is-arch">archived</span>{{end}}
+        {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
         <span class="model-acts">
-          <a class="btn" href="/model/{{.RecipeID}}">Open</a>
+          <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
           {{if eq .Phase "stopping"}}
             <button class="btn-danger" type="button" disabled>Stopping…</button>
           {{else}}
-            <form method="post" action="/api/undeploy/{{.RecipeID}}" style="display:inline">
+            <form method="post" action="/api/undeploy/{{.Recipe.ID}}" style="display:inline">
               <button class="btn-danger" type="submit">Undeploy</button>
             </form>
           {{end}}
@@ -164,8 +137,8 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
 
 
     <div class="facts">
-      <div class="fact"><span class="k">Modality</span><span class="v">{{if .Modality}}{{.Modality}}{{else}}—{{end}}</span></div>
-      <div class="fact"><span class="k">Served as</span><span class="v">{{if .ServedAs}}{{range $i,$n := .ServedAs}}{{if $i}}, {{end}}{{$n}}{{end}}{{else}}—{{end}}</span></div>
+      <div class="fact"><span class="k">Modality</span><span class="v">{{if .Recipe.Modality}}{{.Recipe.Modality}}{{else}}—{{end}}</span></div>
+      <div class="fact"><span class="k">Served as</span><span class="v">{{if .Recipe.ServedAs}}{{range $i,$n := .Recipe.ServedAs}}{{if $i}}, {{end}}{{$n}}{{end}}{{else}}—{{end}}</span></div>
       <div class="fact"><span class="k">Uptime</span><span class="v">{{dur .UptimeSec}}</span></div>
       <div class="fact"><span class="k">Declared</span><span class="v">{{gib .DeclaredGiB}}</span></div>
       <div class="fact">
@@ -179,7 +152,7 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
       {{end}}
     </div>
   </article>
-  {{end}}
+{{end}}{{end}}
 </div>
 {{else}}
 <div class="panel empty">

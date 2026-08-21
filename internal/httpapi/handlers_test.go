@@ -235,10 +235,10 @@ func TestDeployThenListShowsIt(t *testing.T) {
 	}
 }
 
-func TestCatalogPageRenders(t *testing.T) {
+func TestModelsPageRenders(t *testing.T) {
 	h := newTestServer(t)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/catalog", nil))
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/models", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rr.Code, rr.Body)
 	}
@@ -252,36 +252,39 @@ func TestCatalogPageRenders(t *testing.T) {
 	}
 }
 
-func TestDeploymentsPageRenders(t *testing.T) {
+// /deployments is RETIRED. It listed the running set, which the Node page
+// already shows with more context - and two lists of the same objects is how
+// the pool bar and the cards came to disagree. The old name 301s rather than
+// quietly continuing to work.
+func TestDeploymentsRedirectsToNode(t *testing.T) {
 	h := newTestServer(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/deployments", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	rr := send(t, h, http.MethodGet, "/deployments", "", "")
+	if rr.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "Nothing deployed") {
-		t.Fatal("empty state not rendered")
+	if loc := rr.Header().Get("Location"); loc != "/" {
+		t.Errorf("Location = %q, want /", loc)
+	}
+}
+
+// Catalog was renamed to Models for the same reason.
+func TestCatalogRedirectsToModels(t *testing.T) {
+	h := newTestServer(t)
+	rr := send(t, h, http.MethodGet, "/catalog", "", "")
+	if rr.Code != http.StatusMovedPermanently {
+		t.Fatalf("status = %d, want 301", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/models" {
+		t.Errorf("Location = %q, want /models", loc)
 	}
 }
 
 // The measured backend and graph mode must reach the page: they are the
 // evidence for a throughput change that produces no error.
-func TestDeploymentsPageShowsBackendAndGraphs(t *testing.T) {
-	h := newTestServer(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/deploy/qwen38", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("deploy: %d %s", rr.Code, rr.Body)
-	}
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/deployments", nil))
-	body := rr.Body.String()
-	for _, want := range []string{"FLASHINFER", "PIECEWISE", "136"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("deployments page missing %q", want)
-		}
-	}
-}
+// Boot telemetry lives on the model page now that /deployments has retired -
+// beside the config and logs it explains, rather than on a list that only
+// repeated the Node page. Covered by TestModelPageRendersConfigTelemetryAndLogs
+// in status_test.go, which already asserts the parsed backend.
 
 func TestUnknownPathIs404(t *testing.T) {
 	h := newTestServer(t)

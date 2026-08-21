@@ -2,7 +2,10 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/codemug/sous/internal/store"
+	"io/fs"
 	"net"
 	"net/http"
 	"strconv"
@@ -248,4 +251,36 @@ func (m *Manager) healthPath(id string) string {
 		return DefaultHealthPath
 	}
 	return r.HealthPath
+}
+
+// Resident reports whether a phase HOLDS MEMORY.
+//
+// Defined once and used by the pool bar, the phase counts, the rail and the
+// capacity planner, because those four disagreeing is how a dashboard starts
+// lying about how much room is left.
+//
+// starting counts: the allocation is claimed the moment the container starts,
+// long before it can serve. stopping counts: the memory is not back until the
+// container is actually gone. failed and gone do NOT count - a record whose
+// container is not there holds nothing, and including it would make the node
+// look full when it is empty.
+func Resident(p Phase) bool {
+	return p == PhaseStarting || p == PhaseReady || p == PhaseStopping
+}
+
+// ForgetRecord deletes a deployment record WITHOUT touching a container.
+//
+// Undeploy stops first and is the right call for anything running. This exists
+// for the other case: a record whose container is already gone - OOM-killed,
+// removed by hand, crash-looped past its limit. Stopping a container that does
+// not exist is not an error, but it is not what the operator asked for either,
+// and the distinction matters when the button is labelled "clear the record".
+func (m *Manager) ForgetRecord(id string) error {
+	if !recipe.ValidID(id) {
+		return fmt.Errorf("forget: invalid id %q", id)
+	}
+	if err := m.Store.Delete(store.KindDeployment, id); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }

@@ -1,4 +1,4 @@
-{{define "catalog"}}{{template "head" .}}
+{{define "models"}}{{template "head" .}}
 <style>
 .cat-head{display:flex;align-items:flex-end;gap:var(--space-md);flex-wrap:wrap;margin-bottom:var(--space-lg)}
 .cat-head .lede{margin:0}
@@ -79,23 +79,35 @@ args:
     </tr>
   </thead>
   <tbody>
-  {{range .Recipes}}
-    <tr{{if .Archived}} class="arch"{{end}}>
+  {{range .Models}}
+    <tr{{if .Recipe.Archived}} class="arch"{{end}}>
       <td>
-        <a class="rid" href="/model/{{.ID}}">{{.ID}}</a>
-        {{if .Model}}<span class="rmodel">{{.Model}}</span>{{end}}
+        <a class="rid" href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a>
+        {{if .Recipe.Model}}<span class="rmodel">{{.Recipe.Model}}</span>{{end}}
       </td>
-      <td><span class="chip">{{.Kind}}</span></td>
-      <td>{{.Modality}}</td>
+      <td><span class="chip">{{.Recipe.Kind}}</span></td>
+      <td>{{.Recipe.Modality}}</td>
       <td class="n">
-        {{if .Declared.TotalGiB}}{{printf "%.2f GiB" .Declared.TotalGiB}}{{else}}CPU only{{end}}
+        {{if .Recipe.Declared.TotalGiB}}{{printf "%.2f GiB" .Recipe.Declared.TotalGiB}}{{else}}CPU only{{end}}
       </td>
-      <td>{{if .Archived}}<span class="chip is-arch">archived</span>{{end}}</td>
+      <td>
+        {{if .Deployed}}
+          <span class="chip is-{{.Phase}}">
+            {{if eq (printf "%s" .Phase) "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
+            {{if eq (printf "%s" .Phase) "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
+            {{.Phase}}
+          </span>
+          {{if .Port}}<span class="mono dim">:{{.Port}}</span>{{end}}
+        {{else}}
+          <span class="chip is-idle">not deployed</span>
+        {{end}}
+        {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
+      </td>
       <td>
         <span class="row-acts">
-          <a class="btn" href="/model/{{.ID}}">Open</a>
-          {{if not .Archived}}
-          <form method="post" action="/api/deploy/{{.ID}}" style="margin:0">
+          <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
+          {{if and (not .Recipe.Archived) (not .Deployed)}}
+          <form method="post" action="/api/deploy/{{.Recipe.ID}}" style="margin:0">
             <button type="submit">Deploy</button>
           </form>
           {{end}}
