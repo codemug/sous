@@ -30,29 +30,38 @@ pre.logs{
 <div class="m-head">
   <h1>{{.Recipe.ID}}</h1>
   {{if .Deployed}}
-    {{if .Status.Drifted}}<span class="chip is-drift">drifted</span>
-    {{else}}<span class="chip is-running">running</span>{{end}}
-    <span class="mono" style="color:var(--accent-ink)">:{{.Status.Port}}</span>
+    <span class="chip is-{{.Phase}}">
+      {{if eq (printf "%s" .Phase) "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
+      {{.Phase}}
+    </span>
+    {{if .Port}}<span class="mono" style="color:var(--accent-ink)">:{{.Port}}</span>{{end}}
   {{else}}
     <span class="chip is-idle">not deployed</span>
   {{end}}
   {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
   <span class="m-acts">
-    <a class="btn" href="/catalog">← Catalog</a>
-    {{if .Deployed}}
-      <form method="post" action="/model/{{.Recipe.ID}}/undeploy" style="margin:0">
+    <a class="btn" href="/models">← Models</a>
+    {{if .Resident}}
+      {{/* /api/undeploy/{id}, the same endpoint the cards post to, so the
+           optimistic-stop handler in live.html catches this one too. */}}
+      <form method="post" action="/api/undeploy/{{.Recipe.ID}}" style="margin:0">
         <button class="btn-danger" type="submit">Undeploy</button>
       </form>
     {{else if not .Recipe.Archived}}
-      <form method="post" action="/model/{{.Recipe.ID}}/deploy" style="margin:0;display:flex;gap:var(--space-2xs)">
-        <input class="mono" name="port" inputmode="numeric" placeholder="port (auto)"
-               style="width:9rem;padding:.4rem .5rem;border:1px solid var(--rule-firm);border-radius:var(--radius-sm);background:var(--paper);color:var(--ink);font-size:var(--text-xs)">
-        <button class="btn-primary" type="submit">Deploy</button>
-      </form>
+      {{/* Through the plan, like everywhere else: the projection is worth
+           seeing before a ten-minute start, and a refusal explains itself
+           there rather than as a flash message. */}}
+      <a class="btn-primary" href="/model/{{.Recipe.ID}}/plan">Deploy…</a>
     {{end}}
   </span>
 </div>
 <p class="lede">{{.Recipe.Kind}} · {{.Recipe.Modality}}{{if .Recipe.Model}} · <span class="mono">{{.Recipe.Model}}</span>{{end}}</p>
+
+{{/* A red chip that does not say why sends someone to the logs for something
+     the runtime already reported. */}}
+{{if .Detail}}<p class="note warn">{{.Detail}}</p>{{end}}
+{{/* A ten-minute start reported nothing at all on this page. */}}
+{{template "stage-stepper" .Progress}}
 
 <div class="cols">
   <div>
@@ -70,19 +79,19 @@ pre.logs{
     {{if .Deployed}}
     <section class="box">
       <h2>Telemetry</h2>
-      {{if .Status.Observed}}
+      {{if .Observed}}
         <p class="note">Measured from this container's boot log. Where it differs
         from the declared footprint, the measurement is the truth and the recipe
         is the estimate that needs correcting.</p>
         <dl class="kv">
-          <dt>Weights</dt><dd>{{gib .Status.Observed.WeightsGiB}}</dd>
-          <dt>KV cache</dt><dd>{{gib .Status.Observed.KVGiB}}{{if .Status.Observed.KVTokens}} · {{.Status.Observed.KVTokens}} tokens{{end}}</dd>
-          {{if .Status.Observed.KVKiBPerToken}}<dt>KV / token</dt><dd>{{printf "%.1f KiB" .Status.Observed.KVKiBPerToken}}</dd>{{end}}
-          {{if .Status.Observed.LoadSeconds}}<dt>Load time</dt><dd>{{printf "%.0fs" .Status.Observed.LoadSeconds}}</dd>{{end}}
-          {{if .Status.Observed.Backend}}<dt>Attention</dt><dd>{{.Status.Observed.Backend}}</dd>{{end}}
-          {{if .Status.Observed.CUDAGraphs}}<dt>CUDA graphs</dt><dd>{{.Status.Observed.CUDAGraphs}}</dd>{{end}}
-          {{if .Status.Observed.MaxConcurrency}}<dt>Max concurrency</dt><dd>{{printf "%.1f" .Status.Observed.MaxConcurrency}}</dd>{{end}}
-          <dt>Uptime</dt><dd>{{dur .Status.UptimeSec}}</dd>
+          <dt>Weights</dt><dd>{{gib .Observed.WeightsGiB}}</dd>
+          <dt>KV cache</dt><dd>{{gib .Observed.KVGiB}}{{if .Observed.KVTokens}} · {{.Observed.KVTokens}} tokens{{end}}</dd>
+          {{if .Observed.KVKiBPerToken}}<dt>KV / token</dt><dd>{{printf "%.1f KiB" .Observed.KVKiBPerToken}}</dd>{{end}}
+          {{if .Observed.LoadSeconds}}<dt>Load time</dt><dd>{{secs .Observed.LoadSeconds}}</dd>{{end}}
+          {{if .Observed.Backend}}<dt>Attention</dt><dd>{{.Observed.Backend}}</dd>{{end}}
+          {{if .Observed.CUDAGraphs}}<dt>CUDA graphs</dt><dd>{{.Observed.CUDAGraphs}}</dd>{{end}}
+          {{if .Observed.MaxConcurrency}}<dt>Max concurrency</dt><dd>{{printf "%.1fx" .Observed.MaxConcurrency}}</dd>{{end}}
+          <dt>Uptime</dt><dd>{{dur .UptimeSec}}</dd>
         </dl>
       {{else}}
         <p class="note">No observation recorded. The boot log was not parsed for
@@ -123,19 +132,15 @@ pre.logs{
       {{end}}
     </section>
 
-    <details class="box danger">
-      <summary>Delete this recipe</summary>
-      <p class="note" style="margin-top:var(--space-sm)">Deleting is refused while
-      the model is deployed. Forcing it stops the container <em>and</em> removes the
-      recipe — the configuration that could restart it goes too, so the model
-      cannot be brought back without re-importing it.</p>
-      <form method="post" action="/model/{{.Recipe.ID}}/delete">
-        <label style="display:flex;gap:.4rem;align-items:center;font-size:var(--text-sm);margin-bottom:var(--space-sm)">
-          <input type="checkbox" name="force" value="true"> Stop it first if it is running
-        </label>
-        <button class="btn-danger" type="submit">Delete {{.Recipe.ID}}</button>
-      </form>
-    </details>
+    {{/* A CHECKBOX WAS THE SAFE-LOOKING PATH. Deleting a recipe destroys the
+         configuration that could restart the model, and this was the last
+         destructive path in the UI still reachable in one click. It now uses
+         the same typed confirmation as the other three. */}}
+    {{template "confirm-typed" dict
+        "Action" (printf "/model/%s/delete?force=true" .Recipe.ID)
+        "ID" .Recipe.ID
+        "Label" "Delete this recipe"
+        "Cost" "The recipe goes with the container: the model, image, flags and the reasoning behind them. Nothing here can restart it afterwards, and re-importing is the only way back."}}
   </div>
 </div>
 {{end}}

@@ -95,20 +95,13 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
          guard anyway, and a protected one is the rollback path - both would be
          a button that exists to say no. */}}
     {{if eq (printf "%s" .State) "stale"}}
-    <details class="drawer danger-drawer">
-      <summary>Delete weights</summary>
-      <div class="card-danger">
-        <p class="note warn">This frees {{size .Bytes}} and the only
-        way back is the network. No download rate is recorded here, so how long a
-        re-fetch would take is not something this page can honestly tell you.</p>
-        <form method="post" action="/api/larder/delete" class="confirmform">
-          <input type="hidden" name="repo" value="{{.Repo}}">
-          <label class="mlabel">Type <strong>{{.Repo}}</strong> to confirm</label>
-          <input name="confirm" type="text" required autocomplete="off" spellcheck="false">
-          <button class="btn-danger" type="submit">Delete</button>
-        </form>
-      </div>
-    </details>
+    {{template "confirm-typed" dict
+        "Action" "/api/larder/delete"
+        "ID" .Repo
+        "Label" "Delete weights"
+        "Cost" (printf "This frees %s and the only way back is the network. No download rate is recorded here, so how long a re-fetch would take is not something this page can honestly tell you." (size .Bytes))
+        "Wrap" "card-danger"
+        "HiddenName" "repo" "HiddenValue" .Repo}}
     {{end}}
   </article>
   {{end}}

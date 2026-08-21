@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -154,5 +155,64 @@ func TestModelsPageIsCalledModels(t *testing.T) {
 	// Archived recipes were dimmed by tr.arch td until the tables became cards.
 	if !strings.Contains(body, ".card.is-arch{") {
 		t.Error("no rule dims an archived card; archived reads at full strength")
+	}
+}
+
+// THE MODEL PAGE'S DELETE WAS ALREADY BROKEN, not merely unsafe. Its form
+// posted a `force` checkbox and no `confirm` field at all, while recipes.go
+// guards the route with requireConfirm - so every browser delete from this page
+// bounced back with "type <id> to confirm this" and nothing was ever removed.
+//
+// Converting it to the shared partial fixes the path and closes the gap in the
+// same change.
+func TestModelPageDeleteActuallyDeletes(t *testing.T) {
+	h := newTestServer(t)
+
+	form := "application/x-www-form-urlencoded"
+	if rr := post(t, h, "/model/qwen38/delete?force=true", form, "confirm=qwen38"); rr.Code >= 400 {
+		t.Fatalf("delete returned %d: %s", rr.Code, rr.Body.String())
+	}
+	// Asserted against the listing, not the drill-down: an unknown recipe id
+	// currently answers 500 rather than 404, which is a separate defect and not
+	// something this test should encode as correct.
+	if got := ids(t, h); slices.Contains(got, "qwen38") {
+		t.Errorf("recipe still present after a confirmed delete: %v", got)
+	}
+}
+
+// A delete WITHOUT the typed confirmation must still be refused, or the partial
+// is decoration.
+func TestModelPageDeleteRefusesWithoutTheTypedText(t *testing.T) {
+	h := newTestServer(t)
+	form := "application/x-www-form-urlencoded"
+	post(t, h, "/model/qwen38/delete?force=true", form, "confirm=wrong")
+	if rr := send(t, h, http.MethodGet, "/model/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Error("a recipe was deleted despite a mismatched confirmation")
+	}
+}
+
+// One partial, one field name, four routes. Each hand-rolled copy is a chance
+// for the route and the form to disagree about what is being typed - and they
+// already had: larder typed the repo, keys the key id, the model page nothing.
+func TestEveryDestructivePathUsesTheSharedConfirmation(t *testing.T) {
+	h := newTestServerWithHub(t)
+	// A revoke drawer only exists once a key does.
+	if rr := post(t, h, "/keys", "application/x-www-form-urlencoded", "name=test"); rr.Code >= 400 {
+		t.Fatalf("could not create a key: %d %s", rr.Code, rr.Body.String())
+	}
+	for _, c := range []struct{ path, id string }{
+		{"/model/qwen38", "qwen38"},
+		{"/keys", ""},
+		{"/larder", ""},
+	} {
+		body := send(t, h, http.MethodGet, c.path, "", "").Body.String()
+		if !strings.Contains(body, `name="confirm"`) {
+			t.Errorf("%s has no typed confirmation", c.path)
+		}
+		// The partial gives every confirmation input an id derived from the
+		// target; a hand-rolled copy has no id at all.
+		if !strings.Contains(body, `id="c-`) {
+			t.Errorf("%s still hand-rolls its confirmation instead of calling the partial", c.path)
+		}
 	}
 }

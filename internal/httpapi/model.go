@@ -7,18 +7,21 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/codemug/sous/internal/engine"
-	"github.com/codemug/sous/internal/recipe"
 )
 
 // modelPage is everything the drill-down shows for one recipe.
+//
+// IT EMBEDS ModelView, like every other screen. This page was the last one left
+// on the pre-redesign ModelStatus, which knew two states - running and drifted -
+// and so contradicted the rest of the UI on precisely the point the redesign
+// existed to fix: a model that was starting read as "running" here and
+// "starting" everywhere else, and a failed one read as "running" too.
 type modelPage struct {
-	Recipe recipe.Recipe
-	YAML   string
+	ModelView
+	YAML string
 
-	Deployed bool
-	Status   *ModelStatus
-	Logs     string
-	LogErr   string
+	Logs   string
+	LogErr string
 }
 
 // pageModel renders config, telemetry and logs for a single recipe.
@@ -37,7 +40,7 @@ func (s *Server) pageModel(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		m := &modelPage{Recipe: rec}
+		m := &modelPage{ModelView: ModelView{Recipe: rec}}
 
 		// The edit box is YAML, not JSON: it is the format the recipes are
 		// published in, and it is the one a person can read a long Notes field
@@ -46,11 +49,12 @@ func (s *Server) pageModel(w http.ResponseWriter, r *http.Request) {
 			m.YAML = string(b)
 		}
 
-		if n, err := s.nodeStatus(r); err == nil {
-			for i := range n.Models {
-				if n.Models[i].RecipeID == id {
-					m.Status = &n.Models[i]
-					m.Deployed = true
+		// The same view builder the other pages use, so the phase, the port and
+		// the progress here are the ones the pool bar and the cards drew.
+		if views, err := s.models(r); err == nil {
+			for _, v := range views {
+				if v.Recipe.ID == id {
+					m.ModelView = v
 					break
 				}
 			}
@@ -59,7 +63,7 @@ func (s *Server) pageModel(w http.ResponseWriter, r *http.Request) {
 		// Logs are best-effort. A recipe that has never been deployed has no
 		// container and therefore no logs, and that is not an error worth
 		// failing the whole page over.
-		if m.Deployed {
+		if m.Deployed() {
 			if rc, err := s.mgr.Runtime.Logs(r.Context(), engine.ContainerName(id)); err == nil {
 				defer rc.Close()
 				buf := make([]byte, 0, 256<<10)

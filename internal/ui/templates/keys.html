@@ -75,18 +75,12 @@ it is safe to put one in a notebook or a demo page.</p>
         </span>
       </div>
       {{if not .Disabled}}
-      <details class="drawer danger-drawer">
-        <summary>Revoke</summary>
-        <div class="card-danger">
-          <p class="note warn">Whoever holds this key starts getting 401 on their
-          next request, and there is no way to tell them beforehand.</p>
-          <form method="post" action="/keys/{{.ID}}/revoke" class="confirmform">
-            <label class="mono">Type <strong>{{.ID}}</strong> to confirm</label>
-            <input name="confirm" type="text" required autocomplete="off" spellcheck="false">
-            <button class="btn-danger" type="submit">Revoke</button>
-          </form>
-        </div>
-      </details>
+      {{template "confirm-typed" dict
+          "Action" (printf "/keys/%s/revoke" .ID)
+          "ID" .ID
+          "Label" "Revoke"
+          "Cost" "Whoever holds this key starts getting 401 on their next request, and there is no way to tell them beforehand."
+          "Wrap" "card-danger"}}
       {{else}}
       <form method="post" action="/keys/{{.ID}}/revoke">
         <input type="hidden" name="delete" value="true">

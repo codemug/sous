@@ -1,8 +1,19 @@
 {{/* A typed confirmation for the four paths that destroy something.
-     Takes {Action, ID, Label, Cost}.
+
+     Takes {Action, ID, Label, Cost} and two optional fields:
+
+       Wrap         the wrapper class. Empty gives the full-width panel; a
+                    caller inside a card passes "card-danger", which is the
+                    same affordance sized for the inside of a card.
+       HiddenName   a hidden field posted alongside, for a route that
+       HiddenValue  identifies its target by body rather than by path.
 
      VALIDATED SERVER-SIDE. Disabling the button until the text matches is a
      courtesy; these are form posts and a form post can arrive from anywhere.
+
+     THE FIELD NAME IS HARDCODED to "confirm" on purpose. A route reading any
+     other name would accept every submission silently, and the whole point of
+     one partial is that the four routes cannot drift apart on what they check.
 
      The cost is stated from real data rather than adjectives - the GiB that
      goes, the measurements that cannot be recovered, the 401 the holder will
@@ -11,9 +22,10 @@
 {{define "confirm-typed"}}
 <details class="drawer danger-drawer">
   <summary>{{.Label}}</summary>
-  <div class="panel warn-panel">
+  <div class="{{if .Wrap}}{{.Wrap}}{{else}}panel warn-panel{{end}}">
     <p class="note warn">{{.Cost}}</p>
     <form method="post" action="{{.Action}}" class="confirmform">
+      {{if .HiddenName}}<input type="hidden" name="{{.HiddenName}}" value="{{.HiddenValue}}">{{end}}
       <label for="c-{{.ID}}" class="mono">Type <strong>{{.ID}}</strong> to confirm</label>
       <input id="c-{{.ID}}" name="confirm" type="text" required
              autocomplete="off" spellcheck="false" autocapitalize="off">
