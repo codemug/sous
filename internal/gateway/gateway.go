@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/codemug/sous/internal/auth"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -200,9 +201,19 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
+	// A scoped key sees only its own models. Listing the rest would advertise
+	// models every request for them is going to be refused for.
+	var allow []string
+	if k, ok := auth.FromContext(r.Context()); ok {
+		allow = k.Models
+	}
+
 	now := g.now().Unix()
 	data := make([]modelObj, 0, len(rs))
 	for _, rt := range rs {
+		if len(allow) > 0 && !allowedBy(allow, rt.RecipeID, rt) {
+			continue
+		}
 		names := rt.Aliases
 		if len(names) == 0 {
 			names = []string{rt.RecipeID}
@@ -260,6 +271,18 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
+	}
+
+	// SCOPE IS THE FIRST GATE. A key limited to particular models must be
+	// refused here even for a model that exists and is ready - 403, not 404,
+	// because the caller should learn that the model is real and that their
+	// credential is the problem, not go hunting for a typo.
+	if k, ok := auth.FromContext(r.Context()); ok && len(k.Models) > 0 {
+		if !allowedBy(k.Models, name, rt) {
+			writeErr(w, http.StatusForbidden, "model_not_permitted",
+				fmt.Sprintf("this key may not use %q", name))
+			return
+		}
 	}
 
 	// PHASE IS THE GATE. This is the whole reason the phase work came first: a
@@ -407,4 +430,27 @@ func multipartModel(r *http.Request, body []byte) string {
 		}
 		return strings.TrimSpace(string(v))
 	}
+}
+
+// allowedBy reports whether an allowlist covers this route.
+//
+// Matched against the ALIASES and the recipe id, not just the name the caller
+// typed: a key scoped to "ornith" must keep working when someone addresses the
+// same model as "ornith15", or the scope becomes a spelling test.
+func allowedBy(allow []string, asked string, rt route) bool {
+	names := append([]string{asked, rt.RecipeID}, rt.Aliases...)
+	for _, a := range allow {
+		for _, n := range names {
+			if strings.EqualFold(a, n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// authWithKey is a test seam: it puts a scoped key on a context the way the
+// auth middleware does, without the gateway importing test code.
+func authWithKey(ctx context.Context, models []string) context.Context {
+	return auth.WithKeyForTest(ctx, auth.KeyInfo{Name: "test", Models: models})
 }

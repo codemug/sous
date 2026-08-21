@@ -233,6 +233,22 @@ It also works as the `api_key` in any OpenAI client with `base_url` pointed at
 `$SOUS/v1`, because most client libraries send a lone secret in the basic-auth
 password field.
 
+A key can be **limited to particular models**:
+
+```bash
+curl -X POST $SOUS/api/keys -H "Authorization: Bearer $SOUS_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"voice demo","models":["asr","kokoro"]}'
+```
+
+An empty list means every model, which is what every key issued before scoping
+existed already had — a security feature that silently revokes credentials on
+upgrade is one nobody deploys. A scoped key asking for a model it does not carry
+gets **403**, not 404: the model is real, and the caller should learn their
+credential is the problem rather than go hunting for a typo. `/v1/models` lists
+only what the key can reach, so it never advertises a model every request for it
+will be refused.
+
 Keys are **stored as SHA-256 hashes** and the plaintext is shown exactly once,
 at creation. It is not recoverable afterwards by anyone, including whoever runs
 the process — a store that can show a key back to a browser can show it to

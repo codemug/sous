@@ -285,13 +285,16 @@ func TestFromEnvAcceptsTokenOnly(t *testing.T) {
 }
 
 // fakeKeys is a one-key authenticator scoped to /v1/.
-type fakeKeys struct{ secret string }
+type fakeKeys struct {
+	secret string
+	models []string
+}
 
-func (f fakeKeys) Authenticate(s string) (string, bool) {
+func (f fakeKeys) Authenticate(s string) (string, []string, bool) {
 	if s != "" && s == f.secret {
-		return "test-key", true
+		return "test-key", f.models, true
 	}
-	return "", false
+	return "", nil, false
 }
 func (f fakeKeys) Scope(p string) bool { return strings.HasPrefix(p, "/v1/") }
 

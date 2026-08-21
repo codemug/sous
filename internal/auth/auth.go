@@ -29,6 +29,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -65,7 +66,9 @@ type Config struct {
 // KeyAuthenticator resolves a presented secret to a key. An interface so auth
 // does not depend on the store, and so tests can supply one in a line.
 type KeyAuthenticator interface {
-	Authenticate(secret string) (name string, ok bool)
+	// Authenticate returns the key's NAME and the models it may reach. A nil
+	// or empty model list means every model.
+	Authenticate(secret string) (name string, models []string, ok bool)
 	// Scope reports whether a key may reach this path. Asking the key package
 	// rather than deciding here keeps one definition of what "inference only"
 	// means.
@@ -180,9 +183,14 @@ func (c Config) authorizedKey(r *http.Request) bool {
 			return false
 		}
 	}
-	if _, ok := c.Keys.Authenticate(tok); !ok {
+	name, models, ok := c.Keys.Authenticate(tok)
+	if !ok {
 		return false
 	}
+	// The key travels on the request so the gateway can enforce its model
+	// allowlist. Auth knows WHICH key authenticated; only the gateway knows
+	// which model is being asked for, and neither can decide alone.
+	*r = *r.WithContext(withKey(r.Context(), KeyInfo{Name: name, Models: models}))
 	// AUTHENTICATED BUT OUT OF SCOPE IS STILL A REFUSAL. A valid key on
 	// /api/deploy must fail exactly as an invalid one does.
 	return c.Keys.Scope(r.URL.Path)
@@ -237,3 +245,30 @@ func wantsHTML(r *http.Request) bool {
 // LoginPath is exported so the middleware and the handler cannot disagree
 // about it - a mismatch there is an infinite redirect.
 const LoginPath = "/login"
+
+// KeyInfo is the authenticated key, carried on the request context.
+type KeyInfo struct {
+	Name   string
+	Models []string
+}
+
+type keyCtx struct{}
+
+func withKey(ctx context.Context, k KeyInfo) context.Context {
+	return context.WithValue(ctx, keyCtx{}, k)
+}
+
+// FromContext returns the API key that authenticated this request, if one did.
+//
+// Absent means the caller used the operator password or the admin token, which
+// are not scoped - so a handler that finds nothing here must NOT treat that as
+// a denied key.
+func FromContext(ctx context.Context) (KeyInfo, bool) {
+	k, ok := ctx.Value(keyCtx{}).(KeyInfo)
+	return k, ok
+}
+
+// WithKeyForTest attaches a key to a context. Exported ONLY so another
+// package's tests can build the request the middleware would have built; the
+// production path goes through Middleware.
+func WithKeyForTest(ctx context.Context, k KeyInfo) context.Context { return withKey(ctx, k) }

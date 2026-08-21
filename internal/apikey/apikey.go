@@ -53,6 +53,15 @@ type Key struct {
 	// Hash is SHA-256 of the full secret.
 	Hash string `yaml:"hash" json:"-"`
 
+	// Models is an allowlist of model names this key may reach. EMPTY MEANS
+	// ALL, which keeps every key issued before scoping existed working exactly
+	// as it did - a security feature that silently revokes credentials on
+	// upgrade is one nobody deploys.
+	//
+	// Names are matched the way the gateway resolves them: an alias or a recipe
+	// id, case-insensitively.
+	Models []string `yaml:"models,omitempty" json:"models,omitempty"`
+
 	CreatedAt time.Time `yaml:"created_at" json:"created_at"`
 	// LastUsedAt answers the question that decides whether a key can be
 	// revoked safely. Zero means never used, which is the easiest case of all.
@@ -72,7 +81,28 @@ func (k Key) Active() bool { return !k.Disabled }
 
 // Generate mints a new key, returning the record to store and the secret to
 // show the operator once.
-func Generate(name string) (Key, string, error) {
+// Allows reports whether this key may use a given model name.
+//
+// An empty allowlist means every model - see Models. Matching is
+// case-insensitive because the gateway already resolves names that way, and a
+// key that works with "Ornith" but not "ornith" would be a puzzle rather than a
+// policy.
+func (k Key) Allows(model string) bool {
+	if len(k.Models) == 0 {
+		return true
+	}
+	for _, m := range k.Models {
+		if strings.EqualFold(m, model) {
+			return true
+		}
+	}
+	return false
+}
+
+// Scoped reports whether this key is limited to particular models.
+func (k Key) Scoped() bool { return len(k.Models) > 0 }
+
+func Generate(name string, models ...string) (Key, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Key{}, "", errors.New("a key needs a name; an unattributable key is one nobody dares revoke")
@@ -97,6 +127,7 @@ func Generate(name string) (Key, string, error) {
 	return Key{
 		ID:        hex.EncodeToString(idb),
 		Name:      name,
+		Models:    cleanModels(models),
 		Hint:      tail(secret),
 		Hash:      Hash(secret),
 		CreatedAt: time.Now().UTC(),
@@ -160,4 +191,27 @@ func (k Key) MarshalJSON() ([]byte, error) {
 		out.LastUsedAt = &t
 	}
 	return json.Marshal(out)
+}
+
+// cleanModels normalises an allowlist, dropping blanks and duplicates.
+//
+// A list containing an empty string would otherwise be non-empty and match
+// nothing, producing a key that authenticates and is then refused for every
+// model - which reads as a broken key rather than a scoped one.
+func cleanModels(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range in {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		k := strings.ToLower(m)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, m)
+	}
+	return out
 }

@@ -31,16 +31,26 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 // createKey mints a key and returns the secret ONCE.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
+	var jsonModels []string
 	if name == "" {
 		var body struct {
-			Name string `json:"name"`
+			Name   string   `json:"name"`
+			Models []string `json:"models"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err == nil {
 			name = strings.TrimSpace(body.Name)
+			jsonModels = body.Models
 		}
 	}
 
-	k, secret, err := s.keys.Create(name)
+	// A scope is a comma-separated list from the form, or an array from JSON.
+	// Empty means every model, which is what an unscoped key has always been.
+	models := splitModels(r.FormValue("models"))
+	if len(models) == 0 {
+		models = jsonModels
+	}
+
+	k, secret, err := s.keys.Create(name, models...)
 	if err != nil {
 		if wantsHTML(r) {
 			s.redirect(w, r, "/keys", err.Error(), true)
@@ -99,4 +109,19 @@ func (s *Server) pageKeys(w http.ResponseWriter, r *http.Request) {
 		d.Keys = &keysPage{Keys: all}
 		return nil
 	})
+}
+
+// splitModels parses the form's comma-separated scope.
+func splitModels(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

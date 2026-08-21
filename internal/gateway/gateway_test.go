@@ -388,3 +388,120 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// scopedCtx puts a scoped key on the request, as the auth middleware does.
+func scopedCtx(r *http.Request, models ...string) *http.Request {
+	return r.WithContext(authWithKey(r.Context(), models))
+}
+
+// A scoped key must be refused for a model it does not carry - with 403, not
+// 404: the model is real, and the caller should learn their credential is the
+// problem rather than go hunting for a typo.
+func TestScopedKeyIsForbiddenForAModelItLacks(t *testing.T) {
+	var seen string
+	srv, port := upstream(t, &seen)
+	defer srv.Close()
+
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen36", HostPort: port}}}
+	cat := fakeCat{"qwen36": {ID: "qwen36", ServedAs: []string{"qwen"}}}
+
+	req := scopedCtx(httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"qwen"}`)), "asr", "kokoro")
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "model_not_permitted") {
+		t.Errorf("body = %s", rr.Body.String())
+	}
+	if seen != "" {
+		t.Error("the request reached the upstream despite being out of scope")
+	}
+}
+
+func TestScopedKeyReachesItsOwnModel(t *testing.T) {
+	var seen string
+	srv, port := upstream(t, &seen)
+	defer srv.Close()
+
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "asr", HostPort: port}}}
+	cat := fakeCat{"asr": {ID: "asr", ServedAs: []string{"asr"}}}
+
+	req := scopedCtx(httptest.NewRequest("POST", "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"asr"}`)), "asr")
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// A key scoped to an alias must keep working when the same model is addressed
+// by its recipe id, or the scope becomes a spelling test.
+func TestScopeMatchesAliasesAndRecipeIDAlike(t *testing.T) {
+	srv, port := upstream(t, nil)
+	defer srv.Close()
+
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: port}}}
+	cat := fakeCat{"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}}}
+
+	for _, asked := range []string{"ornith", "ornith15"} {
+		req := scopedCtx(httptest.NewRequest("POST", "/v1/chat/completions",
+			strings.NewReader(`{"model":"`+asked+`"}`)), "ornith")
+		rr := httptest.NewRecorder()
+		newGW(res, cat, "127.0.0.1").Proxy(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("asking for %q with a key scoped to the alias = %d", asked, rr.Code)
+		}
+	}
+}
+
+// An unscoped key - and the admin token, which puts nothing on the context -
+// must reach everything, or the upgrade revokes every existing credential.
+func TestUnscopedCallerReachesEverything(t *testing.T) {
+	srv, port := upstream(t, nil)
+	defer srv.Close()
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "x", HostPort: port}}}
+	cat := fakeCat{"x": {ID: "x", ServedAs: []string{"xx"}}}
+
+	// No key on the context at all: the admin token path.
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr,
+		httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"xx"}`)))
+	if rr.Code != http.StatusOK {
+		t.Errorf("admin caller = %d, want 200", rr.Code)
+	}
+
+	// A key with an empty allowlist.
+	rr2 := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr2,
+		scopedCtx(httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"xx"}`))))
+	if rr2.Code != http.StatusOK {
+		t.Errorf("unscoped key = %d, want 200", rr2.Code)
+	}
+}
+
+// Listing models a key will be refused for advertises something useless.
+func TestListModelsHidesWhatTheKeyCannotUse(t *testing.T) {
+	res := &fakeRes{recs: []deploy.Record{
+		{RecipeID: "asr", HostPort: 1}, {RecipeID: "qwen36", HostPort: 2},
+	}}
+	cat := fakeCat{
+		"asr":    {ID: "asr", ServedAs: []string{"asr"}},
+		"qwen36": {ID: "qwen36", ServedAs: []string{"qwen"}},
+	}
+	req := scopedCtx(httptest.NewRequest("GET", "/v1/models", nil), "asr")
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").ListModels(rr, req)
+
+	body := rr.Body.String()
+	if !strings.Contains(body, `"asr"`) {
+		t.Errorf("the key's own model is missing: %s", body)
+	}
+	if strings.Contains(body, `"qwen"`) {
+		t.Errorf("a model the key cannot use was advertised: %s", body)
+	}
+}

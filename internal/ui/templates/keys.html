@@ -37,10 +37,16 @@ it is safe to put one in a notebook or a demo page.</p>
     <input id="kname" name="name" type="text" maxlength="64" required
            placeholder="voice demo, usman's laptop, CI"
            autocomplete="off" spellcheck="false">
+    <label for="kmodels" class="mono">Models</label>
+    <input id="kmodels" name="models" type="text"
+           placeholder="asr, kokoro — leave blank for all"
+           autocomplete="off" spellcheck="false">
     <button class="btn-primary" type="submit">Create</button>
   </form>
-  <p class="note">Name it after whoever holds it. A key nobody can attribute is
-  a key nobody dares revoke.</p>
+  <p class="note">Name it after whoever holds it — a key nobody can attribute is
+  a key nobody dares revoke. Leave <span class="mono">Models</span> blank for a
+  key that reaches every model, or name them to narrow it: a demo page that only
+  needs speech should not hold a credential for the chat model.</p>
 </div>
 
 {{if .Keys}}
@@ -49,12 +55,15 @@ it is safe to put one in a notebook or a demo page.</p>
   <div class="scroll">
     <table>
       <thead>
-        <tr><th>Name</th><th>Ends in</th><th>Created</th><th>Last used</th><th>State</th><th></th></tr>
+        <tr><th>Name</th><th>Models</th><th>Ends in</th><th>Created</th><th>Last used</th><th>State</th><th></th></tr>
       </thead>
       <tbody>
         {{range .Keys}}
         <tr{{if .Disabled}} class="row-off"{{end}}>
           <td><strong>{{.Name}}</strong><br><span class="mono dim">{{.ID}}</span></td>
+          {{/* "all models" is the truth for an unscoped key, and saying it is
+               better than a blank cell that could mean none. */}}
+          <td class="mono">{{if .Scoped}}{{range $i,$m := .Models}}{{if $i}}, {{end}}{{$m}}{{end}}{{else}}<span class="dim">all models</span>{{end}}</td>
           <td class="mono">…{{.Hint}}</td>
           <td class="mono">{{ago .CreatedAt}}</td>
           {{/* Never-used is worth calling out: it is the only key that can be

@@ -58,8 +58,8 @@ func (m *Manager) List() ([]Key, error) {
 
 // Create issues a key and returns the secret ONCE. It is never recoverable
 // afterwards, by anyone, including whoever runs this process.
-func (m *Manager) Create(name string) (Key, string, error) {
-	k, secret, err := Generate(name)
+func (m *Manager) Create(name string, models ...string) (Key, string, error) {
+	k, secret, err := Generate(name, models...)
 	if err != nil {
 		return Key{}, "", err
 	}
@@ -160,15 +160,15 @@ type Guard struct{ M *Manager }
 
 // Authenticate reports the key's NAME on success, which is what belongs in a
 // log line: an id identifies the row, a name identifies who to ask about it.
-func (g Guard) Authenticate(secret string) (string, bool) {
+func (g Guard) Authenticate(secret string) (string, []string, bool) {
 	if g.M == nil {
-		return "", false
+		return "", nil, false
 	}
 	k, ok := g.M.Authenticate(secret)
 	if !ok {
-		return "", false
+		return "", nil, false
 	}
-	return k.Name, true
+	return k.Name, k.Models, true
 }
 
 func (g Guard) Scope(path string) bool { return Scope(path) }

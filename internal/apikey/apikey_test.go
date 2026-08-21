@@ -251,3 +251,69 @@ func TestNeverUsedKeyOmitsLastUsedInJSON(t *testing.T) {
 		t.Errorf("a used key lost its timestamp: %s", b2)
 	}
 }
+
+// EMPTY MEANS ALL. A security feature that silently revokes every key issued
+// before it existed is one nobody deploys.
+func TestUnscopedKeyReachesEveryModel(t *testing.T) {
+	k, _, _ := Generate("legacy")
+	if k.Scoped() {
+		t.Error("a key with no allowlist reports as scoped")
+	}
+	for _, m := range []string{"qwen36", "ornith", "anything-at-all"} {
+		if !k.Allows(m) {
+			t.Errorf("unscoped key refused %q", m)
+		}
+	}
+}
+
+func TestScopedKeyAllowsOnlyItsModels(t *testing.T) {
+	k, _, _ := Generate("voice", "asr", "kokoro")
+	if !k.Scoped() {
+		t.Fatal("a key with an allowlist does not report as scoped")
+	}
+	for _, m := range []string{"asr", "kokoro"} {
+		if !k.Allows(m) {
+			t.Errorf("scoped key refused its own model %q", m)
+		}
+	}
+	for _, m := range []string{"qwen36", "dflash2", ""} {
+		if k.Allows(m) {
+			t.Errorf("scoped key allowed %q, which is not on its list", m)
+		}
+	}
+}
+
+// The gateway resolves names case-insensitively, so a key that works with
+// "Ornith" but not "ornith" would be a puzzle rather than a policy.
+func TestScopeMatchingIsCaseInsensitive(t *testing.T) {
+	k, _, _ := Generate("mixed", "Ornith")
+	for _, m := range []string{"ornith", "ORNITH", "Ornith"} {
+		if !k.Allows(m) {
+			t.Errorf("scoped key refused %q", m)
+		}
+	}
+}
+
+// A list containing only blanks would be non-empty and match nothing, giving a
+// key that authenticates and is then refused for everything - which reads as
+// broken rather than as scoped.
+func TestBlankModelsAreDroppedNotKept(t *testing.T) {
+	k, _, _ := Generate("blanks", "", "  ", "asr", "asr")
+	if len(k.Models) != 1 || k.Models[0] != "asr" {
+		t.Fatalf("models = %v, want exactly [asr]", k.Models)
+	}
+}
+
+func TestScopeSurvivesTheStore(t *testing.T) {
+	m := newMgr(t)
+	if _, _, err := m.Create("voice", "asr", "kokoro"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := m.List()
+	if len(list) != 1 {
+		t.Fatal("expected one key")
+	}
+	if len(list[0].Models) != 2 {
+		t.Errorf("models = %v, want two after a round trip", list[0].Models)
+	}
+}
