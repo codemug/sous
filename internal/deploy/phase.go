@@ -70,8 +70,12 @@ type probe struct {
 // ready shows up promptly.
 const probeTTL = 3 * time.Second
 
-// Ready reports whether the port is serving, with a brief cache.
-func (p *Prober) Ready(ctx context.Context, port int) bool {
+// DefaultHealthPath is what every image this project deploys exposes. A recipe
+// whose image uses something else says so; see Recipe.HealthPath.
+const DefaultHealthPath = "/health"
+
+// Ready reports whether the health path answers 200, with a brief cache.
+func (p *Prober) Ready(ctx context.Context, port int, path string) bool {
 	if port <= 0 {
 		return false
 	}
@@ -85,7 +89,7 @@ func (p *Prober) Ready(ctx context.Context, port int) bool {
 	}
 	p.mu.Unlock()
 
-	ok := p.check(ctx, port)
+	ok := p.check(ctx, port, path)
 
 	p.mu.Lock()
 	p.cache[port] = probe{ok: ok, when: time.Now()}
@@ -93,7 +97,7 @@ func (p *Prober) Ready(ctx context.Context, port int) bool {
 	return ok
 }
 
-func (p *Prober) check(ctx context.Context, port int) bool {
+func (p *Prober) check(ctx context.Context, port int, path string) bool {
 	to := p.Timeout
 	if to <= 0 {
 		to = 2 * time.Second
@@ -102,25 +106,30 @@ func (p *Prober) check(ctx context.Context, port int) bool {
 	if host == "" {
 		host = "127.0.0.1"
 	}
+	if path == "" {
+		path = DefaultHealthPath
+	}
 	ctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	// /health first: it is what the vLLM images expose and it is cheap. A
-	// model that answers ANY status is serving - a 404 still proves the HTTP
-	// server is up and past its load, which is the question being asked.
-	for _, path := range []string{"/health", "/v1/models"} {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
-		if err != nil {
-			continue
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			return true
-		}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
+	if err != nil {
+		return false
 	}
-	return false
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// 200 AND NOTHING ELSE. An earlier version treated any answer as proof the
+	// server was up, which gets the interesting case backwards: a server that
+	// binds its port before its engine has finished loading answers 404 or 503
+	// on this path, and calling that ready sends traffic into a model that
+	// cannot serve it. That is the exact failure the phase exists to prevent,
+	// so the check has to be the strict one.
+	return resp.StatusCode == http.StatusOK
 }
 
 // Phase computes one deployment's phase from live evidence.
@@ -148,7 +157,7 @@ func (m *Manager) Phase(ctx context.Context, rec Record, st engine.ContainerStat
 	if !st.Running() {
 		return PhaseGone
 	}
-	if m.Probe != nil && m.Probe.Ready(ctx, rec.HostPort) {
+	if m.Probe != nil && m.Probe.Ready(ctx, rec.HostPort, m.healthPath(rec.RecipeID)) {
 		return PhaseReady
 	}
 	return PhaseStarting
@@ -220,4 +229,23 @@ func (m *Manager) UndeployAsync(id string) error {
 // take a dependency on the whole engine.
 func (m *Manager) States(ctx context.Context) (map[string]engine.ContainerState, error) {
 	return m.Runtime.States(ctx)
+}
+
+// healthPath is the recipe's override, or the default.
+//
+// An override exists because Sous deploys third-party images it does not
+// control, and this codebase has already been bitten once by assuming an image
+// follows a convention: kokoro declares EXPOSE 8000 and listens on 8880, which
+// produced a container every indicator called healthy and which answered
+// nothing. Without an override, an image with no /health would sit on
+// "starting" forever - visible, but permanently wrong.
+func (m *Manager) healthPath(id string) string {
+	if m.Catalog == nil {
+		return DefaultHealthPath
+	}
+	r, err := m.Catalog.Get(id)
+	if err != nil || r.HealthPath == "" {
+		return DefaultHealthPath
+	}
+	return r.HealthPath
 }

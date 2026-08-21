@@ -59,6 +59,18 @@ type Recipe struct {
 	// reporting healthy.
 	ContainerPort int `yaml:"container_port,omitempty" json:"container_port,omitempty"`
 
+	// HealthPath is the path that must answer 200 before this model is
+	// considered READY. Defaults to /health, which every image deployed here
+	// exposes.
+	//
+	// Same reason ContainerPort exists: Sous deploys images it does not
+	// control, and an image with no /health would otherwise sit on "starting"
+	// for as long as it runs - permanently wrong rather than briefly wrong.
+	// Readiness requires 200 specifically, because a server that binds its
+	// port before its engine has loaded answers this path with 404 or 503, and
+	// treating that as ready sends traffic to a model that cannot serve it.
+	HealthPath string `yaml:"health_path,omitempty" json:"health_path,omitempty"`
+
 	Declared Footprint         `yaml:"declared" json:"declared"`
 	Args     map[string]any    `yaml:"args,omitempty" json:"args,omitempty"`
 	Env      map[string]string `yaml:"env,omitempty" json:"env,omitempty"`

@@ -43,20 +43,54 @@ func TestAnsweringPortIsReady(t *testing.T) {
 	}
 }
 
-// A 404 still proves the HTTP server is up and past its load, which is the
-// question being asked. Requiring 200 would report a model as starting forever
-// just because it does not implement /health.
-func TestNon200StillCountsAsReady(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "nope", http.StatusNotFound)
+// READY MEANS 200. An earlier version accepted any answer as proof the server
+// was up, which gets the interesting case backwards: a server that binds its
+// port before its engine has finished loading answers 404 or 503 here, and
+// calling that ready sends traffic into a model that cannot serve it - the
+// exact failure the phase exists to prevent.
+func TestNon200IsNotReady(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusServiceUnavailable, http.StatusInternalServerError} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "not yet", code)
+		}))
+		u, _ := url.Parse(srv.URL)
+		port, _ := strconv.Atoi(u.Port())
+
+		m := &Manager{Probe: &Prober{Host: u.Hostname(), Timeout: time.Second}}
+		got := m.Phase(context.Background(), Record{RecipeID: "x", HostPort: port}, running("sous-x"), true)
+		srv.Close()
+		if got == PhaseReady {
+			t.Errorf("health returned %d and the model was called ready", code)
+		}
+		if got != PhaseStarting {
+			t.Errorf("health %d gave phase %q, want %q", code, got, PhaseStarting)
+		}
+	}
+}
+
+// The probe must ask the HEALTH path, not whatever answers first. A server
+// that 200s on / and 503s on /health is a server that is not ready.
+func TestProbeAsksTheHealthPath(t *testing.T) {
+	var asked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		if r.URL.Path == "/health" {
+			http.Error(w, "loading", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	port, _ := strconv.Atoi(u.Port())
 
 	m := &Manager{Probe: &Prober{Host: u.Hostname(), Timeout: time.Second}}
-	if got := m.Phase(context.Background(), Record{RecipeID: "x", HostPort: port}, running("sous-x"), true); got != PhaseReady {
-		t.Fatalf("phase = %q, want %q", got, PhaseReady)
+	got := m.Phase(context.Background(), Record{RecipeID: "x", HostPort: port}, running("sous-x"), true)
+	if asked != "/health" {
+		t.Errorf("probed %q, want /health", asked)
+	}
+	if got == PhaseReady {
+		t.Error("a 503 on /health was reported as ready because another path answered 200")
 	}
 }
 
@@ -156,7 +190,7 @@ func TestProbeCacheAvoidsHammering(t *testing.T) {
 
 	p := &Prober{Host: u.Hostname(), Timeout: time.Second}
 	for i := 0; i < 5; i++ {
-		p.Ready(context.Background(), port)
+		p.Ready(context.Background(), port, DefaultHealthPath)
 	}
 	if hits != 1 {
 		t.Fatalf("probed %d times for 5 reads; the cache is not holding", hits)
