@@ -3,3 +3,7 @@
 .hallmark/prd.json
 .hallmark/preflight.json
 progress.txt
+
+# Session scratch from the agent harness, not source.
+.omc/
+**/.omc/
