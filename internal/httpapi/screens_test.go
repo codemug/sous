@@ -78,3 +78,17 @@ func TestCardsDoNotNestPanels(t *testing.T) {
 		}
 	}
 }
+
+// A 476 KiB download rendered as "0.0 GiB" reads as nothing at all - wrong
+// twice over, because it is both present on disk and deletable.
+func TestSmallEntriesGetAUsefulUnit(t *testing.T) {
+	h := newTestServerWithHub(t)
+	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
+	if strings.Contains(body, "0.0 GiB") {
+		t.Error(`a small entry still renders as "0.0 GiB"`)
+	}
+	// The hub fixture writes 4 KiB files, so something must be in KiB.
+	if !strings.Contains(body, "KiB") && !strings.Contains(body, "MiB") && !strings.Contains(body, "B<") {
+		t.Errorf("no sub-gigabyte unit anywhere on the larder")
+	}
+}

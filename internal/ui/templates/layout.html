@@ -470,6 +470,16 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 .card.is-failed,.card.is-gone{border-left:3px solid var(--drift)}
 .card.is-idle{border-left:3px solid var(--rule)}
 
+/* Cards in a row share a height. Ragged bottoms read as a broken grid rather
+   than as varying content, and the foot rule is what makes them scan as a set. */
+.cards{align-items:stretch}
+.card{height:100%}
+
+/* A note inside a panel or a card fills it. The 62ch measure is right for
+   running prose at the top of a page and wrong inside a box that is already
+   narrow - there it just leaves a wide empty margin on the right. */
+.panel > .note,.card .note,.card-danger .note{max-width:none}
+
 /* OVERFLOW CONTROL. A card is a flex column, and a flex item's default
  * min-width is auto - so any child wider than the card (a long repo id, an
  * input with a min-width, a nested panel's padding) pushes past the border

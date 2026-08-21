@@ -30,6 +30,23 @@ func Templates() (*template.Template, error) {
 		"gibOf": func(b int64) float64 {
 			return float64(b) / (1024 * 1024 * 1024)
 		},
+		// size picks a unit that keeps the figure meaningful. A 476 KiB
+		// download rendered as "0.0 GiB" reads as nothing at all - which is
+		// wrong twice over, because it is both present and deletable.
+		"size": func(b int64) string {
+			const k, m, g = 1024.0, 1024.0 * 1024, 1024.0 * 1024 * 1024
+			f := float64(b)
+			switch {
+			case f >= g:
+				return strconv.FormatFloat(f/g, 'f', 1, 64) + " GiB"
+			case f >= m:
+				return strconv.FormatFloat(f/m, 'f', 0, 64) + " MiB"
+			case f >= k:
+				return strconv.FormatFloat(f/k, 'f', 0, 64) + " KiB"
+			default:
+				return strconv.FormatInt(b, 10) + " B"
+			}
+		},
 		// pct sizes a segment of the pool bar. Clamped to [0,100] because a
 		// mis-declared footprint should distort one segment, not blow the bar
 		// past its container and hide every model after it.

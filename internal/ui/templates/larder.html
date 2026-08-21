@@ -84,7 +84,7 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
       {{end}}
     </div>
     <div class="card-foot">
-      <span class="stat"><span class="mlabel">On disk</span><span class="v">{{printf "%.1f" (gibOf .Bytes)}} GiB</span></span>
+      <span class="stat"><span class="mlabel">On disk</span><span class="v">{{size .Bytes}}</span></span>
       <span class="stat">
         <span class="mlabel">Used by</span>
         <span class="v">{{if .ReferencedBy}}{{range $i,$r := .ReferencedBy}}{{if $i}}, {{end}}{{$r}}{{end}}{{else}}nothing{{end}}</span>
@@ -98,7 +98,7 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
     <details class="drawer danger-drawer">
       <summary>Delete weights</summary>
       <div class="card-danger">
-        <p class="note warn">This frees {{printf "%.1f" (gibOf .Bytes)}} GiB and the only
+        <p class="note warn">This frees {{size .Bytes}} and the only
         way back is the network. No download rate is recorded here, so how long a
         re-fetch would take is not something this page can honestly tell you.</p>
         <form method="post" action="/api/larder/delete" class="confirmform">
