@@ -24,6 +24,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -55,7 +56,12 @@ type Key struct {
 	CreatedAt time.Time `yaml:"created_at" json:"created_at"`
 	// LastUsedAt answers the question that decides whether a key can be
 	// revoked safely. Zero means never used, which is the easiest case of all.
-	LastUsedAt time.Time `yaml:"last_used_at,omitempty" json:"last_used_at,omitempty"`
+	//
+	// json:"-" because omitempty does NOT work on a time.Time: an unused key
+	// would report "0001-01-01T00:00:00Z", and a client doing date arithmetic
+	// on that gets an answer two thousand years wrong rather than an obvious
+	// absence. MarshalJSON below emits it only when it is real.
+	LastUsedAt time.Time `yaml:"last_used_at,omitempty" json:"-"`
 	// Disabled revokes without deleting, so the record of what existed and when
 	// it was last used survives the revocation.
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
@@ -135,4 +141,23 @@ func Verify(keys []Key, secret string) (Key, bool) {
 		}
 	}
 	return found, ok
+}
+
+// MarshalJSON omits a never-used timestamp rather than emitting the zero time.
+//
+// encoding/json cannot omitempty a struct, so the tag alone would put
+// "0001-01-01T00:00:00Z" on the wire for every key that has never been used -
+// which reads as a real date to anything that parses it.
+func (k Key) MarshalJSON() ([]byte, error) {
+	// An alias breaks the method set, so this does not recurse.
+	type plain Key
+	out := struct {
+		plain
+		LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	}{plain: plain(k)}
+	if !k.LastUsedAt.IsZero() {
+		t := k.LastUsedAt
+		out.LastUsedAt = &t
+	}
+	return json.Marshal(out)
 }

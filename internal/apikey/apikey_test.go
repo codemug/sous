@@ -1,8 +1,10 @@
 package apikey
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codemug/sous/internal/store"
 )
@@ -225,5 +227,27 @@ func TestNonSousSecretsAreRejectedEarly(t *testing.T) {
 	}
 	if !Looks(Prefix + "abc") {
 		t.Error("a Sous-prefixed key was not recognised")
+	}
+}
+
+// A never-used key must not report a year-1 timestamp: anything parsing that
+// gets an answer two thousand years wrong rather than an obvious absence.
+func TestNeverUsedKeyOmitsLastUsedInJSON(t *testing.T) {
+	k, _, _ := Generate("fresh")
+	b, err := json.Marshal(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "0001-01-01") {
+		t.Errorf("the zero time reached the wire: %s", b)
+	}
+	if strings.Contains(string(b), "last_used_at") {
+		t.Errorf("last_used_at present for a never-used key: %s", b)
+	}
+	// And a used one still reports it.
+	k.LastUsedAt = time.Now()
+	b2, _ := json.Marshal(k)
+	if !strings.Contains(string(b2), "last_used_at") {
+		t.Errorf("a used key lost its timestamp: %s", b2)
 	}
 }
