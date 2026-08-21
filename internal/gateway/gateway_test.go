@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -312,4 +314,77 @@ func TestStreamingIsNotBuffered(t *testing.T) {
 	if !strings.Contains(string(buf[:n]), "first") {
 		t.Errorf("first chunk = %q, want it before the stream closed", string(buf[:n]))
 	}
+}
+
+// MULTIPART. Audio transcription names its model in a form field, not JSON.
+// The suite tested only JSON bodies, so this path shipped broken: the body was
+// drained into a buffer before FormValue was called, which then silently found
+// nothing and told the caller it had named no model when it had named one
+// correctly. Found by actually calling the ASR endpoint.
+func TestMultipartCarriesTheModelInAFormField(t *testing.T) {
+	var seen string
+	srv, port := upstream(t, &seen)
+	defer srv.Close()
+
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "asr", HostPort: port}}}
+	cat := fakeCat{"asr": {ID: "asr", ServedAs: []string{"asr"}}}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "asr")
+	fw, err := mw.CreateFormFile("file", "clip.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte("ID3-not-really-audio")); err != nil {
+		t.Fatal(err)
+	}
+	_ = mw.Close()
+
+	req := httptest.NewRequest("POST", "/v1/audio/transcriptions", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	// The upload must arrive byte for byte: a file re-encoded by a round trip
+	// through the form parser is not the file the caller sent.
+	if !strings.Contains(seen, "ID3-not-really-audio") {
+		t.Errorf("the uploaded file did not reach the upstream intact")
+	}
+	if !strings.Contains(seen, `name="model"`) {
+		t.Errorf("the form was rewritten rather than forwarded: %s", seen[:min(200, len(seen))])
+	}
+}
+
+func TestMultipartWithoutAModelIsStillRefusedClearly(t *testing.T) {
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "asr", HostPort: 1}}}
+	cat := fakeCat{"asr": {ID: "asr", ServedAs: []string{"asr"}}}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", "clip.mp3")
+	_, _ = fw.Write([]byte("audio"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest("POST", "/v1/audio/transcriptions", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr, req)
+
+	if rr.Code == http.StatusOK {
+		t.Fatal("a request naming no model was proxied anyway")
+	}
+	if !strings.Contains(rr.Body.String(), "model") {
+		t.Errorf("the refusal does not mention the model: %s", rr.Body.String())
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

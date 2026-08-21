@@ -26,6 +26,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -235,11 +237,12 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 
 	name := probe.Model
 	if name == "" {
-		// Multipart audio requests carry the model as a form field rather than
-		// JSON, which is how the ASR endpoint is called.
-		if v := r.FormValue("model"); v != "" {
-			name = v
-		}
+		// MULTIPART. Audio transcription sends the model as a form field, not
+		// JSON. The body has already been drained into the buffer above, so the
+		// request has to be handed a fresh reader before anything can parse it -
+		// calling FormValue on the drained original silently finds nothing, and
+		// the caller gets told it named no model when it named one correctly.
+		name = multipartModel(r, body)
 	}
 
 	rt, err := g.resolve(r.Context(), name)
@@ -359,4 +362,43 @@ func writeErr(w http.ResponseWriter, code int, kind, msg string) {
 	writeJSON(w, code, map[string]any{
 		"error": map[string]any{"message": msg, "type": kind, "code": kind},
 	})
+}
+
+// multipartModel pulls the model out of a multipart form body.
+//
+// It parses a COPY and leaves r untouched, because the request still has to be
+// forwarded upstream byte for byte - an audio upload re-encoded by a round trip
+// through ParseMultipartForm is not the file the caller sent.
+func multipartModel(r *http.Request, body []byte) string {
+	ct := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "multipart/form-data") {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return ""
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return ""
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			return ""
+		}
+		if part.FormName() != "model" {
+			_ = part.Close()
+			continue
+		}
+		// Bounded: a model name is short, and this is attacker-influenced input
+		// on a path that has not authenticated the body yet.
+		v, err := io.ReadAll(io.LimitReader(part, 1<<10))
+		_ = part.Close()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(v))
+	}
 }
