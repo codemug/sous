@@ -223,14 +223,38 @@ func Seeds() []recipe.Recipe {
 			// Target 28.77 PLUS drafter 3.58: the drafter is resident too, and a
 			// footprint that ignored it would under-plan by 3.58 GiB. vLLM later
 			// reported 32.28 GiB for the pair, against the 32.35 declared here.
-			Declared: recipe.Footprint{WeightsGiB: 32.35, KVGiB: 20},
+			Declared: recipe.Footprint{WeightsGiB: 32.35, KVGiB: 34},
 			Args: map[string]any{
 				// 0.5, not the 0.33 this started with. At 0.33 vLLM caps itself
 				// near 40 GiB and weights plus drafter already take 32.33, so it
 				// refuses to start for want of KV - while Sous reports 53 GiB of
 				// margin going unused. The flag gates against free memory; it
 				// does not budget, and a low value only starves the KV cache.
-				"gpu-memory-utilization": 0.5, "max-model-len": 32768,
+				// 0.62, not the 0.5 this ran at for two days. The flag gates
+				// against free memory rather than budgeting, so it sets the
+				// ceiling vLLM sizes KV under: 0.5 of the 121.6 pool is 60.8
+				// GiB, weights plus drafter take 32.35, and the ~28 GiB left
+				// buys about 219k tokens - short of the 262144 asked for here.
+				// 0.62 leaves ~43 GiB, which is roughly 331k. Same value the
+				// base qwen38 recipe uses, for the same arithmetic.
+				"gpu-memory-utilization": 0.62, "max-model-len": 262144,
+				// fp8 KV, and this is what makes the length affordable. This
+				// architecture is 48 Gated DeltaNet + 16 full-attention layers,
+				// and qwen38's recipe measured fp8 at 136 KiB/token against
+				// 16-bit's ~272 - so 262144 tokens costs ~34 GiB rather than
+				// ~68, and the latter does not fit beside 32.35 of weights.
+				//
+				// It was simply absent before, which meant cache_dtype=auto:
+				// the running engine reported exactly that, so this model was
+				// paying double per token while its sibling was not.
+				//
+				// NOT FREE. qwen38 records that fp8 KV also changes the
+				// attention backend - candidates drop from four to two and
+				// FlashInfer wins over FLASH_ATTN, which with spec-decode
+				// forces CUDA graphs off FULL_AND_PIECEWISE. On a recipe whose
+				// entire value is DFlash2's acceptance rate, that is a thing to
+				// measure rather than assume.
+				"kv-cache-dtype": "fp8",
 				// SEVEN, not eight. DFlash2's block size of 8 is 7 draft tokens
 				// PLUS the verified one. Asking for 8 wants 9 slots in a buffer
 				// sized for 8, and it dies in a CUDA device-side assert -

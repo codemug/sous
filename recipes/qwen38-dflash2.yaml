@@ -7,11 +7,12 @@ served_as:
     - dflash2
 declared:
     weights_gib: 32.35
-    kv_gib: 20
+    kv_gib: 34
 args:
     enable-auto-tool-choice: true
-    gpu-memory-utilization: 0.5
-    max-model-len: 32768
+    gpu-memory-utilization: 0.62
+    kv-cache-dtype: fp8
+    max-model-len: 262144
     reasoning-parser: qwen3
     speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}'
     tool-call-parser: qwen3_coder
