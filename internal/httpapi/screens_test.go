@@ -117,3 +117,42 @@ func TestBoxesCarryTheirPadding(t *testing.T) {
 		}
 	}
 }
+
+// A FAILED RECORD WAS A DEAD END ON THIS PAGE. The Deploy… link rendered only
+// when the recipe was not Deployed, and Deployed() is true for failed and gone
+// alike - so a crash-looped model showed Open and nothing else, and the only
+// route to acting on it was the orphan list on the Node page.
+//
+// Neither phase holds any memory, so a plan for one is valid and the button
+// belongs there.
+func TestFailedModelStillOffersAPlan(t *testing.T) {
+	h, rt := newTestServerWithRuntime(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy failed: %d", rr.Code)
+	}
+	// Kill it behind Sous's back: the record survives, the container does not.
+	rt.mu.Lock()
+	rt.running = map[string]bool{}
+	rt.mu.Unlock()
+
+	body := send(t, h, http.MethodGet, "/models", "", "").Body.String()
+	// The id-specific href, not the label: every undeployed recipe on the page
+	// renders a Deploy… of its own, so the bare word proves nothing.
+	if !strings.Contains(body, "/model/qwen38/plan") {
+		t.Error("a model whose container is gone offers no way to redeploy it")
+	}
+}
+
+// The heading followed the route and the nav; it was the last thing still
+// calling this page the Catalog.
+func TestModelsPageIsCalledModels(t *testing.T) {
+	h := newTestServer(t)
+	body := send(t, h, http.MethodGet, "/models", "", "").Body.String()
+	if !strings.Contains(body, "<h1>Models</h1>") {
+		t.Error("the Models page does not call itself Models")
+	}
+	// Archived recipes were dimmed by tr.arch td until the tables became cards.
+	if !strings.Contains(body, ".card.is-arch{") {
+		t.Error("no rule dims an archived card; archived reads at full strength")
+	}
+}

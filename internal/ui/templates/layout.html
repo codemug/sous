@@ -289,9 +289,6 @@ tbody tr:last-child td{border-bottom:none}
      different from every filled dot. */
   .spin{animation:none}
 }
-.model.is-failed,.model.is-gone{border-left:3px solid var(--drift)}
-.model.is-starting{border-left:3px solid var(--gold)}
-.model.is-stopping{opacity:.72}
 
 /* Pool ruler: numbers under the bar so a segment is read, not estimated. */
 /* ---- the pool diagram, SHARED --------------------------------------------
@@ -513,7 +510,9 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 .cards{
   display:grid;gap:var(--space-md);
   grid-template-columns:repeat(auto-fit,minmax(21rem,1fr));
-  align-items:start;
+  /* Cards in a row share a height. Ragged bottoms read as a broken grid rather
+     than as varying content, and the foot rule is what makes them scan as a set. */
+  align-items:stretch;
 }
 .cards.narrow{grid-template-columns:repeat(auto-fit,minmax(20rem,1fr))}
 .cards.wide{grid-template-columns:repeat(auto-fit,minmax(22rem,1fr))}
@@ -560,10 +559,11 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 .card.is-stopping{border-left:3px solid var(--rule-firm);opacity:.75}
 .card.is-failed,.card.is-gone{border-left:3px solid var(--drift)}
 .card.is-idle{border-left:3px solid var(--rule)}
+/* Archived is not a phase - an archived recipe can also be deployed - so this
+   rides ALONGSIDE the phase class rather than replacing it. It restores the
+   dimming that tr.arch td used to do before the tables became cards. */
+.card.is-arch{opacity:.62}
 
-/* Cards in a row share a height. Ragged bottoms read as a broken grid rather
-   than as varying content, and the foot rule is what makes them scan as a set. */
-.cards{align-items:stretch}
 .card{height:100%}
 
 /* A note inside a panel or a card fills it. The 62ch measure is right for

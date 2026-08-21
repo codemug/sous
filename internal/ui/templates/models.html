@@ -3,11 +3,6 @@
 .cat-head{display:flex;align-items:flex-end;gap:var(--space-md);flex-wrap:wrap;margin-bottom:var(--space-lg)}
 .cat-head .lede{margin:0}
 .cat-acts{margin-left:auto;display:flex;gap:var(--space-xs);flex-wrap:wrap}
-.rid{font-family:var(--font-display);font-weight:600;color:var(--ink);text-decoration:none}
-.rid:hover{color:var(--accent-ink)}
-.rmodel{display:block;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--ink-faint);overflow-wrap:anywhere}
-tr.arch td{opacity:.62}
-.row-acts{display:flex;gap:var(--space-2xs);justify-content:flex-end;flex-wrap:wrap}
 /* <details> as the import drawer: no JS, and it stays shut until wanted. */
 details.drawer{margin-bottom:var(--space-lg)}
 details.drawer > summary{
@@ -32,7 +27,7 @@ textarea:focus-visible{border-color:var(--accent)}
 
 <div class="cat-head">
   <div>
-    <h1>Catalog</h1>
+    <h1>Models</h1>
     <p class="lede">Recipes are portable: model, image, flags, and the reasoning
     behind them. Nothing machine-specific lives here — measured footprints belong
     to a deployment, because 24.87 GiB and 136 KiB per token are facts about this
@@ -70,10 +65,9 @@ args:
   </div>
 </details>
 
-<div class="panel scroll">
 <div class="cards wide">
   {{range .Models}}
-    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}">
+    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}">
       <div class="card-head">
         <span class="card-title"><a href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a></span>
         {{if .Deployed}}
@@ -95,7 +89,7 @@ args:
         {{if .Port}}<span class="stat"><span class="mlabel">Port</span><span class="v">:{{.Port}}</span></span>{{end}}
         <span class="card-acts">
           <a class="btn" href="/model/{{.Recipe.ID}}">Open</a>
-          {{if and (not .Recipe.Archived) (not .Deployed)}}
+          {{if and (not .Recipe.Archived) (not .Resident)}}
             {{/* Through the plan: the projection is worth seeing before a
                  ten-minute start, and a refusal explains itself there. */}}
             <a class="btn-primary" href="/model/{{.Recipe.ID}}/plan">Deploy…</a>
@@ -105,5 +99,4 @@ args:
     </article>
   {{end}}
   </div>
-</div>
 {{template "foot" .}}{{end}}
