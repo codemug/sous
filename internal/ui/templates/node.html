@@ -131,8 +131,12 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
         </span>
       </div>
 
-      {{if .Detail}}
-        <p class="note{{if eq .Phase "failed"}} warn{{end}}{{if eq .Phase "gone"}} warn{{end}}">{{.Detail}}</p>
+      {{if .Progress}}
+        {{/* While starting, the stages replace the sentence: "loading" for ten
+             minutes says nothing about where it has got to. */}}
+        {{template "stage-stepper" .Progress}}
+      {{else if .Detail}}
+        <p class="note{{if eq (printf "%s" .Phase) "failed"}} warn{{end}}{{if eq (printf "%s" .Phase) "gone"}} warn{{end}}">{{.Detail}}</p>
       {{end}}
 
 

@@ -1,0 +1,27 @@
+{{/* The stage stepper. Shown only while a model is starting, because that is
+     the only time there is anything to narrate.
+
+     NO PERCENTAGE AND NO ETA. Weights load at disk speed and compilation does
+     not, so any single rate is wrong by minutes. Elapsed times per stage and
+     the duration of the last successful start are the honest things to say. */}}
+{{define "stage-stepper"}}
+{{if .}}
+<div class="stepper">
+  <ol class="steps">
+    {{range .Stages}}
+    <li class="step is-{{.State}}">
+      <span class="step-mark" aria-hidden="true">
+        {{if eq .State "done"}}✓{{else if eq .State "skipped"}}–{{else if eq .State "running"}}<span class="spin"></span>{{else}}·{{end}}
+      </span>
+      <span class="step-name">{{.Name}}</span>
+      {{if .Seconds}}<span class="step-t">{{secs .Seconds}}</span>{{end}}
+      {{if .Note}}<span class="step-note">{{.Note}}</span>{{end}}
+    </li>
+    {{end}}
+  </ol>
+  <p class="note dim">
+    {{secs .ElapsedSec}} elapsed{{if .LastRunSec}} · last successful start took {{secs .LastRunSec}}{{end}}
+  </p>
+</div>
+{{end}}
+{{end}}

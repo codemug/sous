@@ -37,6 +37,10 @@ type ModelView struct {
 	// Detail is the failure sentence, verbatim. A red chip that does not say
 	// why sends someone to the logs for something the runtime already reported.
 	Detail string `json:"detail,omitempty"`
+
+	// Progress is non-nil only while starting. A model that is ready has
+	// nothing left to narrate, and one that failed has a reason instead.
+	Progress *deploy.Progress `json:"progress,omitempty"`
 }
 
 // Deployed reports whether anything is deployed for this recipe at all.
@@ -90,6 +94,11 @@ func (s *Server) models(r *http.Request) ([]ModelView, error) {
 			v.Port = d.HostPort
 			v.UptimeSec = uptime(d)
 			v.Detail = phaseDetail(v.Phase, st)
+			// Only while starting: the stages are the answer to "how far
+			// along", which nothing else asks.
+			if v.Phase == deploy.PhaseStarting {
+				v.Progress = s.mgr.Progress(r.Context(), d, string(rec.Kind))
+			}
 			// A zero-valued observation means the boot log was never parsed,
 			// which is different from one that reported zero.
 			if d.Observation.WeightsGiB > 0 || d.Observation.KVGiB > 0 {

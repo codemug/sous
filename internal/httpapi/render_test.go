@@ -48,3 +48,29 @@ func tailOf(s string, n int) string {
 	}
 	return s[len(s)-n:]
 }
+
+// The stepper must actually reach the page while a model is starting - that is
+// the whole point of deriving it.
+func TestStartingModelRendersTheStepper(t *testing.T) {
+	h := newTestServer(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d", rr.Code)
+	}
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+
+	// The fake runtime has no listening port, so the model sits in starting -
+	// which is exactly the state the stepper exists for.
+	if !strings.Contains(body, "stage-stepper") && !strings.Contains(body, "steps") {
+		t.Errorf("no stepper on a starting model")
+	}
+	for _, want := range []string{"load weights", "compile", "capture CUDA graphs"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stepper missing the %q stage", want)
+		}
+	}
+	// The honesty rule, asserted on the rendered page rather than only on the
+	// type: no invented completion figure.
+	if strings.Contains(body, "% complete") || strings.Contains(body, "ETA") {
+		t.Error("the page claims a percentage or an ETA it cannot know")
+	}
+}

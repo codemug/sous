@@ -295,6 +295,27 @@ tbody tr:last-child td{border-bottom:none}
 .orphan-act{margin-left:auto;display:flex;gap:.4rem}
 .note.dim{color:var(--ink-faint)}
 
+/* Stage stepper. A vertical list rather than a horizontal bar: the stages have
+   very different durations - weights take minutes, graph capture seconds - and
+   a horizontal track implies an even march that would misrepresent them. */
+.stepper{margin:.6rem 0 .2rem}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.15rem}
+.step{
+  display:flex;align-items:baseline;gap:.5rem;
+  font-family:var(--font-mono);font-size:var(--text-xs);color:var(--ink-faint);
+}
+.step-mark{width:1rem;text-align:center;flex:none;color:var(--ink-faint)}
+.step-name{color:var(--ink-mute)}
+.step-t{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink-faint)}
+.step-note{color:var(--ink-faint);opacity:.85}
+.step.is-done .step-mark{color:var(--ok)}
+.step.is-done .step-name{color:var(--ink-body)}
+.step.is-running .step-mark{color:var(--gold)}
+.step.is-running .step-name{color:var(--ink);font-weight:600}
+/* Skipped is dimmer than pending, not brighter: it never had to happen. */
+.step.is-skipped{opacity:.55}
+.step.is-pending{opacity:.7}
+
 /* API keys. The fresh-secret panel is deliberately loud: it is shown once and
    a reader who scrolls past it has lost the key. */
 .panel.fresh{border-left:3px solid var(--accent);background:var(--accent-wash)}

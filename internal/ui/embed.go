@@ -57,6 +57,17 @@ func Templates() (*template.Template, error) {
 		"gib1": func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) },
 		// pctf keeps a CSS width from carrying fifteen decimals.
 		"pctf": func(f float64) string { return strconv.FormatFloat(f, 'f', 2, 64) },
+		// secs renders a duration the way an operator reads one: seconds under
+		// a minute, minutes and seconds above.
+		"secs": func(f float64) string {
+			if f <= 0 {
+				return "—"
+			}
+			if f < 60 {
+				return strconv.FormatFloat(f, 'f', 0, 64) + "s"
+			}
+			return strconv.Itoa(int(f)/60) + "m " + strconv.Itoa(int(f)%60) + "s"
+		},
 		"ago": func(t time.Time) string {
 			if t.IsZero() {
 				return "never"
