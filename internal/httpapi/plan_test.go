@@ -87,3 +87,39 @@ func TestForceIsOfferedButRequiresTyping(t *testing.T) {
 		}
 	}
 }
+
+// THE REGRESSION THIS PINS. plan.html and node.html render the same pool-bar
+// partial, but its CSS lived in node.html's own <style> block - so the
+// projected bar on the plan page was a stack of divs with width percentages,
+// no height and no fill. The overflow, which is the one thing this page exists
+// to show, was invisible.
+//
+// Asserting the markup is not enough; the markup was always right. These assert
+// that the RULES ship with the page.
+func TestPlanPageShipsThePoolBarStyles(t *testing.T) {
+	h := newTestServer(t)
+	body := send(t, h, http.MethodGet, "/model/qwen36/plan", "", "").Body.String()
+
+	for _, want := range []string{
+		".pool-bar{",   // the bar has a height and a border
+		".seg{",        // segments are flex children, not block divs
+		".seg-reserve", // the hatched reserve
+		".facts{",      // the margin figures keep their grid
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("plan page does not ship %q; the projected bar renders unstyled", want)
+		}
+	}
+}
+
+// The same partial on the other page that uses it, so a future move that fixes
+// one and breaks the other cannot pass.
+func TestNodePageShipsThePoolBarStyles(t *testing.T) {
+	h := newTestServer(t)
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+	for _, want := range []string{".pool-bar{", ".seg{", ".seg-reserve"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("node page does not ship %q", want)
+		}
+	}
+}
