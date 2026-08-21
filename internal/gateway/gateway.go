@@ -18,6 +18,12 @@
 // rather than being held. A 503 naming the phase is more useful to a caller
 // than a hang, and far more useful than a silent redirect to a different model
 // than the one asked for.
+//
+// NOT A SURFACE GAP. Envoy covers this API surface completely, text-to-speech
+// included since their v0.6.0. What it cannot know is which models are deployed
+// on this node right now and whether they have finished loading - that lives in
+// Sous's deployment records, which is why the routing table and the readiness
+// signal here are the same data structure.
 package gateway
 
 import (

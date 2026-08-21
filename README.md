@@ -164,12 +164,23 @@ providers; this fronts one node where each model is a singleton. A request that
 cannot be served says so immediately rather than being queued, and is never
 quietly sent to a different model than the one asked for.
 
-Envoy AI Gateway was the reference for the surface, and covers most of it —
-chat, completions, embeddings, responses, transcriptions, translations, images,
-rerank, models, and Anthropic messages. It does **not** serve
-`/v1/audio/speech`, which is text-to-speech and therefore one of the three
-services on this node. That gap is the practical reason for a local gateway
-rather than pointing Envoy at these ports.
+Envoy AI Gateway was the reference for the surface and covers all of it,
+text-to-speech included — `/v1/audio/speech` shipped in their v0.6.0. (Their
+own supported-endpoints doc page still omits it; the merged PR is #1831.) So
+the reason for a local gateway is **not** a missing endpoint.
+
+The reason is that Envoy solves a different problem. It fronts many replicas of
+many providers, injects credentials, rate-limits by token, and needs Envoy
+Gateway and its CRDs running alongside. This node has one replica of each model
+and no second provider to route between. What it actually needs is the one
+thing Envoy cannot know: **which models are deployed right now and whether they
+have finished loading.** That lives in Sous's deployment records, so the
+routing table and the readiness signal are the same data structure — which is
+why a `starting` model here answers 503 with a reason instead of refusing a
+connection.
+
+If this fleet ever grows a second node or a hosted provider to fail over to,
+Envoy is the right answer and this becomes the thing behind it.
 
 ## Phases, and why "running" was not enough
 
