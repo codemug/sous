@@ -8,6 +8,7 @@
        aria-label="{{gib1 .PoolGiB}} GiB pool: {{gib1 .MarginGiB}} GiB free">
     {{range .Segments}}
       <div class="seg{{if .Reserve}} seg-reserve{{else if .Free}} seg-free{{else}} seg-{{.Phase}}{{end}}"
+           {{if .ID}}data-seg="{{.ID}}"{{end}}
            style="width:{{pctf .Pct}}%"
            title="{{if .ID}}{{.ID}} — {{gib1 .GiB}} GiB · {{.Phase}}{{else if .Reserve}}reserved for the OS, containers and CUDA contexts — {{gib1 .GiB}} GiB{{else}}free — {{gib1 .GiB}} GiB{{end}}">
         {{.Label}}
@@ -36,7 +37,7 @@
     {{if gt (index .Counts "gone") 0}}
       <span class="warn"><i class="swatch sw-gone"></i><b>{{index .Counts "gone"}}</b> gone — record without a container</span>
     {{end}}
-    <span><i class="swatch sw-free"></i><b>{{gib1 .MarginGiB}}</b> GiB free</span>
+    <span><i class="swatch sw-free"></i><b data-margin>{{gib1 .MarginGiB}}</b> GiB free</span>
   </div>
 
   {{/* The reserve has no formula behind it and the page should say so rather

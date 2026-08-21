@@ -106,14 +106,14 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
   <h2>Deployed</h2>
   <div class="models">
   {{range .Models}}{{if .Resident}}
-    <article class="model is-{{.Phase}}">
+    <article class="model is-{{.Phase}}" data-model="{{.Recipe.ID}}">
       <div class="model-top">
         <span class="model-id">{{.Recipe.ID}}</span>
         <span class="model-port">:{{.Port}}</span>
         {{/* ONE chip carrying the phase, not two booleans. "running" was true
              for the eight to ten minutes a model spends loading, which is
              precisely the window in which it cannot be used. */}}
-        <span class="chip is-{{.Phase}}">
+        <span class="chip is-{{.Phase}}" data-phase>
           {{if eq .Phase "starting"}}<span class="spin" aria-hidden="true"></span>{{end}}
           {{if eq .Phase "stopping"}}<span class="spin" aria-hidden="true"></span>{{end}}
           {{.Phase}}
@@ -165,4 +165,5 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
 </div>
 {{end}}
 
+{{template "live" .}}
 {{template "foot" .}}{{end}}

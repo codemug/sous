@@ -50,9 +50,14 @@ plaintext does not exist after creation. Only a SHA-256 is stored.
 - **Operations take minutes.** Starting a model: 8–10 minutes. Stopping one: up
   to 60 seconds. Any interaction model assuming instant feedback is wrong here.
 
-## Known inconsistency
+## Resolved
 
-The pool bar on `/` still colours segments from the old binary `Drifted` flag
-while the model cards below use the five-state phase, so the same model can read
-amber above and green below. Fix in whichever direction the redesign goes, but
-do not leave two state models on one screen.
+The pool bar contradicting the cards is **fixed** — both now colour from the
+same `Phase`, and `Drifted` is gone from the view model so they cannot diverge
+again. `starting` draws hatched; `failed` and `gone` leave the bar entirely and
+are listed below it with what they released.
+
+Also landed since this file was written: stage progress derived from the boot
+log, a plan page that renders a capacity refusal instead of a banner, typed
+confirmation on the four destructive paths, per-model API key scoping, and an
+optional SSE stream.

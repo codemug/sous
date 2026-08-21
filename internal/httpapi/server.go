@@ -110,6 +110,9 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 
 	s.mux.HandleFunc("GET /api/deployments", s.listDeployments)
 	s.mux.HandleFunc("GET /api/status", s.status)
+	// Live status. Optional by construction: every page is already correct as
+	// served, and this only replaces text the server rendered once.
+	s.mux.HandleFunc("GET /events", s.events)
 	s.mux.HandleFunc("GET /api/logs/{id}", s.logs)
 	s.mux.HandleFunc("GET /api/plan/{id}", s.plan)
 	s.mux.HandleFunc("POST /api/deploy/{id}", s.deploy)

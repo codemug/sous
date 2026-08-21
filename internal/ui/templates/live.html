@@ -1,0 +1,63 @@
+{{/* Live updates. ONE script, and it patches text and widths by data-id - it
+     never builds markup, so a template change cannot require a script change.
+
+     Degrades to nothing: with no EventSource, or a dropped stream, the page is
+     already correct as served. The noscript refresh below keeps a JS-off
+     browser tracking a boot. */}}
+{{define "live"}}
+<noscript><meta http-equiv="refresh" content="15"></noscript>
+<script>
+(function () {
+  if (!window.EventSource) return;
+  var dot = document.querySelector("[data-live-dot]");
+  function mark(on) { if (dot) dot.setAttribute("data-on", on ? "1" : "0"); }
+
+  function setText(sel, v) {
+    var el = document.querySelector(sel);
+    if (el && v !== undefined && v !== null) el.textContent = v;
+  }
+
+  var es = new EventSource("/events");
+  es.addEventListener("status", function (ev) {
+    var d;
+    try { d = JSON.parse(ev.data); } catch (e) { return; }
+    mark(true);
+
+    setText("[data-margin]", d.margin_gib.toFixed(1));
+    setText("[data-committed]", d.committed_gib.toFixed(1));
+
+    (d.models || []).forEach(function (m) {
+      var card = document.querySelector('[data-model="' + m.id + '"]');
+      if (card) {
+        var chip = card.querySelector("[data-phase]");
+        if (chip) { chip.textContent = m.phase; chip.className = "chip is-" + m.phase; }
+        var det = card.querySelector("[data-detail]");
+        if (det && m.stage) det.textContent = m.stage;
+        card.className = card.className.replace(/is-[a-z]+/, "is-" + m.phase);
+      }
+      var seg = document.querySelector('[data-seg="' + m.id + '"]');
+      if (seg) {
+        seg.style.width = m.pct.toFixed(2) + "%";
+        seg.className = "seg seg-" + m.phase;
+      }
+    });
+  });
+
+  es.onerror = function () { mark(false); };
+
+  // OPTIMISTIC STOP. UndeployAsync marks the deployment before it returns, so
+  // the server agrees within one tick - and stopMaxAge bounds the lie to five
+  // minutes if Sous is killed mid-stop. Without this the card sits on "ready"
+  // until the next frame, and the button looks like it did nothing.
+  document.addEventListener("submit", function (e) {
+    var f = e.target;
+    if (!f.action || f.action.indexOf("/undeploy/") < 0) return;
+    var id = f.action.split("/undeploy/")[1].split("?")[0];
+    var card = document.querySelector('[data-model="' + id + '"]');
+    if (!card) return;
+    var chip = card.querySelector("[data-phase]");
+    if (chip) { chip.textContent = "stopping"; chip.className = "chip is-stopping"; }
+  }, true);
+})();
+</script>
+{{end}}
