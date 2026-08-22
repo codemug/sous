@@ -112,11 +112,18 @@ except Exception as e:
 print("sous-total", total, flush=True)
 
 def on_disk():
+    # SKIP SYMLINKS. The hub cache keeps real bytes in blobs/ and symlinks to
+    # them in snapshots/, and getsize follows a symlink - counting every
+    # finished file twice, which reported 975 KB against a 487 KB repo and
+    # would have put every download past 100%.
     n = 0
     for root, _, files in os.walk(cache):
         for f in files:
+            p = os.path.join(root, f)
             try:
-                n += os.path.getsize(os.path.join(root, f))
+                if os.path.islink(p):
+                    continue
+                n += os.path.getsize(p)
             except OSError:
                 pass
     return n
@@ -384,7 +391,14 @@ func describe(done, total, rate int64) string {
 	if total > 0 {
 		b.WriteString(" of ")
 		b.WriteString(human(total))
-		b.WriteString(fmt.Sprintf(" (%.0f%%)", float64(done)*100/float64(total)))
+		// Clamped: a figure over 100% is a measurement bug rather than a
+		// download that overachieved, and rendering it as fact sends whoever
+		// reads it looking in the wrong place.
+		pct := float64(done) * 100 / float64(total)
+		if pct > 100 {
+			pct = 100
+		}
+		b.WriteString(fmt.Sprintf(" (%.0f%%)", pct))
 	}
 	if rate <= 0 {
 		b.WriteString(" · stalled")

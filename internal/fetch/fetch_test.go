@@ -376,3 +376,17 @@ func TestProgressStillFallsBackToTqdm(t *testing.T) {
 		t.Errorf("Detail = %q, want the tqdm line for a pre-upgrade job", j.Detail)
 	}
 }
+
+// THE SYMLINK DOUBLE-COUNT. The hub cache keeps real bytes in blobs/ and
+// symlinks in snapshots/, so a naive walk counted every finished file twice -
+// live, a 487 KB repo reported 975 KB. A percentage over 100 is always a
+// measurement bug, and must not be rendered as fact.
+func TestDescribeClampsAnImpossiblePercentage(t *testing.T) {
+	got := describe(975546, 487753, 0)
+	if strings.Contains(got, "200%") {
+		t.Errorf("describe() = %q reports more than the whole repo", got)
+	}
+	if !strings.Contains(got, "100%") {
+		t.Errorf("describe() = %q, want the percentage clamped to 100", got)
+	}
+}
