@@ -91,6 +91,15 @@ args:
         {{if .Recipe.Archived}}<span class="chip is-arch">archived</span>{{end}}
       </div>
       <span class="card-sub">{{.Recipe.Model}}</span>
+      {{/* WHAT YOU CAN CALL IT. The card already says what the model IS; this
+           says what to put in a request, which is the other question anyone
+           reading this page has. Aliases are marked so they read as a local
+           decision rather than as something the recipe declared. */}}
+      {{with .Names}}
+      <span class="names">
+        {{range $i,$n := .}}{{if $i}}<span class="names-sep">·</span>{{end}}<span class="mono">{{$n}}</span>{{end}}
+      </span>
+      {{end}}
 
       <div class="card-foot">
         <span class="stat"><span class="mlabel">Kind</span><span class="v">{{.Recipe.Kind}}</span></span>

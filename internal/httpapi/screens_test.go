@@ -492,3 +492,36 @@ func TestAliasSetOverTheAPIAppearsInV1Models(t *testing.T) {
 		t.Errorf("/v1/models does not list the alias: %s", body)
 	}
 }
+
+// The cards have to show the alias, or the only place it is visible is the page
+// you already had to know to visit.
+func TestCardsShowEveryCallableName(t *testing.T) {
+	h, _ := newTestServerWithRuntime(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d", rr.Code)
+	}
+	if rr := setAlias(t, h, "qwen38", `["cardalias"]`); rr.Code != http.StatusOK {
+		t.Fatalf("set: %d %s", rr.Code, rr.Body.String())
+	}
+	for _, path := range []string{"/models", "/"} {
+		body := send(t, h, http.MethodGet, path, "", "").Body.String()
+		if !strings.Contains(body, "cardalias") {
+			t.Errorf("%s does not show the alias on the card", path)
+		}
+		// The recipe's own name stays alongside it; an alias adds a name, it
+		// does not replace the ones the recipe declared.
+		if !strings.Contains(body, "qwen38") {
+			t.Errorf("%s dropped the recipe's own served_as", path)
+		}
+	}
+}
+
+// A model with no alias still says what to call it, rather than rendering an
+// empty strip.
+func TestCardsNameAModelWithNoAliases(t *testing.T) {
+	h := newTestServer(t)
+	body := send(t, h, http.MethodGet, "/models", "", "").Body.String()
+	if !strings.Contains(body, `class="names"`) {
+		t.Error("no callable names on the cards at all")
+	}
+}

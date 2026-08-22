@@ -571,6 +571,17 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
    dimming that tr.arch td used to do before the tables became cards. */
 .card.is-arch{opacity:.62}
 
+/* The callable names on a card. Monospace because they are literals someone
+   pastes into a request body, and dim because the card title already carries
+   the identity - this is the answer to "what do I type", not a second name. */
+.names{
+  display:flex;flex-wrap:wrap;gap:.3rem;align-items:baseline;
+  font-size:var(--text-xs);color:var(--ink-mute);margin-top:var(--space-2xs);
+  min-width:0;
+}
+.names .mono{overflow-wrap:anywhere;min-width:0}
+.names-sep{color:var(--ink-faint)}
+
 /* Filter tabs. Links and a query string - no JS, and each one is a real URL
    that can be bookmarked or sent to someone. */
 .filters{display:flex;gap:var(--space-xs);flex-wrap:wrap;margin-bottom:var(--space-md)}

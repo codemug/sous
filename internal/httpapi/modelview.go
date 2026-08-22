@@ -41,6 +41,26 @@ type ModelView struct {
 	// Progress is non-nil only while starting. A model that is ready has
 	// nothing left to narrate, and one that failed has a reason instead.
 	Progress *deploy.Progress `json:"progress,omitempty"`
+
+	// Aliases are the extra names this model answers to on THIS node. Not part
+	// of the recipe - they are a local routing decision - so they are carried
+	// on the view rather than read from Recipe.
+	Aliases []string `json:"aliases,omitempty"`
+}
+
+// Names is every name a caller can address this model by, in the order the
+// gateway resolves them: the recipe's own served_as first, then the operator's
+// aliases, with the id as the fallback when a recipe names nothing.
+//
+// One list rather than three, because "what can I call this" is one question
+// and a card that answered it in three places would be read as three answers.
+func (m ModelView) Names() []string {
+	out := append([]string{}, m.Recipe.ServedAs...)
+	out = append(out, m.Aliases...)
+	if len(out) == 0 {
+		out = append(out, m.Recipe.ID)
+	}
+	return out
 }
 
 // Deployed reports whether anything is deployed for this recipe at all.
@@ -87,6 +107,9 @@ func (s *Server) models(r *http.Request) ([]ModelView, error) {
 		v := ModelView{
 			Recipe:      rec,
 			DeclaredGiB: rec.Declared.WeightsGiB + rec.Declared.KVGiB,
+		}
+		if s.alias != nil {
+			v.Aliases = s.alias.Of(rec.ID)
 		}
 		if d, ok := byID[rec.ID]; ok {
 			st := states[engine.ContainerName(rec.ID)]
