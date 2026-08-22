@@ -8,6 +8,39 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
 <p class="note"><strong>{{.LarderTotal}}</strong> on disk ·
 <strong>{{.Reclaimable}}</strong> reclaimable without force</p>
 
+{{/* THE TOKEN LIVES NEXT TO THE THING IT UNBLOCKS. A gated repo ties licence
+     acceptance to an ACCOUNT, so accepting the agreement in a browser does not
+     make an anonymous download work - it still answers 401, and it does so ten
+     minutes in, inside a container, which is a miserable place to learn it. */}}
+<div class="panel">
+  <h2>HuggingFace token</h2>
+  {{if .HF.Configured}}
+    <p class="note"><span class="chip is-ready">installed</span>
+    <span class="mono">{{.HF.Hint}}</span> — gated repos you have accepted the
+    agreement for will download.</p>
+    {{/* No reveal, deliberately: Sous did not mint this and you already have it
+         wherever you copied it from, so showing it again is all risk. */}}
+    {{template "confirm-typed" dict
+        "Action" "/larder/hf-token/clear"
+        "ID" "remove"
+        "Label" "Remove token"
+        "Cost" "Public weights keep downloading. Gated repos start failing with 401 on the next fetch, and a deploy that has to pull its own weights fails the same way."}}
+  {{else}}
+    <p class="note">No token. Public weights download fine; a gated repo answers
+    <span class="mono">401</span> even after you have accepted its agreement,
+    because acceptance is tied to your account rather than to the repo.</p>
+  {{end}}
+  <form method="post" action="/larder/hf-token" class="fetchform">
+    <label for="hf" class="mlabel">{{if .HF.Configured}}Replace with{{else}}User access token{{end}}</label>
+    <input id="hf" name="token" type="password" required placeholder="hf_…"
+           autocomplete="off" spellcheck="false" autocapitalize="off">
+    <button class="btn-primary" type="submit">Save</button>
+  </form>
+  <p class="note dim">Create one at huggingface.co/settings/tokens with read
+  access. It is stored on this node only, never written into a recipe — recipes
+  are published to git.</p>
+</div>
+
 {{/* DOWNLOADING IS A LARDER OPERATION. The page already answers "what is on
      disk" and "what can go"; without this it could not answer "put something
      there", so the only way to add weights was to deploy a model and let it

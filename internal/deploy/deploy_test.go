@@ -474,3 +474,49 @@ func (f *fakeRuntime) States(context.Context) (map[string]engine.ContainerState,
 	}
 	return out, nil
 }
+
+// fakeSecrets stands in for the HuggingFace token store.
+type fakeSecrets struct{ env []string }
+
+func (f fakeSecrets) Env() []string { return f.env }
+
+// A GATED REPO NEEDS THE TOKEN AT DEPLOY TIME TOO, not only when the larder
+// downloads. A model whose weights are not cached pulls them on first start, so
+// without this a gated recipe dies eight minutes into a boot with a 401 that
+// looks like a broken image.
+func TestDeployInjectsSecretsIntoTheContainer(t *testing.T) {
+	rt := newFake()
+	m := newManager(t, rt)
+	m.Secrets = fakeSecrets{env: []string{"HF_TOKEN=hf_secret", "HUGGING_FACE_HUB_TOKEN=hf_secret"}}
+
+	if _, err := m.Deploy(context.Background(), "qwen38", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.specs) != 1 {
+		t.Fatalf("specs = %d", len(rt.specs))
+	}
+	got := strings.Join(rt.specs[0].Env, " ")
+	for _, want := range []string{"HF_TOKEN=hf_secret", "HUGGING_FACE_HUB_TOKEN=hf_secret"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("container env %q is missing %q", got, want)
+		}
+	}
+}
+
+// NIL IS THE NORMAL CASE. Every public repo deploys without a token, and a
+// Manager built without one must not panic.
+func TestDeployWithoutSecretsIsFine(t *testing.T) {
+	rt := newFake()
+	m := newManager(t, rt)
+	m.Secrets = nil
+	if _, err := m.Deploy(context.Background(), "qwen38", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if strings.Contains(strings.Join(rt.specs[0].Env, " "), "HF_TOKEN") {
+		t.Error("a token appeared with no secret store configured")
+	}
+}

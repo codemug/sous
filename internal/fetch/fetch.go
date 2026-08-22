@@ -45,6 +45,22 @@ type Manager struct {
 	// writes. The host itself has neither `hf` nor an importable
 	// huggingface_hub, so doing this outside a container is not an option.
 	Image string
+	// Secrets supplies the HuggingFace token, when one is configured.
+	//
+	// THE WHOLE POINT OF A GATED REPO. Accepting the licence on the Hub is tied
+	// to an ACCOUNT, so an anonymous download of a gated repo returns 401 no
+	// matter how many times the agreement was accepted in a browser. Without a
+	// token this manager can only fetch public weights.
+	Secrets interface{ Env() []string }
+}
+
+// secretEnv is nil-safe so a Manager built without secrets still works, which
+// is what every public-repo download is.
+func secretEnv(s interface{ Env() []string }) []string {
+	if s == nil {
+		return nil
+	}
+	return s.Env()
 }
 
 // repoRe matches a HuggingFace repo id: owner/name, with the characters the Hub
@@ -138,7 +154,7 @@ func (m *Manager) Start(ctx context.Context, repo string) (Job, error) {
 		Name:   name,
 		Image:  m.Image,
 		Binds:  []string{m.ModelDir + ":/root/.cache/huggingface"},
-		Env:    []string{"HF_HOME=/root/.cache/huggingface"},
+		Env:    append([]string{"HF_HOME=/root/.cache/huggingface"}, secretEnv(m.Secrets)...),
 		Labels: map[string]string{RepoLabel: repo},
 		// The image's own entrypoint is a model server. Without overriding it,
 		// the command below arrives as arguments to vLLM, which starts up and

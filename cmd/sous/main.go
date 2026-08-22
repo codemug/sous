@@ -4,6 +4,7 @@ package main
 import (
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
+	"github.com/codemug/sous/internal/hf"
 	"log"
 	"net/http"
 	"os"
@@ -76,6 +77,14 @@ func main() {
 		log.Fatalf("docker: %v", err)
 	}
 
+	// The HuggingFace token, when one is configured. Gated repos tie licence
+	// acceptance to an ACCOUNT, so an anonymous pull of a repo whose agreement
+	// was accepted in a browser still answers 401.
+	hfs, err := hf.New(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("hf: %v", err)
+	}
+
 	mgr := &deploy.Manager{
 		Store:   st,
 		Catalog: cat,
@@ -86,6 +95,7 @@ func main() {
 		Ports:      ports.Allocator{Low: cfg.PortLow, High: cfg.PortHigh},
 		BindHost:   cfg.Host(),
 		ModelDir:   cfg.ModelDir,
+		Secrets:    hfs,
 		DropCaches: dropCaches,
 		// Readiness is a port that answers, not a container that exists. A
 		// vLLM model here is "running" for eight to ten minutes before it
@@ -125,11 +135,12 @@ func main() {
 	// into the same cache deployments read from. The default image is the one
 	// most recipes already use, so it is present on the node and is the same
 	// client that will later read what it writes.
-	fx := &fetch.Manager{Runtime: rt, ModelDir: cfg.ModelDir, Image: cfg.FetchImage}
+	fx := &fetch.Manager{Runtime: rt, ModelDir: cfg.ModelDir, Image: cfg.FetchImage,
+		Secrets: hfs}
 
 	// The larder scans MODEL_DIR/hub, which is where huggingface_hub places
 	// snapshots under the HF_HOME bind mount.
-	h, err := httpapi.New(mgr, cat, keys, fx, mem.TotalGiB,
+	h, err := httpapi.New(mgr, cat, keys, fx, hfs, mem.TotalGiB,
 		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard)
 	if err != nil {
 		log.Fatalf("http: %v", err)

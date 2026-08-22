@@ -35,6 +35,7 @@ type pageData struct {
 	Model       *modelPage
 	Models      []ModelView
 	Filters     []FilterTab
+	HF          hfView
 	Pool        *PoolBar
 	Plan        *PlanPage
 	Keys        *keysPage
@@ -135,6 +136,7 @@ func (s *Server) pageLarder(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		d.HF = s.hfView()
 		d.Larder = entries
 		d.LarderTotal = humanBytes(larder.Total(entries))
 		d.Reclaimable = humanBytes(larder.Reclaimable(entries))

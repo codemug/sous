@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
+	"github.com/codemug/sous/internal/hf"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -137,7 +138,16 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 		ModelDir:   "/models",
 		DropCaches: func() error { return nil },
 	}
-	h, err := New(m, c, keys, fx, 121.6, hub, t.TempDir(), guard)
+	// A real token store on a temp dir: the tests that matter here are about
+	// the token NOT leaking into recipes and exports, which a nil store could
+	// not demonstrate.
+	hfs, err := hf.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Secrets = hfs
+	fx.Secrets = hfs
+	h, err := New(m, c, keys, fx, hfs, 121.6, hub, t.TempDir(), guard)
 	if err != nil {
 		t.Fatal(err)
 	}

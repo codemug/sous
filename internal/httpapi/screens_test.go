@@ -304,3 +304,96 @@ func TestModelsPageFilters(t *testing.T) {
 		t.Error("an unknown filter emptied the page instead of falling back to all")
 	}
 }
+
+const testHFToken = "hf_thisisthesecrettokenvalue"
+
+func installToken(t *testing.T, h http.Handler) {
+	t.Helper()
+	rr := send(t, h, http.MethodPut, "/api/hf-token", "application/json",
+		`{"token":"`+testHFToken+`"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("installing the token: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// THE ONE INVARIANT THAT JUSTIFIES THE WHOLE DESIGN. Recipes are published to
+// git - the catalog in this repo is generated from them - so a token that
+// reached recipe.Env would be a credential in version control the moment
+// anyone regenerated the catalog. It is injected at container-creation time
+// instead, and nothing that can be printed, diffed or committed ever sees it.
+func TestHFTokenNeverAppearsInAnythingPublishable(t *testing.T) {
+	h := newTestServerWithHub(t)
+	installToken(t, h)
+
+	for _, path := range []string{
+		"/api/recipes",  // the machine-readable catalog
+		"/models",       // the page listing them
+		"/model/qwen38", // the drill-down, which renders the YAML
+		"/larder",       // the page the token is configured on
+		"/api/status",   // what a monitor scrapes
+		"/api/hf-token", // the token's own endpoint
+	} {
+		body := send(t, h, http.MethodGet, path, "", "").Body.String()
+		if strings.Contains(body, testHFToken) {
+			t.Errorf("%s leaks the HuggingFace token", path)
+		}
+	}
+}
+
+// The endpoint reports WHETHER a token is installed and which one, never what
+// it is. There is no one-time reveal because Sous did not mint this.
+func TestHFTokenEndpointReturnsAHintNotTheToken(t *testing.T) {
+	h := newTestServerWithHub(t)
+	installToken(t, h)
+
+	body := send(t, h, http.MethodGet, "/api/hf-token", "", "").Body.String()
+	if !strings.Contains(body, `"configured":true`) {
+		t.Errorf("token not reported as configured: %s", body)
+	}
+	if strings.Contains(body, testHFToken) {
+		t.Fatal("the endpoint returned the token itself")
+	}
+	// The last four characters, so two tokens can be told apart.
+	if !strings.Contains(body, "alue") {
+		t.Errorf("no usable hint in %s", body)
+	}
+}
+
+// Validation happens at the boundary, not inside a download container ten
+// minutes later.
+func TestHFTokenRejectsAValueThatIsNotAToken(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := send(t, h, http.MethodPut, "/api/hf-token", "application/json",
+		`{"token":"my-username"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "hf_") {
+		t.Errorf("the error does not say what a token looks like: %s", rr.Body.String())
+	}
+}
+
+func TestHFTokenCanBeCleared(t *testing.T) {
+	h := newTestServerWithHub(t)
+	installToken(t, h)
+	if rr := send(t, h, http.MethodDelete, "/api/hf-token", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("clear returned %d", rr.Code)
+	}
+	body := send(t, h, http.MethodGet, "/api/hf-token", "", "").Body.String()
+	if !strings.Contains(body, `"configured":false`) {
+		t.Errorf("still configured after a clear: %s", body)
+	}
+}
+
+// The panel has to say what a missing token actually costs, because "401" on a
+// repo whose agreement you accepted in a browser is genuinely confusing.
+func TestLarderExplainsWhyAGatedRepoStillFails(t *testing.T) {
+	h := newTestServerWithHub(t)
+	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
+	if !strings.Contains(body, "HuggingFace token") {
+		t.Fatal("no token panel on the larder page")
+	}
+	if !strings.Contains(body, "401") {
+		t.Error("the panel does not name the failure an operator will actually see")
+	}
+}

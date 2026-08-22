@@ -269,3 +269,43 @@ func TestRepoIDSurvivesWithItsCasing(t *testing.T) {
 		t.Errorf("listed as %q, want %q - the casing was lost", jobs[0].Repo, repo)
 	}
 }
+
+type fakeSecrets struct{ env []string }
+
+func (f fakeSecrets) Env() []string { return f.env }
+
+// THE WHOLE REASON THIS FEATURE EXISTS. A gated repo ties licence acceptance to
+// an ACCOUNT, so an anonymous download answers 401 no matter how many times the
+// agreement was accepted in a browser.
+func TestFetchJobCarriesTheToken(t *testing.T) {
+	f := &fakeRT{}
+	m := &Manager{Runtime: f, ModelDir: "/models", Image: "img",
+		Secrets: fakeSecrets{env: []string{"HF_TOKEN=hf_secret"}}}
+
+	if _, err := m.Start(context.Background(), "org/Gated-Model"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.started) != 1 {
+		t.Fatalf("jobs started = %d", len(f.started))
+	}
+	got := strings.Join(f.started[0].Env, " ")
+	if !strings.Contains(got, "HF_TOKEN=hf_secret") {
+		t.Errorf("download job env = %q, missing the token", got)
+	}
+	// The cache location must survive the append.
+	if !strings.Contains(got, "HF_HOME=/root/.cache/huggingface") {
+		t.Errorf("download job env = %q, lost HF_HOME", got)
+	}
+}
+
+// Public repos are the normal case and must not need a token.
+func TestFetchWithoutSecretsStillWorks(t *testing.T) {
+	f := &fakeRT{}
+	m := &Manager{Runtime: f, ModelDir: "/models", Image: "img"}
+	if _, err := m.Start(context.Background(), "org/Public-Model"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(f.started[0].Env, " "), "HF_TOKEN") {
+		t.Error("a token appeared with no secret store configured")
+	}
+}

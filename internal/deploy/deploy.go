@@ -70,6 +70,14 @@ type Manager struct {
 	BindHost string
 	ModelDir string
 
+	// Secrets supplies credentials a container needs but a recipe must not
+	// carry. Optional; nil means none are injected.
+	//
+	// NOT recipe.Env, deliberately: recipes are published to git, so a token
+	// living there would be a credential in version control the first time
+	// anyone regenerated the catalog.
+	Secrets interface{ Env() []string }
+
 	// DropCaches is injectable so tests do not need root and so the reason it
 	// exists stays visible at the call site.
 	DropCaches func() error
@@ -119,6 +127,14 @@ func (m *Manager) Deploy(ctx context.Context, id string, wantPort int, force boo
 	spec, err := engine.BuildSpec(r, port, m.ModelDir)
 	if err != nil {
 		return Record{}, err
+	}
+
+	// After BuildSpec rather than inside it: BuildSpec is a pure function of a
+	// recipe, and it is what the export and diff paths render. Injecting here
+	// keeps the secret out of anything that can be printed, compared or
+	// committed.
+	if m.Secrets != nil {
+		spec.Env = append(spec.Env, m.Secrets.Env()...)
 	}
 
 	// A third-party image listens where its author chose. BuildSpec defaults to
