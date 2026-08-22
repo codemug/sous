@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/codemug/sous/internal/engine"
@@ -62,6 +63,91 @@ func secretEnv(s interface{ Env() []string }) []string {
 	}
 	return s.Env()
 }
+
+// downloadScript is what runs inside the fetch container.
+//
+// IT REPORTS ITS OWN PROGRESS. The previous version relied on parsing tqdm out
+// of the container log, and on a real download that produced nothing at all -
+// the Detail column read "—" for the entire transfer, which is how a 29 GiB
+// pull that was stalling for minutes at a time looked identical to one running
+// at full speed. tqdm's output depends on a TTY and on huggingface_hub's own
+// progress-bar settings; a line this script prints itself does not.
+//
+// The progress thread measures BYTES ON DISK rather than asking the library,
+// because that is the number that is true regardless of which download backend
+// is in use, and it counts .incomplete files - which is where nearly all of a
+// transfer lives until each shard finishes.
+//
+// hf_transfer is enabled ONLY IF IMPORTABLE. Setting the environment variable
+// without the package installed makes huggingface_hub raise on import, which
+// would turn a slow download into no download at all. The env var must also be
+// set BEFORE huggingface_hub is imported - it is read at import time - which is
+// why this happens at the top rather than next to the call.
+const downloadScript = `import os, sys, threading, time, importlib.util
+
+if importlib.util.find_spec("hf_transfer") is not None:
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+    print("sous-note hf_transfer enabled", flush=True)
+else:
+    print("sous-note hf_transfer not installed; using the python downloader", flush=True)
+
+from huggingface_hub import snapshot_download
+
+repo = sys.argv[1]
+patterns = ["*.json", "*.safetensors", "*.jinja", "*.txt", "*.model"]
+
+home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+cache = os.path.join(home, "hub", "models--" + repo.replace("/", "--"))
+
+total = 0
+try:
+    from huggingface_hub import HfApi
+    import fnmatch
+    info = HfApi().model_info(repo, files_metadata=True)
+    for f in info.siblings:
+        if any(fnmatch.fnmatch(f.rfilename, g) for g in patterns):
+            total += f.size or 0
+except Exception as e:
+    print("sous-note could not size the repo:", e, flush=True)
+print("sous-total", total, flush=True)
+
+def on_disk():
+    n = 0
+    for root, _, files in os.walk(cache):
+        for f in files:
+            try:
+                n += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return n
+
+stop = threading.Event()
+
+def report():
+    # A rate measured against the START would hide a stall behind a good
+    # average. This one is over the last interval, so a stall reads as a stall.
+    last, last_t = on_disk(), time.time()
+    while not stop.wait(5):
+        try:
+            now, t = on_disk(), time.time()
+            rate = (now - last) / max(t - last_t, 0.001)
+            pct = (" %.1f%%" % (now * 100.0 / total)) if total else ""
+            print("sous-progress %d %d %.0f%s" % (now, total, rate, pct), flush=True)
+            last, last_t = now, t
+        except Exception:
+            pass
+
+th = threading.Thread(target=report, daemon=True)
+th.start()
+try:
+    # max_workers above the default 8: this uplink drops roughly one connection
+    # in ten, and more parallel transfers ride out an individual drop instead of
+    # the whole download pausing on one stalled connection.
+    p = snapshot_download(repo, allow_patterns=patterns, max_workers=16)
+finally:
+    stop.set()
+print("sous-progress %d %d 0" % (on_disk(), total), flush=True)
+print("downloaded to", p, flush=True)`
 
 // repoRe matches a HuggingFace repo id: owner/name, with the characters the Hub
 // actually permits. Anchored, because this string reaches a container command
@@ -164,14 +250,7 @@ func (m *Manager) Start(ctx context.Context, repo string) (Job, error) {
 		// The repo id is passed as an ARGUMENT, never interpolated into a shell
 		// string. It is validated above as well, but a value that reaches a
 		// command line should not depend on that validation being right.
-		Cmd: []string{
-			"-c",
-			`import sys
-from huggingface_hub import snapshot_download
-p = snapshot_download(sys.argv[1], allow_patterns=["*.json","*.safetensors","*.jinja","*.txt","*.model"])
-print("downloaded to", p, flush=True)`,
-			repo,
-		},
+		Cmd: []string{"-c", downloadScript, repo},
 	}
 	if _, err := m.Runtime.StartJob(ctx, spec); err != nil {
 		return Job{}, fmt.Errorf("start fetch for %s: %w", repo, err)
@@ -245,8 +324,38 @@ func unslug(s string) string { return strings.Replace(s, "--", "/", 1) }
 // huggingface_hub writes tqdm bars to the log; the last one carrying a percent
 // is the useful line. This is display only - nothing branches on it - so a
 // parse that misses is a missing detail, never a wrong state.
+// Tail returns the last lines of a download's log.
+//
+// THE MISSING VIEW. Diagnosing a slow download meant polling the larder's byte
+// count from OUTSIDE Sous, because the job's own output was not reachable from
+// anywhere - the container had the answer and nothing exposed it.
+func (m *Manager) Tail(ctx context.Context, repo string, n int) []string {
+	return m.tail(ctx, Name(repo), n)
+}
+
+// reProgress matches the line the download script prints every five seconds:
+//
+//	sous-progress <bytes-on-disk> <total-bytes> <bytes-per-second> [pct]
+var reProgress = regexp.MustCompile(`^sous-progress (\d+) (\d+) (\d+)`)
+
+// progress is the sentence under a running download.
+//
+// THE SCRIPT'S OWN LINE FIRST. Parsing tqdm was the previous approach and it
+// produced nothing on a real transfer, so the column read "—" for 29 GiB - a
+// download stalling for minutes looked exactly like one running at full speed.
+// The tqdm heuristics stay as a fallback for a job started by an older Sous,
+// whose container is still running and cannot be asked to print anything new.
 func (m *Manager) progress(ctx context.Context, name string) string {
-	lines := m.tail(ctx, name, 40)
+	lines := m.tail(ctx, name, 60)
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if mm := reProgress.FindStringSubmatch(l); mm != nil {
+			done, _ := strconv.ParseInt(mm[1], 10, 64)
+			total, _ := strconv.ParseInt(mm[2], 10, 64)
+			rate, _ := strconv.ParseInt(mm[3], 10, 64)
+			return describe(done, total, rate)
+		}
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := strings.TrimSpace(lines[i])
 		if strings.Contains(l, "%|") || strings.Contains(l, "it/s") || strings.Contains(l, "B/s") {
@@ -257,6 +366,66 @@ func (m *Manager) progress(ctx context.Context, name string) string {
 		return trimTo(strings.TrimSpace(lines[len(lines)-1]), 90)
 	}
 	return ""
+}
+
+// describe turns three numbers into the sentence an operator needs.
+//
+// A RATE OF ZERO IS SAID OUT LOUD. "3.3 of 28.8 GiB" beside a stalled transfer
+// reads as progress; "stalled" does not. This is the whole reason the figure
+// exists - the download that prompted it was moving in 128 MiB bursts with two
+// minutes of nothing between them, and no view of it showed that.
+//
+// NO ETA when the rate is zero, and none from a lifetime average either: on a
+// link that stalls, an average is an estimate of a past that is not coming
+// back.
+func describe(done, total, rate int64) string {
+	var b strings.Builder
+	b.WriteString(human(done))
+	if total > 0 {
+		b.WriteString(" of ")
+		b.WriteString(human(total))
+		b.WriteString(fmt.Sprintf(" (%.0f%%)", float64(done)*100/float64(total)))
+	}
+	if rate <= 0 {
+		b.WriteString(" · stalled")
+		return b.String()
+	}
+	b.WriteString(" · ")
+	b.WriteString(human(rate))
+	b.WriteString("/s")
+	if total > done {
+		secs := float64(total-done) / float64(rate)
+		b.WriteString(" · ")
+		b.WriteString(eta(secs))
+		b.WriteString(" left at this rate")
+	}
+	return b.String()
+}
+
+func human(b int64) string {
+	const k, m, g = 1024.0, 1024.0 * 1024, 1024.0 * 1024 * 1024
+	f := float64(b)
+	switch {
+	case f >= g:
+		return strconv.FormatFloat(f/g, 'f', 1, 64) + " GiB"
+	case f >= m:
+		return strconv.FormatFloat(f/m, 'f', 0, 64) + " MiB"
+	case f >= k:
+		return strconv.FormatFloat(f/k, 'f', 0, 64) + " KiB"
+	default:
+		return strconv.FormatInt(b, 10) + " B"
+	}
+}
+
+func eta(secs float64) string {
+	switch {
+	case secs >= 3600:
+		return fmt.Sprintf("%.1fh", secs/3600)
+	case secs >= 60:
+		return fmt.Sprintf("%.0fm", secs/60)
+	default:
+		return fmt.Sprintf("%.0fs", secs)
+	}
 }
 
 // lastError returns the exception line from a failed job, which is what an

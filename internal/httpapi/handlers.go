@@ -130,6 +130,26 @@ func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"freed_bytes": freed})
 }
 
+// fetchLogs answers GET /api/fetch/logs?repo=…
+//
+// Its own endpoint rather than a field on the listing: a log tail is kilobytes,
+// the listing is polled every few seconds by an open Larder page, and putting
+// one inside the other would put a container log on the wire on every tick.
+func (s *Server) fetchLogs(w http.ResponseWriter, r *http.Request) {
+	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if repo == "" {
+		writeErr(w, http.StatusBadRequest, "repo is required")
+		return
+	}
+	lines := s.fetch.Tail(r.Context(), repo, 200)
+	if wantsHTML(r) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(safeText([]byte(strings.Join(lines, "\n")))))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "lines": lines})
+}
+
 func (s *Server) pageLarder(w http.ResponseWriter, r *http.Request) {
 	s.page(w, r, "larder", "Larder", func(d *pageData) error {
 		entries, err := s.larderView()

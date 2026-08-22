@@ -309,3 +309,70 @@ func TestFetchWithoutSecretsStillWorks(t *testing.T) {
 		t.Error("a token appeared with no secret store configured")
 	}
 }
+
+// A STALL MUST READ AS A STALL. "3.3 of 28.8 GiB" beside a transfer that has
+// not moved in two minutes reads as progress, which is exactly how a download
+// stalling in 128 MiB bursts looked healthy for hours.
+func TestDescribeSaysStalledWhenNothingIsMoving(t *testing.T) {
+	got := describe(3_500_000_000, 30_900_000_000, 0)
+	if !strings.Contains(got, "stalled") {
+		t.Errorf("describe() = %q, want it to say stalled", got)
+	}
+	// And no ETA, because there is no rate to project from.
+	if strings.Contains(got, "left") {
+		t.Errorf("describe() = %q offers an ETA at zero rate", got)
+	}
+}
+
+func TestDescribeCarriesTheNumbersThatMatter(t *testing.T) {
+	got := describe(3_221_225_472, 30_923_764_531, 6_710_886)
+	for _, want := range []string{"3.0 GiB", "28.8 GiB", "10%", "6 MiB/s", "left"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("describe() = %q, missing %q", got, want)
+		}
+	}
+}
+
+// A repo whose size could not be fetched still reports what has landed.
+func TestDescribeWithoutATotal(t *testing.T) {
+	got := describe(1_048_576, 0, 1024)
+	if !strings.Contains(got, "1 MiB") {
+		t.Errorf("describe() = %q", got)
+	}
+	if strings.Contains(got, "%") {
+		t.Errorf("describe() = %q invents a percentage with no total", got)
+	}
+}
+
+// The structured line wins over any tqdm-looking noise in the same log.
+func TestProgressPrefersTheStructuredLine(t *testing.T) {
+	f := &fakeRT{
+		states: map[string]engine.ContainerState{
+			Name("org/m"): {Name: Name("org/m"), Status: "running"},
+		},
+		logs: "Fetching 20 files:  10%|#         | 2/20 [00:30<04:00]\n" +
+			"sous-progress 3221225472 30923764531 6710886 10.4%\n",
+	}
+	j := mgr(f).Status(context.Background(), "org/m")
+	if !strings.Contains(j.Detail, "3.0 GiB") || !strings.Contains(j.Detail, "left") {
+		t.Errorf("Detail = %q, want the structured progress", j.Detail)
+	}
+	if strings.Contains(j.Detail, "|") {
+		t.Errorf("Detail = %q fell back to the tqdm line", j.Detail)
+	}
+}
+
+// A job started by an older Sous cannot be asked to print anything new, so the
+// old heuristics have to keep working for as long as its container runs.
+func TestProgressStillFallsBackToTqdm(t *testing.T) {
+	f := &fakeRT{
+		states: map[string]engine.ContainerState{
+			Name("org/m"): {Name: Name("org/m"), Status: "running"},
+		},
+		logs: "Fetching 20 files:  10%|#         | 2/20 [00:30<04:00, 1.2MB/s]\n",
+	}
+	j := mgr(f).Status(context.Background(), "org/m")
+	if !strings.Contains(j.Detail, "%|") {
+		t.Errorf("Detail = %q, want the tqdm line for a pre-upgrade job", j.Detail)
+	}
+}

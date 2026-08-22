@@ -106,6 +106,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// window where something else was stopped to make room for it.
 	s.mux.HandleFunc("POST /api/fetch", s.startFetch)
 	s.mux.HandleFunc("GET /api/fetch", s.listFetches)
+	s.mux.HandleFunc("GET /api/fetch/logs", s.fetchLogs)
 	s.mux.HandleFunc("POST /api/fetch/forget", s.forgetFetch)
 	s.mux.HandleFunc("POST /larder/fetch", s.startFetch)
 	// The HuggingFace token. Gated repos tie licence acceptance to an

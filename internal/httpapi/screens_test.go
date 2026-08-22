@@ -579,3 +579,24 @@ func TestCardsNameAModelWithNoAliases(t *testing.T) {
 		t.Error("no callable names on the cards at all")
 	}
 }
+
+// The job's own output has to be reachable. Without it, diagnosing a slow
+// download means polling byte counts from outside Sous - which is exactly what
+// a 29 GiB transfer stalling in bursts forced.
+func TestFetchLogsAreReachable(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := send(t, h, http.MethodGet, "/api/fetch/logs?repo=org/thing", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "lines") {
+		t.Errorf("no lines field: %s", rr.Body.String())
+	}
+}
+
+func TestFetchLogsNeedARepo(t *testing.T) {
+	h := newTestServerWithHub(t)
+	if rr := send(t, h, http.MethodGet, "/api/fetch/logs", "", ""); rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}

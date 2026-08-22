@@ -57,6 +57,10 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
           </td>
           <td class="mono dim">{{if .Detail}}{{.Detail}}{{else}}—{{end}}</td>
           <td class="acts">
+            {{/* THE JOB'S OWN OUTPUT. Diagnosing a slow download used to mean
+                 polling byte counts from outside Sous, because the container
+                 had the answer and nothing exposed it. */}}
+            <a class="btn" href="/api/fetch/logs?repo={{.Repo}}" target="_blank" rel="noopener">Log</a>
             {{if ne (printf "%s" .Phase) "downloading"}}
             <form method="post" action="/larder/fetch/forget" style="display:inline">
               <input type="hidden" name="repo" value="{{.Repo}}">
