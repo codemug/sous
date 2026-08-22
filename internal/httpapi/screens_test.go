@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -395,5 +396,99 @@ func TestLarderExplainsWhyAGatedRepoStillFails(t *testing.T) {
 	}
 	if !strings.Contains(body, "401") {
 		t.Error("the panel does not name the failure an operator will actually see")
+	}
+}
+
+func setAlias(t *testing.T, h http.Handler, id, names string) *httptest.ResponseRecorder {
+	t.Helper()
+	return send(t, h, http.MethodPut, "/api/aliases/"+id, "application/json",
+		`{"aliases":`+names+`}`)
+}
+
+// THE RULE THE FEATURE WAS ASKED FOR, through the API a caller actually uses.
+func TestAliasCollisionIsRefusedOverTheAPI(t *testing.T) {
+	h := newTestServer(t)
+	if rr := setAlias(t, h, "qwen38", `["fast"]`); rr.Code != http.StatusOK {
+		t.Fatalf("first set: %d %s", rr.Code, rr.Body.String())
+	}
+	rr := setAlias(t, h, "qwen36", `["fast"]`)
+	// 409: the request is well-formed, it conflicts with current state.
+	if rr.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409; body %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "qwen38") {
+		t.Errorf("the refusal does not name the holder: %s", rr.Body.String())
+	}
+}
+
+// ALIASES ARE NOT CONFIGURATION. A recipe travels to other nodes and this
+// naming must not travel with it, so it must appear in nothing publishable.
+func TestAliasesAreNotInTheRecipe(t *testing.T) {
+	h := newTestServer(t)
+	if rr := setAlias(t, h, "qwen38", `["housealias"]`); rr.Code != http.StatusOK {
+		t.Fatalf("set: %d %s", rr.Code, rr.Body.String())
+	}
+	for _, path := range []string{"/api/recipes", "/api/recipes/qwen38"} {
+		body := send(t, h, http.MethodGet, path, "", "").Body.String()
+		if strings.Contains(body, "housealias") {
+			t.Errorf("%s carries the alias; it would travel to other nodes", path)
+		}
+	}
+	// It IS on the model page, which is a local view rather than a publishable
+	// artifact - that is where an operator manages it.
+	page := send(t, h, http.MethodGet, "/model/qwen38", "", "").Body.String()
+	if !strings.Contains(page, "housealias") {
+		t.Error("the model page does not show the alias it lets you set")
+	}
+}
+
+// A REDEPLOY IS ROUTINE HERE - changing a flag is an undeploy and a deploy - so
+// aliases keyed to the deployment would take every client calling them down
+// with each config change.
+func TestAliasesSurviveAnUndeploy(t *testing.T) {
+	h, rt := newTestServerWithRuntime(t)
+	if rr := setAlias(t, h, "qwen38", `["sticky"]`); rr.Code != http.StatusOK {
+		t.Fatalf("set: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d", rr.Code)
+	}
+	if rr := post(t, h, "/api/undeploy/qwen38", "", ""); rr.Code >= 400 {
+		t.Fatalf("undeploy: %d", rr.Code)
+	}
+	_ = rt
+
+	body := send(t, h, http.MethodGet, "/api/aliases", "", "").Body.String()
+	if !strings.Contains(body, "sticky") {
+		t.Errorf("the alias did not survive an undeploy: %s", body)
+	}
+}
+
+// Clearing frees the name for another model.
+func TestClearingAnAliasFreesTheName(t *testing.T) {
+	h := newTestServer(t)
+	if rr := setAlias(t, h, "qwen38", `["shared"]`); rr.Code != http.StatusOK {
+		t.Fatal(rr.Body.String())
+	}
+	if rr := setAlias(t, h, "qwen38", `[]`); rr.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := setAlias(t, h, "qwen36", `["shared"]`); rr.Code != http.StatusOK {
+		t.Errorf("a cleared alias stayed reserved: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// End to end: an alias set through the API shows up as a model on the gateway.
+func TestAliasSetOverTheAPIAppearsInV1Models(t *testing.T) {
+	h, _ := newTestServerWithRuntime(t)
+	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
+		t.Fatalf("deploy: %d", rr.Code)
+	}
+	if rr := setAlias(t, h, "qwen38", `["housefast"]`); rr.Code != http.StatusOK {
+		t.Fatalf("set: %d %s", rr.Code, rr.Body.String())
+	}
+	body := send(t, h, http.MethodGet, "/v1/models", "", "").Body.String()
+	if !strings.Contains(body, "housefast") {
+		t.Errorf("/v1/models does not list the alias: %s", body)
 	}
 }

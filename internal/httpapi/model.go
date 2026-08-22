@@ -20,6 +20,11 @@ type modelPage struct {
 	ModelView
 	YAML string
 
+	// Aliases are extra names this model answers to on THIS node. They are not
+	// in the recipe and never appear in the YAML above - that is the point of
+	// them - so they are carried separately.
+	Aliases []string
+
 	Logs   string
 	LogErr string
 }
@@ -79,6 +84,10 @@ func (s *Server) pageModel(w http.ResponseWriter, r *http.Request) {
 			} else {
 				m.LogErr = err.Error()
 			}
+		}
+
+		if s.alias != nil {
+			m.Aliases = s.alias.Of(id)
 		}
 
 		d.Title = rec.ID

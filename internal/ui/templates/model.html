@@ -65,6 +65,34 @@ pre.logs{
 
 <div class="cols">
   <div>
+{{/* ALIASES ARE NOT CONFIGURATION, which is why they are not in the box below
+         and not in the YAML. A recipe travels to other nodes; "on this box, fast
+         means qwen38-dflash2" must not travel with it. They are stored beside the
+         deployments and survive an undeploy, because a redeploy is routine here and
+         dropping every name clients call would be a poor way to change a flag. */}}
+    <section class="box">
+      <h2>Aliases</h2>
+      {{if .Aliases}}
+        <p class="note">Also answers to
+          {{range $i,$a := .Aliases}}{{if $i}}, {{end}}<span class="mono">{{$a}}</span>{{end}}
+          on <span class="mono">/v1/models</span>.</p>
+      {{else}}
+        <p class="note">No aliases. This model is reachable as
+          <span class="mono">{{.Recipe.ID}}</span>{{range .Recipe.ServedAs}} and
+          <span class="mono">{{.}}</span>{{end}}.</p>
+      {{end}}
+      <form method="post" action="/model/{{.Recipe.ID}}/aliases" class="fetchform">
+        <label for="aliases" class="mlabel">Names, separated by commas</label>
+        <input id="aliases" name="aliases" type="text"
+               value="{{range $i,$a := .Aliases}}{{if $i}}, {{end}}{{$a}}{{end}}"
+               placeholder="fast, default"
+               autocomplete="off" spellcheck="false" autocapitalize="off">
+        <button class="btn-primary" type="submit">Save</button>
+      </form>
+      <p class="note dim">Replaces the list; submitting an empty box clears it. A
+      name already reaching another model is refused rather than allowed to shadow
+      it.</p>
+    </section>
     <section class="box">
       <h2>Configuration</h2>
       <dl class="kv">

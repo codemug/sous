@@ -505,3 +505,84 @@ func TestListModelsHidesWhatTheKeyCannotUse(t *testing.T) {
 		t.Errorf("a model the key cannot use was advertised: %s", body)
 	}
 }
+
+// fakeAliases is the operator alias store.
+type fakeAliases map[string][]string
+
+func (f fakeAliases) Of(recipeID string) []string { return f[recipeID] }
+
+// AN ALIAS IS A MODEL AS FAR AS A CLIENT IS CONCERNED. It has to appear in
+// /v1/models or nothing that discovers models will ever ask for it.
+func TestOperatorAliasesAppearInListModels(t *testing.T) {
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen38-dflash2", HostPort: 8000}}}
+	cat := fakeCat{"qwen38-dflash2": {ID: "qwen38-dflash2", ServedAs: []string{"dflash2"},
+		Modality: recipe.ModalityText}}
+	gw := newGW(res, cat, "127.0.0.1")
+	gw.Alias = fakeAliases{"qwen38-dflash2": {"fast", "default"}}
+
+	rr := httptest.NewRecorder()
+	gw.ListModels(rr, httptest.NewRequest("GET", "/v1/models", nil))
+
+	var got struct {
+		Data []struct {
+			ID       string `json:"id"`
+			RecipeID string `json:"recipe_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, d := range got.Data {
+		names[d.ID] = d.RecipeID
+	}
+	// The recipe's own served_as stays listed; the aliases join it.
+	for _, want := range []string{"dflash2", "fast", "default"} {
+		if names[want] != "qwen38-dflash2" {
+			t.Errorf("/v1/models has no %q pointing at qwen38-dflash2; got %v", want, names)
+		}
+	}
+}
+
+// AND CALLING ONE HAS TO ROUTE. The alias reaches the model, and the body is
+// rewritten to the name the engine actually answers to - an alias is a name for
+// callers, never one the engine has to know about.
+func TestCallingAnAliasRoutesAndRewritesToUpstream(t *testing.T) {
+	var seen string
+	srv, port := upstream(t, &seen)
+	defer srv.Close()
+
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen38-dflash2", HostPort: port}}}
+	cat := fakeCat{"qwen38-dflash2": {ID: "qwen38-dflash2", ServedAs: []string{"dflash2"}}}
+	gw := newGW(res, cat, "127.0.0.1")
+	gw.Alias = fakeAliases{"qwen38-dflash2": {"fast"}}
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"fast","messages":[]}`))
+	rr := httptest.NewRecorder()
+	gw.Proxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(seen), &got); err != nil {
+		t.Fatalf("upstream body not JSON: %s", seen)
+	}
+	if got["model"] != "dflash2" {
+		t.Errorf("upstream asked for %v, want dflash2 - the alias was forwarded verbatim", got["model"])
+	}
+}
+
+// A gateway with no alias store is the normal case and must not panic.
+func TestNoAliasStoreIsFine(t *testing.T) {
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: 8000}}}
+	cat := fakeCat{"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}}}
+	gw := newGW(res, cat, "127.0.0.1")
+	gw.Alias = nil
+	rr := httptest.NewRecorder()
+	gw.ListModels(rr, httptest.NewRequest("GET", "/v1/models", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+}

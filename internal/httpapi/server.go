@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"github.com/codemug/sous/internal/alias"
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/gateway"
@@ -24,6 +25,7 @@ type Server struct {
 	mgr   *deploy.Manager
 	cat   *catalog.Catalog
 	keys  *apikey.Manager
+	alias *alias.Manager
 	hf    *hf.Store
 	fetch *fetch.Manager
 	tpl   *template.Template
@@ -58,7 +60,12 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// chosen by name, so a client never has to know which port anything landed
 	// on - and never has to discover a model is still loading by getting a
 	// connection refused.
-	gw := &gateway.Gateway{Res: m, Cat: c, Host: m.BindHost}
+	// Aliases are a LOCAL routing decision, stored beside the deployments
+	// rather than on the recipes - a recipe travels to other nodes and one
+	// node's naming should not travel with it.
+	al := &alias.Manager{Store: m.Store, Cat: c}
+	s.alias = al
+	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, Host: m.BindHost}
 	s.mux.HandleFunc("GET /v1/models", gw.ListModels)
 	for _, p := range []string{
 		"POST /v1/chat/completions",
@@ -104,6 +111,12 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// The HuggingFace token. Gated repos tie licence acceptance to an
 	// ACCOUNT, so accepting an agreement in a browser does not make an
 	// anonymous download work - it still answers 401.
+	// Aliases: extra names a deployed model answers to, kept off the recipe
+	// because a recipe travels to other nodes and this naming should not.
+	s.mux.HandleFunc("GET /api/aliases", s.getAliases)
+	s.mux.HandleFunc("PUT /api/aliases/{id}", s.setAliases)
+	// Forms can only GET and POST.
+	s.mux.HandleFunc("POST /model/{id}/aliases", s.setAliases)
 	s.mux.HandleFunc("GET /api/hf-token", s.getHFToken)
 	s.mux.HandleFunc("PUT /api/hf-token", s.setHFToken)
 	s.mux.HandleFunc("DELETE /api/hf-token", s.clearHFToken)

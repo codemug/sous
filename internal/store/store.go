@@ -34,10 +34,20 @@ const (
 	// Without them an upgrade cannot tell a recipe it wrote itself from one an
 	// operator edited, and so can only ever refuse to touch either.
 	KindSeedMark Kind = "seedmarks"
+	// Aliases are extra names a DEPLOYED model answers to. They are stored here
+	// rather than on the recipe on purpose: a recipe is published to git and is
+	// meant to be portable between nodes, while an alias is a local routing
+	// decision - "on this box, `fast` means qwen38-dflash2" - that would be
+	// wrong to carry anywhere else.
+	//
+	// Keyed by recipe id rather than folded into the deployment record, so an
+	// undeploy and redeploy does not silently drop every name clients are
+	// calling.
+	KindAlias Kind = "aliases"
 )
 
 var allKinds = []Kind{KindRecipe, KindObservation, KindDeployment,
-	KindExport, KindSource, KindOverlay, KindSeedMark, KindAPIKey}
+	KindExport, KindSource, KindOverlay, KindSeedMark, KindAPIKey, KindAlias}
 
 type Store struct{ root string }
 

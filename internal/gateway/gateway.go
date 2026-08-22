@@ -63,10 +63,17 @@ type Catalog interface {
 	Get(id string) (recipe.Recipe, error)
 }
 
+// Aliases supplies the extra names a deployed model answers to. Optional; nil
+// means a model is reachable only by its recipe id and its served_as.
+type Aliases interface {
+	Of(recipeID string) []string
+}
+
 type Gateway struct {
-	Res  Resolver
-	Cat  Catalog
-	Host string
+	Res   Resolver
+	Cat   Catalog
+	Alias Aliases
+	Host  string
 
 	// Now is injectable so tests do not sleep.
 	Now func() time.Time
@@ -108,6 +115,14 @@ func (g *Gateway) Routes(ctx context.Context) ([]route, error) {
 			} else {
 				r.Upstream = rec.Model
 			}
+		}
+		// Operator aliases come AFTER the recipe's own names, and Upstream is
+		// left alone. Upstream is what the model actually answers to, so a
+		// request arriving under an alias is rewritten to the served_as before
+		// it is forwarded - an alias is a name for callers, never a name the
+		// engine has to know about.
+		if g.Alias != nil {
+			r.Aliases = append(r.Aliases, g.Alias.Of(d.RecipeID)...)
 		}
 		out = append(out, r)
 	}
