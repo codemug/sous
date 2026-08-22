@@ -121,6 +121,10 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	s.mux.HandleFunc("PUT /api/hf-token", s.setHFToken)
 	s.mux.HandleFunc("DELETE /api/hf-token", s.clearHFToken)
 	// Forms can only GET and POST, so the browser paths are their own.
+	s.mux.HandleFunc("POST /admin/hf-token", s.setHFToken)
+	s.mux.HandleFunc("POST /admin/hf-token/clear", s.clearHFToken)
+	// The token lived on the Larder page in 0.17.0. Anything bookmarked or
+	// scripted against that path keeps working rather than 404ing.
 	s.mux.HandleFunc("POST /larder/hf-token", s.setHFToken)
 	s.mux.HandleFunc("POST /larder/hf-token/clear", s.clearHFToken)
 	s.mux.HandleFunc("POST /larder/fetch/forget", s.forgetFetch)
@@ -151,6 +155,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// already shows with more context. Two lists of the same objects is how the
 	// pool bar and the cards came to disagree in the first place.
 	s.mux.HandleFunc("GET /deployments", redirectTo("/"))
+	s.mux.HandleFunc("GET /admin", s.pageAdmin)
 	s.mux.HandleFunc("GET /larder", s.pageLarder)
 	// The Node dashboard is the landing page: the first question on opening
 	// this panel is "what is running and is it healthy", not "what could I

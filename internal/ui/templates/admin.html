@@ -1,0 +1,61 @@
+{{define "admin"}}{{template "head" .}}
+
+<h1>Admin</h1>
+<p class="lede">Settings that belong to this node rather than to any model.
+Nothing here is in a recipe or in the fleet repo — these are decisions about
+<em>this box</em>, and they stay on it.</p>
+
+{{/* THE TOKEN IS A NODE SETTING, not a larder one. It was on the Larder page
+     first because that is where a failed gated download is discovered, but
+     where a thing is DIAGNOSED and where it is CONFIGURED are different
+     questions, and the second one belongs here. */}}
+<div class="panel">
+  <h2>HuggingFace token</h2>
+  {{if .HF.Configured}}
+    <p class="note"><span class="chip is-ready">installed</span>
+    <span class="mono">{{.HF.Hint}}</span> — gated repos you have accepted the
+    agreement for will download.</p>
+  {{else}}
+    <p class="note"><span class="chip is-idle">not set</span> Public weights
+    download fine. A gated repo answers <span class="mono">401</span> even after
+    you have accepted its agreement, because acceptance is tied to your account
+    rather than to the repo.</p>
+  {{end}}
+
+  <form method="post" action="/admin/hf-token" class="fetchform">
+    <label for="hf" class="mlabel">{{if .HF.Configured}}Replace with{{else}}User access token{{end}}</label>
+    <input id="hf" name="token" type="password" required placeholder="hf_…"
+           autocomplete="off" spellcheck="false" autocapitalize="off">
+    <button class="btn-primary" type="submit">Save</button>
+  </form>
+
+  <p class="note dim">Create one at
+  <span class="mono">huggingface.co/settings/tokens</span> with read access. It
+  is stored on this node only, at <span class="mono">0600</span>, and is never
+  written into a recipe — recipes are published to git.</p>
+
+  {{/* No reveal, deliberately: Sous did not mint this and you already have it
+       wherever you copied it from, so showing it again is all risk. */}}
+  {{if .HF.Configured}}
+    {{template "confirm-typed" dict
+        "Action" "/admin/hf-token/clear"
+        "ID" "remove"
+        "Label" "Remove token"
+        "Cost" "Public weights keep downloading. Gated repos start failing with 401 on the next fetch, and a deploy that has to pull its own weights fails the same way."}}
+  {{end}}
+</div>
+
+{{/* A CHANGE HERE DOES NOT REACH A RUNNING CONTAINER. The token is injected at
+     container-creation time, so anything already up keeps the environment it
+     started with. Harmless for a model whose weights are cached; the whole
+     point for one that still has to pull them. */}}
+<div class="panel">
+  <h2>When a change takes effect</h2>
+  <p class="note">The token is handed to a container when it is created, so
+  models already running keep the environment they started with. That does not
+  matter for weights that are already on disk — but if you set a token so a
+  gated model can download, deploy that model <em>after</em> saving it here,
+  not before.</p>
+</div>
+
+{{template "foot" .}}{{end}}

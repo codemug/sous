@@ -386,16 +386,70 @@ func TestHFTokenCanBeCleared(t *testing.T) {
 	}
 }
 
-// The panel has to say what a missing token actually costs, because "401" on a
-// repo whose agreement you accepted in a browser is genuinely confusing.
-func TestLarderExplainsWhyAGatedRepoStillFails(t *testing.T) {
+// THE SETTING LIVES ON ADMIN, and the form has to be there.
+func TestAdminPageCarriesTheTokenForm(t *testing.T) {
 	h := newTestServerWithHub(t)
-	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
+	body := send(t, h, http.MethodGet, "/admin", "", "").Body.String()
 	if !strings.Contains(body, "HuggingFace token") {
-		t.Fatal("no token panel on the larder page")
+		t.Fatal("no token section on the admin page")
+	}
+	if !strings.Contains(body, `name="token"`) {
+		t.Error("the admin page shows the token state but offers no way to set it")
 	}
 	if !strings.Contains(body, "401") {
-		t.Error("the panel does not name the failure an operator will actually see")
+		t.Error("the page does not name the failure an operator will actually see")
+	}
+}
+
+// Admin has to be reachable without knowing the URL.
+func TestAdminIsInTheNav(t *testing.T) {
+	h := newTestServerWithHub(t)
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+	if !strings.Contains(body, `href="/admin"`) {
+		t.Error("no Admin entry in the nav")
+	}
+}
+
+// A GATED 401 IS DISCOVERED ON THE LARDER, so that page must not be a dead end
+// just because the setting moved. It says what is missing and where to fix it.
+func TestLarderPointsAtAdminWhenNoTokenIsSet(t *testing.T) {
+	h := newTestServerWithHub(t)
+	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
+	if !strings.Contains(body, "401") {
+		t.Error("the larder does not warn that gated repos will fail")
+	}
+	if !strings.Contains(body, `href="/admin"`) {
+		t.Error("the larder warns about the token but does not say where to set it")
+	}
+	// The form itself belongs on Admin, not here.
+	if strings.Contains(body, `name="token"`) {
+		t.Error("the token form is still on the larder page")
+	}
+}
+
+// The warning is about a MISSING token, so it must go away once one is set -
+// otherwise it is noise that trains people to ignore warnings.
+func TestLarderWarningDisappearsOnceTheTokenIsSet(t *testing.T) {
+	h := newTestServerWithHub(t)
+	installToken(t, h)
+	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
+	if strings.Contains(body, "No HuggingFace token") {
+		t.Error("the larder still warns about a token that is installed")
+	}
+}
+
+// The 0.17.0 path stays working: it was in a release, and something may be
+// scripted against it.
+func TestTheOldLarderTokenPathStillWorks(t *testing.T) {
+	h := newTestServerWithHub(t)
+	rr := post(t, h, "/larder/hf-token", "application/x-www-form-urlencoded",
+		"token="+testHFToken)
+	if rr.Code >= 400 {
+		t.Fatalf("the old path returned %d: %s", rr.Code, rr.Body.String())
+	}
+	body := send(t, h, http.MethodGet, "/api/hf-token", "", "").Body.String()
+	if !strings.Contains(body, `"configured":true`) {
+		t.Error("the old path did not actually store the token")
 	}
 }
 

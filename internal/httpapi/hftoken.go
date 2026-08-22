@@ -24,6 +24,18 @@ func (s *Server) hfView() hfView {
 	return hfView{Configured: s.hf.Configured(), Hint: s.hf.Hint()}
 }
 
+// pageAdmin renders the node's own settings.
+//
+// A SECTION RATHER THAN A PANEL ON ANOTHER PAGE. The token first lived on the
+// Larder because that is where a failed gated download is discovered, but where
+// something is diagnosed and where it is configured are different questions.
+func (s *Server) pageAdmin(w http.ResponseWriter, r *http.Request) {
+	s.page(w, r, "admin", "Admin", func(d *pageData) error {
+		d.HF = s.hfView()
+		return nil
+	})
+}
+
 // getHFToken reports whether a token is installed, never what it is.
 func (s *Server) getHFToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.hfView())
@@ -58,14 +70,14 @@ func (s *Server) setHFToken(w http.ResponseWriter, r *http.Request) {
 		// hf_ prefix, embedded whitespace - because the alternative is finding
 		// out as an opaque 401 inside a download container ten minutes later.
 		if wantsHTML(r) {
-			s.redirect(w, r, "/larder", err.Error(), true)
+			s.redirect(w, r, "/admin", err.Error(), true)
 			return
 		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if wantsHTML(r) {
-		s.redirect(w, r, "/larder", "HuggingFace token saved as "+s.hf.Hint(), false)
+		s.redirect(w, r, "/admin", "HuggingFace token saved as "+s.hf.Hint(), false)
 		return
 	}
 	writeJSON(w, http.StatusOK, s.hfView())
@@ -85,7 +97,7 @@ func (s *Server) clearHFToken(w http.ResponseWriter, r *http.Request) {
 		// Says what STOPS working rather than just confirming the delete.
 		// Public weights keep downloading; gated ones start failing at 401,
 		// and that is the whole difference.
-		s.redirect(w, r, "/larder",
+		s.redirect(w, r, "/admin",
 			"HuggingFace token removed - gated repos will now fail with 401", false)
 		return
 	}
