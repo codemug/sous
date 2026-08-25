@@ -69,11 +69,24 @@ type Aliases interface {
 	Of(recipeID string) []string
 }
 
+// RequestLog records every request reaching /v1/chat/completions - who sent
+// it and exactly what they sent - for later audit. Optional; nil means
+// nothing is logged.
+//
+// SENDER AND BODY ONLY, no destination or outcome. Which container answered
+// and whether it succeeded are decisions this package already makes and logs
+// nowhere else either; the audit trail this exists for is "who asked for
+// what", not a general request log.
+type RequestLog interface {
+	Log(sender, remoteAddr, model string, body []byte)
+}
+
 type Gateway struct {
-	Res   Resolver
-	Cat   Catalog
-	Alias Aliases
-	Host  string
+	Res    Resolver
+	Cat    Catalog
+	Alias  Aliases
+	ReqLog RequestLog
+	Host   string
 
 	// Now is injectable so tests do not sleep.
 	Now func() time.Time
@@ -275,6 +288,20 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 		// calling FormValue on the drained original silently finds nothing, and
 		// the caller gets told it named no model when it named one correctly.
 		name = multipartModel(r, body)
+	}
+
+	// LOGGED ON RECEIPT, before resolve/scope/phase decide anything - a
+	// request that names a model that does not exist, or one a scoped key
+	// cannot reach, was still received and is still the thing an audit trail
+	// needs to answer "who asked for what". Scoped to exactly one path: this
+	// is an audit log for chat completions, not a general request log for
+	// every OpenAI-shaped route this gateway proxies.
+	if g.ReqLog != nil && r.URL.Path == "/v1/chat/completions" {
+		sender := "operator"
+		if k, ok := auth.FromContext(r.Context()); ok {
+			sender = k.Name
+		}
+		g.ReqLog.Log(sender, r.RemoteAddr, name, body)
 	}
 
 	rt, err := g.resolve(r.Context(), name)

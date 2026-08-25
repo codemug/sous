@@ -36,6 +36,7 @@ type pageData struct {
 	Models      []ModelView
 	Filters     []FilterTab
 	HF          hfView
+	ReqLog      reqLogView
 	Pool        *PoolBar
 	Plan        *PlanPage
 	Keys        *keysPage

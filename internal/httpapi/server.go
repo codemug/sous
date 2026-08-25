@@ -11,6 +11,7 @@ import (
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/gateway"
 	"github.com/codemug/sous/internal/hf"
+	"github.com/codemug/sous/internal/reqlog"
 	"html/template"
 	"net/http"
 
@@ -26,9 +27,11 @@ type Server struct {
 	cat   *catalog.Catalog
 	keys  *apikey.Manager
 	alias *alias.Manager
-	hf    *hf.Store
-	fetch *fetch.Manager
-	tpl   *template.Template
+	hf      *hf.Store
+	fetch   *fetch.Manager
+	reqLogW *reqlog.Writer
+	reqLogR *reqlog.RetentionStore
+	tpl     *template.Template
 
 	pool float64
 	// hubDir is the HuggingFace cache under the model directory. The larder
@@ -48,12 +51,14 @@ type Server struct {
 }
 
 func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.Manager,
-	hfs *hf.Store, poolGiB float64, hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
+	hfs *hf.Store, rl *reqlog.Writer, rs *reqlog.RetentionStore,
+	poolGiB float64, hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{mgr: m, cat: c, keys: keys, fetch: fx, hf: hfs, tpl: tpl, pool: poolGiB, hubDir: hubDir, guard: guard,
+	s := &Server{mgr: m, cat: c, keys: keys, fetch: fx, hf: hfs, reqLogW: rl, reqLogR: rs, tpl: tpl,
+		pool: poolGiB, hubDir: hubDir, guard: guard,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	// The OpenAI-compatible surface. Every deployed model behind one endpoint,
@@ -65,7 +70,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// node's naming should not travel with it.
 	al := &alias.Manager{Store: m.Store, Cat: c}
 	s.alias = al
-	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, Host: m.BindHost}
+	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, ReqLog: reqLog(rl), Host: m.BindHost}
 	s.mux.HandleFunc("GET /v1/models", gw.ListModels)
 	for _, p := range []string{
 		"POST /v1/chat/completions",
@@ -119,6 +124,10 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// Forms can only GET and POST.
 	s.mux.HandleFunc("POST /model/{id}/aliases", s.setAliases)
 	s.mux.HandleFunc("GET /api/hf-token", s.getHFToken)
+	// Request log retention: how many days of chat-completion audit
+	// entries this node keeps before periodic cleanup removes them.
+	s.mux.HandleFunc("GET /api/reqlog", s.getReqLog)
+	s.mux.HandleFunc("POST /admin/reqlog-retention", s.setRetention)
 	s.mux.HandleFunc("PUT /api/hf-token", s.setHFToken)
 	s.mux.HandleFunc("DELETE /api/hf-token", s.clearHFToken)
 	// Forms can only GET and POST, so the browser paths are their own.

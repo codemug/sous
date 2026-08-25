@@ -57,4 +57,44 @@ Nothing here is in a recipe or in the fleet repo — these are decisions about
   not before.</p>
 </div>
 
+{{/* PLAINTEXT ON DISK, SAID PLAINLY. This is the one panel on this page whose
+     setting controls how long something sensitive sits around rather than
+     how a download behaves - the copy has to carry that weight rather than
+     read like every other retention knob. */}}
+<div class="panel">
+  <h2>Request log</h2>
+  <p class="note">Every <span class="mono">/v1/chat/completions</span> request
+  is written to this node's disk — who sent it and the request exactly as
+  received, prompts included. It is an audit trail, not a cache: there is no
+  redaction and no size cap, only the retention window below deciding how long
+  anything lasts.</p>
+
+  <form method="post" action="/admin/reqlog-retention" class="fetchform">
+    <label for="retention" class="mlabel">Keep for, in days</label>
+    <input id="retention" name="days" type="number" inputmode="numeric" min="0"
+           value="{{.ReqLog.RetentionDays}}" required
+           style="width:6rem;padding:.4rem .5rem;border:1px solid var(--rule-firm);border-radius:var(--radius-sm);background:var(--paper);color:var(--ink);font-size:var(--text-xs)">
+    <button class="btn-primary" type="submit">Save</button>
+  </form>
+  <p class="note dim">Checked hourly; a file is removed only once every request
+  in it is older than this window. <span class="mono">0</span> keeps just
+  today's traffic. Today's file is never removed by its own day's cleanup, so
+  the window is never emptied out from under an in-flight write.</p>
+
+  {{if .ReqLog.Files}}
+  <table class="mono" style="width:100%;margin-top:var(--space-sm)">
+    <thead><tr><th style="text-align:left">Day</th><th style="text-align:right">Size</th></tr></thead>
+    <tbody>
+      {{range .ReqLog.Files}}
+      <tr><td>{{.Day}}</td><td style="text-align:right">{{size .Bytes}}</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  <p class="note dim">{{len .ReqLog.Files}} day(s) on disk,
+  {{size .ReqLog.TotalBytes}} total.</p>
+  {{else}}
+  <p class="note dim">Nothing logged yet.</p>
+  {{end}}
+</div>
+
 {{template "foot" .}}{{end}}

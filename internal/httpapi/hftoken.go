@@ -32,6 +32,7 @@ func (s *Server) hfView() hfView {
 func (s *Server) pageAdmin(w http.ResponseWriter, r *http.Request) {
 	s.page(w, r, "admin", "Admin", func(d *pageData) error {
 		d.HF = s.hfView()
+		d.ReqLog = s.reqLogView()
 		return nil
 	})
 }

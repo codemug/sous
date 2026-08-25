@@ -6,6 +6,7 @@ import (
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/hf"
+	"github.com/codemug/sous/internal/reqlog"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,14 +111,24 @@ func newServerWithHub(t *testing.T, hub string) http.Handler {
 // Everything else runs with auth off so the handler tests stay about handlers.
 func buildServerAuth(t *testing.T, guard auth.Config) http.Handler {
 	t.Helper()
-	return buildServerWith(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, guard)
+	h, _ := buildServerWith(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, guard)
+	return h
 }
 
 func buildServer(t *testing.T, hub string, rt *fakeRuntime) http.Handler {
-	return buildServerWith(t, hub, rt, auth.Config{Disabled: true})
+	h, _ := buildServerWith(t, hub, rt, auth.Config{Disabled: true})
+	return h
 }
 
-func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) http.Handler {
+// newTestServerWithReqLogDir hands back the request-log directory as well, so
+// a test can read the audit trail directly rather than only through the
+// summary the admin page shows.
+func newTestServerWithReqLogDir(t *testing.T) (http.Handler, string) {
+	t.Helper()
+	return buildServerWith(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true})
+}
+
+func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string) {
 	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
@@ -147,11 +158,21 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	}
 	m.Secrets = hfs
 	fx.Secrets = hfs
-	h, err := New(m, c, keys, fx, hfs, 121.6, hub, t.TempDir(), guard)
+
+	// A real writer and retention store on a temp dir, matching hfs above -
+	// the tests that matter here include proving a request actually lands on
+	// disk and that cleanup respects the configured window.
+	reqLogDir := t.TempDir()
+	reqLogW := &reqlog.Writer{Dir: reqLogDir}
+	reqLogR, err := reqlog.NewRetentionStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h
+	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, reqLogDir
 }
 
 func TestListRecipesReturnsSeeds(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/hf"
+	"github.com/codemug/sous/internal/reqlog"
 	"log"
 	"net/http"
 	"os"
@@ -138,9 +139,30 @@ func main() {
 	fx := &fetch.Manager{Runtime: rt, ModelDir: cfg.ModelDir, Image: cfg.FetchImage,
 		Secrets: hfs}
 
+	// Audit log of every chat-completion request: sender and payload,
+	// append-only, one file per day under DataDir/reqlogs.
+	reqLogW := &reqlog.Writer{Dir: filepath.Join(cfg.DataDir, "reqlogs")}
+	reqLogR, err := reqlog.NewRetentionStore(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("reqlog: %v", err)
+	}
+	// Cleanup on an hourly tick rather than daily: a retention window an
+	// operator just narrowed from the dashboard should take effect within the
+	// hour, not sit for up to a day before anything acts on it. Deleting a
+	// handful of already-expired daily files every hour costs nothing.
+	go func() {
+		for range time.Tick(time.Hour) {
+			if n, err := reqLogW.Cleanup(reqLogR.Days(), time.Now()); err != nil {
+				log.Printf("reqlog: cleanup: %v", err)
+			} else if n > 0 {
+				log.Printf("reqlog: cleanup removed %d file(s) past the retention window", n)
+			}
+		}
+	}()
+
 	// The larder scans MODEL_DIR/hub, which is where huggingface_hub places
 	// snapshots under the HF_HOME bind mount.
-	h, err := httpapi.New(mgr, cat, keys, fx, hfs, mem.TotalGiB,
+	h, err := httpapi.New(mgr, cat, keys, fx, hfs, reqLogW, reqLogR, mem.TotalGiB,
 		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard)
 	if err != nil {
 		log.Fatalf("http: %v", err)

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codemug/sous/internal/auth"
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/recipe"
@@ -584,5 +585,127 @@ func TestNoAliasStoreIsFine(t *testing.T) {
 	gw.ListModels(rr, httptest.NewRequest("GET", "/v1/models", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
+	}
+}
+
+// fakeReqLog captures what the gateway would have logged.
+type fakeReqLog struct {
+	sender, remoteAddr, model string
+	body                      []byte
+	calls                     int
+}
+
+func (f *fakeReqLog) Log(sender, remoteAddr, model string, body []byte) {
+	f.sender, f.remoteAddr, f.model = sender, remoteAddr, model
+	f.body = body
+	f.calls++
+}
+
+// THE AUDIT LOG SEES WHAT WAS ACTUALLY SENT, verbatim, and who sent it.
+func TestChatCompletionsAreLoggedWithSenderAndBody(t *testing.T) {
+	srv, port := upstream(t, nil)
+	defer srv.Close()
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen38", HostPort: port}}}
+	cat := fakeCat{"qwen38": {ID: "qwen38"}}
+	gw := newGW(res, cat, "127.0.0.1")
+	rl := &fakeReqLog{}
+	gw.ReqLog = rl
+
+	body := `{"model":"qwen38","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.RemoteAddr = "10.0.0.7:5555"
+	req = req.WithContext(auth.WithKeyForTest(req.Context(), auth.KeyInfo{Name: "voice demo"}))
+	gw.Proxy(httptest.NewRecorder(), req)
+
+	if rl.calls != 1 {
+		t.Fatalf("Log called %d times, want 1", rl.calls)
+	}
+	if rl.sender != "voice demo" {
+		t.Errorf("sender = %q", rl.sender)
+	}
+	if rl.remoteAddr != "10.0.0.7:5555" {
+		t.Errorf("remoteAddr = %q", rl.remoteAddr)
+	}
+	if string(rl.body) != body {
+		t.Errorf("body = %s, want %s", rl.body, body)
+	}
+}
+
+// No key in context means the operator credential authenticated the request,
+// not that nobody did - the log has to say something attributable, not blank.
+func TestUnscopedCallerLogsAsOperator(t *testing.T) {
+	srv, port := upstream(t, nil)
+	defer srv.Close()
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen38", HostPort: port}}}
+	cat := fakeCat{"qwen38": {ID: "qwen38"}}
+	gw := newGW(res, cat, "127.0.0.1")
+	rl := &fakeReqLog{}
+	gw.ReqLog = rl
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"qwen38","messages":[]}`))
+	gw.Proxy(httptest.NewRecorder(), req)
+	if rl.sender != "operator" {
+		t.Errorf("sender = %q, want operator", rl.sender)
+	}
+}
+
+// SCOPED TO CHAT COMPLETIONS ONLY. This gateway proxies embeddings, audio and
+// more through the SAME Proxy function; the audit log asked for is
+// specifically for chat completions and must not silently capture the rest.
+func TestOtherProxiedPathsAreNotLogged(t *testing.T) {
+	srv, port := upstream(t, nil)
+	defer srv.Close()
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "asr", HostPort: port}}}
+	cat := fakeCat{"asr": {ID: "asr"}}
+	gw := newGW(res, cat, "127.0.0.1")
+	rl := &fakeReqLog{}
+	gw.ReqLog = rl
+
+	req := httptest.NewRequest("POST", "/v1/audio/transcriptions",
+		strings.NewReader(`{"model":"asr"}`))
+	gw.Proxy(httptest.NewRecorder(), req)
+	if rl.calls != 0 {
+		t.Errorf("Log called %d times for a non-chat-completions path", rl.calls)
+	}
+}
+
+// A gateway with no logger configured is the normal case and must not panic.
+func TestNoReqLogIsFine(t *testing.T) {
+	srv, port := upstream(t, nil)
+	defer srv.Close()
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen38", HostPort: port}}}
+	cat := fakeCat{"qwen38": {ID: "qwen38"}}
+	gw := newGW(res, cat, "127.0.0.1")
+	gw.ReqLog = nil
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"qwen38","messages":[]}`))
+	rr := httptest.NewRecorder()
+	gw.Proxy(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+}
+
+// LOGGED EVEN WHEN THE REQUEST IS REFUSED - a scoped key hitting a model it
+// cannot reach still asked, and the audit trail is about what was asked, not
+// only what succeeded.
+func TestRefusedRequestsAreStillLogged(t *testing.T) {
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "qwen38", HostPort: 9}}}
+	cat := fakeCat{"qwen38": {ID: "qwen38"}}
+	gw := newGW(res, cat, "127.0.0.1")
+	rl := &fakeReqLog{}
+	gw.ReqLog = rl
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"does-not-exist","messages":[]}`))
+	rr := httptest.NewRecorder()
+	gw.Proxy(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rr.Code)
+	}
+	if rl.calls != 1 {
+		t.Errorf("Log called %d times for a refused request, want 1", rl.calls)
 	}
 }
