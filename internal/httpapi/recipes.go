@@ -216,9 +216,10 @@ func (s *Server) deleteRecipe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
-	// Typed, because a recipe carries measurements taken on this node - load
-	// times, KV per token, the attention backend actually chosen - and none of
-	// it is recoverable from the image.
+	// Confirmed through the two-click drawer, because a recipe carries
+	// measurements taken on this node - load times, KV per token, the
+	// attention backend actually chosen - and none of it is recoverable from
+	// the image.
 	if wantsHTML(r) && !s.requireConfirm(w, r, id, "/model/"+id) {
 		return
 	}

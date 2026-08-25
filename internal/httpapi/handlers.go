@@ -96,10 +96,10 @@ func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TYPED, because this throws away tens of gigabytes that take twenty
+	// CONFIRMED, because this throws away tens of gigabytes that take twenty
 	// minutes to fetch again - and unlike a stopped model, nothing brings it
-	// back but the network. The repo id is what has to be typed, so the
-	// confirmation names the exact thing going.
+	// back but the network. The repo id names the exact thing going in the
+	// drawer text, even though it is a click rather than a typed match now.
 	if wantsHTML(r) && !s.requireConfirm(w, r, repo, "/larder") {
 		return
 	}

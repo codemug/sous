@@ -8,10 +8,10 @@ import (
 
 const form = "application/x-www-form-urlencoded"
 
-// A form post can arrive from anywhere, so the typed confirmation is checked on
-// the server. Disabling the button until the text matches is a courtesy to
-// whoever is typing, not a control.
-func TestDestructiveFormPostsRequireTheTypedName(t *testing.T) {
+// A form post can arrive from anywhere, so the confirmation is checked on the
+// server. The button posting confirm=yes is a courtesy to whoever is
+// clicking, not the control itself.
+func TestDestructiveFormPostsRequireConfirmation(t *testing.T) {
 	h := newTestServer(t)
 
 	// No confirm at all.
@@ -24,19 +24,19 @@ func TestDestructiveFormPostsRequireTheTypedName(t *testing.T) {
 		t.Fatal("the recipe went anyway")
 	}
 
-	// Wrong confirm.
+	// Anything other than the sentinel is a refusal, not just an empty field.
 	rr = post(t, h, "/model/qwen38/delete", form, "confirm=something-else")
 	if rr.Code == http.StatusOK || rr.Code == http.StatusNoContent {
-		t.Error("a mismatched confirmation was accepted")
+		t.Error("an arbitrary confirm value was accepted")
 	}
 	if got := ids(t, h); !contains(got, "qwen38") {
-		t.Fatal("the recipe went on a mismatched confirmation")
+		t.Fatal("the recipe went on an arbitrary confirm value")
 	}
 }
 
 func TestCorrectConfirmationGoesThrough(t *testing.T) {
 	h := newTestServer(t)
-	rr := post(t, h, "/model/qwen38/delete", form, "confirm=qwen38")
+	rr := post(t, h, "/model/qwen38/delete", form, "confirm=yes")
 	if rr.Code >= 400 {
 		t.Fatalf("a correct confirmation was refused: %d %s", rr.Code, rr.Body.String())
 	}
@@ -45,24 +45,34 @@ func TestCorrectConfirmationGoesThrough(t *testing.T) {
 	}
 }
 
-// Confirmation is a BROWSER control. A script holding the admin token and
-// calling the API deliberately is a different act, and making it type a name
-// into JSON is theatre rather than safety.
-func TestAPICallersAreNotAskedToType(t *testing.T) {
+// The sentinel is case-insensitive, matching how the rest of the server
+// compares tokens it did not generate itself.
+func TestConfirmationIsCaseInsensitive(t *testing.T) {
 	h := newTestServer(t)
-	rr := send(t, h, http.MethodDelete, "/api/recipes/qwen38", "", "")
+	rr := post(t, h, "/model/qwen38/delete", form, "confirm=YES")
 	if rr.Code >= 400 {
-		t.Errorf("an API delete was refused for want of a typed confirmation: %d", rr.Code)
+		t.Fatalf("YES was refused: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
-// The refusal has to say what to type, or it is a dead end.
-func TestRefusalSaysWhatToType(t *testing.T) {
+// Confirmation is a BROWSER control. A script holding the admin token and
+// calling the API deliberately is a different act, and making it post a
+// sentinel into JSON is theatre rather than safety.
+func TestAPICallersAreNotAskedToConfirm(t *testing.T) {
+	h := newTestServer(t)
+	rr := send(t, h, http.MethodDelete, "/api/recipes/qwen38", "", "")
+	if rr.Code >= 400 {
+		t.Errorf("an API delete was refused for want of confirmation: %d", rr.Code)
+	}
+}
+
+// The refusal has to name what it is refusing, or it is a dead end.
+func TestRefusalNamesTheTarget(t *testing.T) {
 	h := newTestServer(t)
 	rr := post(t, h, "/model/qwen38/delete", form, "")
 	loc := rr.Header().Get("Location")
 	if !strings.Contains(loc, "qwen38") && !strings.Contains(rr.Body.String(), "qwen38") {
-		t.Errorf("the refusal does not name what to type: %q %s", loc, rr.Body.String())
+		t.Errorf("the refusal does not name the target: %q %s", loc, rr.Body.String())
 	}
 }
 

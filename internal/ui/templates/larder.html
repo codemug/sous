@@ -108,9 +108,8 @@ repo, the disk holds what landed. On this fleet that distinction was worth 206 G
          guard anyway, and a protected one is the rollback path - both would be
          a button that exists to say no. */}}
     {{if eq (printf "%s" .State) "stale"}}
-    {{template "confirm-typed" dict
+    {{template "confirm-button" dict
         "Action" "/api/larder/delete"
-        "ID" .Repo
         "Label" "Delete weights"
         "Cost" (printf "This frees %s and the only way back is the network. No download rate is recorded here, so how long a re-fetch would take is not something this page can honestly tell you." (size .Bytes))
         "Wrap" "card-danger"

@@ -164,9 +164,8 @@ pre.logs{
          configuration that could restart the model, and this was the last
          destructive path in the UI still reachable in one click. It now uses
          the same typed confirmation as the other three. */}}
-    {{template "confirm-typed" dict
+    {{template "confirm-button" dict
         "Action" (printf "/model/%s/delete?force=true" .Recipe.ID)
-        "ID" .Recipe.ID
         "Label" "Delete this recipe"
         "Cost" "The recipe goes with the container: the model, image, flags and the reasoning behind them. Nothing here can restart it afterwards, and re-importing is the only way back."}}
   </div>

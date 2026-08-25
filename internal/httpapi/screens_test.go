@@ -163,7 +163,7 @@ func TestModelsPageIsCalledModels(t *testing.T) {
 // THE MODEL PAGE'S DELETE WAS ALREADY BROKEN, not merely unsafe. Its form
 // posted a `force` checkbox and no `confirm` field at all, while recipes.go
 // guards the route with requireConfirm - so every browser delete from this page
-// bounced back with "type <id> to confirm this" and nothing was ever removed.
+// bounced back with "not confirmed" and nothing was ever removed.
 //
 // Converting it to the shared partial fixes the path and closes the gap in the
 // same change.
@@ -171,7 +171,7 @@ func TestModelPageDeleteActuallyDeletes(t *testing.T) {
 	h := newTestServer(t)
 
 	form := "application/x-www-form-urlencoded"
-	if rr := post(t, h, "/model/qwen38/delete?force=true", form, "confirm=qwen38"); rr.Code >= 400 {
+	if rr := post(t, h, "/model/qwen38/delete?force=true", form, "confirm=yes"); rr.Code >= 400 {
 		t.Fatalf("delete returned %d: %s", rr.Code, rr.Body.String())
 	}
 	// Asserted against the listing, not the drill-down: an unknown recipe id
@@ -182,40 +182,51 @@ func TestModelPageDeleteActuallyDeletes(t *testing.T) {
 	}
 }
 
-// A delete WITHOUT the typed confirmation must still be refused, or the partial
-// is decoration.
-func TestModelPageDeleteRefusesWithoutTheTypedText(t *testing.T) {
+// A delete WITHOUT the confirmation must still be refused, or the button is
+// decoration - the field can arrive from anywhere on a raw POST, typed name or
+// fixed sentinel makes no difference to that requirement.
+func TestModelPageDeleteRefusesWithoutConfirmation(t *testing.T) {
 	h := newTestServer(t)
 	form := "application/x-www-form-urlencoded"
 	post(t, h, "/model/qwen38/delete?force=true", form, "confirm=wrong")
 	if rr := send(t, h, http.MethodGet, "/model/qwen38", "", ""); rr.Code != http.StatusOK {
-		t.Error("a recipe was deleted despite a mismatched confirmation")
+		t.Error("a recipe was deleted despite an unconfirmed request")
 	}
 }
 
 // One partial, one field name, four routes. Each hand-rolled copy is a chance
-// for the route and the form to disagree about what is being typed - and they
-// already had: larder typed the repo, keys the key id, the model page nothing.
+// for the route and the form to disagree about what confirms it - and they
+// already had: larder typed the repo, keys the key id, the model page nothing,
+// and the HuggingFace token's clear route did not check at all.
 func TestEveryDestructivePathUsesTheSharedConfirmation(t *testing.T) {
 	h := newTestServerWithHub(t)
-	// A revoke drawer only exists once a key does.
+	// A revoke drawer only exists once a key does; a remove-token drawer only
+	// exists once a token is configured.
 	if rr := post(t, h, "/keys", "application/x-www-form-urlencoded", "name=test"); rr.Code >= 400 {
 		t.Fatalf("could not create a key: %d %s", rr.Code, rr.Body.String())
 	}
-	for _, c := range []struct{ path, id string }{
-		{"/model/qwen38", "qwen38"},
-		{"/keys", ""},
-		{"/larder", ""},
-	} {
-		body := send(t, h, http.MethodGet, c.path, "", "").Body.String()
-		if !strings.Contains(body, `name="confirm"`) {
-			t.Errorf("%s has no typed confirmation", c.path)
+	installToken(t, h)
+	for _, path := range []string{"/model/qwen38", "/keys", "/larder", "/admin"} {
+		body := send(t, h, http.MethodGet, path, "", "").Body.String()
+		if !strings.Contains(body, `name="confirm" value="yes"`) {
+			t.Errorf("%s has no shared confirmation button", path)
 		}
-		// The partial gives every confirmation input an id derived from the
-		// target; a hand-rolled copy has no id at all.
-		if !strings.Contains(body, `id="c-`) {
-			t.Errorf("%s still hand-rolls its confirmation instead of calling the partial", c.path)
-		}
+	}
+}
+
+// hf-token's clear route never called the shared check at all - the drawer
+// looked identical to the other three but any POST removed the token.
+func TestHFTokenClearRequiresConfirmation(t *testing.T) {
+	h := newTestServerWithHub(t)
+	installToken(t, h)
+	form := "application/x-www-form-urlencoded"
+	post(t, h, "/admin/hf-token/clear", form, "")
+	if rr := send(t, h, http.MethodGet, "/api/hf-token", "", ""); !strings.Contains(rr.Body.String(), `"configured":true`) {
+		t.Error("the token was cleared without confirmation")
+	}
+	post(t, h, "/admin/hf-token/clear", form, "confirm=yes")
+	if rr := send(t, h, http.MethodGet, "/api/hf-token", "", ""); !strings.Contains(rr.Body.String(), `"configured":false`) {
+		t.Error("a confirmed clear did not remove the token")
 	}
 }
 

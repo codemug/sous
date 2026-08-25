@@ -89,6 +89,14 @@ func (s *Server) clearHFToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "no token store")
 		return
 	}
+	// FOUND WHILE REPLACING THE TYPED-NAME FLOW: this was the one destructive
+	// route the shared check never reached. The Admin page rendered a
+	// confirmation drawer for it like the other three, but the handler
+	// deleted the token on any POST regardless of what the form carried - the
+	// confirmation was decoration.
+	if wantsHTML(r) && !s.requireConfirm(w, r, "the HuggingFace token", "/admin") {
+		return
+	}
 	if err := s.hf.Clear(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

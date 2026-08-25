@@ -75,16 +75,20 @@ it is safe to put one in a notebook or a demo page.</p>
         </span>
       </div>
       {{if not .Disabled}}
-      {{template "confirm-typed" dict
+      {{template "confirm-button" dict
           "Action" (printf "/keys/%s/revoke" .ID)
-          "ID" .ID
           "Label" "Revoke"
           "Cost" "Whoever holds this key starts getting 401 on their next request, and there is no way to tell them beforehand."
           "Wrap" "card-danger"}}
       {{else}}
+      {{/* One click, not the two-step drawer: the key is already disabled and
+           cannot authenticate anyone, so this only removes bookkeeping. The
+           hidden confirm value moved from the key's own id to the shared
+           sentinel with the redesign below - it was never something the
+           operator typed on this branch either way. */}}
       <form method="post" action="/keys/{{.ID}}/revoke">
         <input type="hidden" name="delete" value="true">
-        <input type="hidden" name="confirm" value="{{.ID}}">
+        <input type="hidden" name="confirm" value="yes">
         <button class="btn" type="submit">Delete record</button>
       </form>
       {{end}}

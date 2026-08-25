@@ -37,9 +37,8 @@ Nothing here is in a recipe or in the fleet repo — these are decisions about
   {{/* No reveal, deliberately: Sous did not mint this and you already have it
        wherever you copied it from, so showing it again is all risk. */}}
   {{if .HF.Configured}}
-    {{template "confirm-typed" dict
+    {{template "confirm-button" dict
         "Action" "/admin/hf-token/clear"
-        "ID" "remove"
         "Label" "Remove token"
         "Cost" "Public weights keep downloading. Gated repos start failing with 401 on the next fetch, and a deploy that has to pull its own weights fails the same way."}}
   {{end}}
