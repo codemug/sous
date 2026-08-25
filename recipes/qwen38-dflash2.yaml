@@ -1,12 +1,12 @@
 id: qwen38-dflash2
 kind: vllm
 modality: text
-model: Qwen/Qwen3.8-27B-FP8
+model: Inferact/Qwen3.8-27B-NVFP4
 image: fleet/vllm-dflash2:pr52816-aarch64
 served_as:
     - dflash2
 declared:
-    weights_gib: 32.35
+    weights_gib: 28.45
     kv_gib: 34
 args:
     enable-auto-tool-choice: true
@@ -22,7 +22,47 @@ env:
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
 notes: |-
-    MEASURED 2026-08-22, fp8 KV vs 16-bit, SAME harness both arms:
+    MEASURED 2026-08-26: NVFP4 target vs the FP8 target below,
+    SAME harness both arms, same session:
+
+                      FP8/28.77         NVFP4/24.87
+      JSON list       37.74 t/s 6.04   45.25 t/s 6.20   +20%
+      code + tests    38.40 t/s 6.16   43.33 t/s 5.98   +13%
+      prose           15.52 t/s 2.91   19.77 t/s 2.72   +27%
+      aggregate       30.55 t/s 5.04   36.12 t/s 4.97   +18%
+
+    Second column is mean accepted length of 8 (7 drafted + 1
+    verified). 1222 draft rounds sampled across the two arms.
+
+    THIS IS THE TRADE THE ORIGINAL BUILD OF THIS RECIPE COULD NOT
+    TAKE. NVFP4 was refused outright until 2026-08-26: DFlash2's
+    candidate selector raised on any quantized target lm_head, and
+    the fleet's build of vLLM PR 52816 was frozen at the PR's very
+    first commit - a stale clone silently never picked up the 16
+    commits landed since, including upstream commit 5fb106ba2
+    ('DFlash2: let the target LM head be quantized', 2026-08-19),
+    which deleted that exact guard. Rebuilding from the PR's
+    current head fixed it; verified by grepping the installed
+    package for the deleted guard's own error string before ever
+    deploying this, then confirmed for real by this measurement.
+
+    ACCEPTANCE HELD, 5.04 -> 4.97 aggregate - a smaller target
+    checkpoint did not make the drafter's proposals worse, which is
+    what the vendor's own PR commit measured too (RadixArk NVFP4 on
+    B200: 4.71 mean acceptance, near-identical to its FP8 sibling).
+    Every workload is faster, not just the aggregate - NVFP4's
+    smaller weights mean fewer bytes read per forward pass on a box
+    that is bandwidth-bound at decode, which is the same physics
+    argument that ruled bf16 out below, now working the other way.
+
+    NVFP4 IS NOW THE DEPLOYED TARGET. The FP8 measurement below is
+    kept as the paired baseline for the table above, not as an
+    active configuration.
+
+    MEASURED 2026-08-22, fp8 KV vs 16-bit, SAME harness both arms
+    (FP8 TARGET, since superseded by NVFP4 above - this finding is
+    about KV dtype, which is orthogonal to target weight
+    quantization and remains in effect under NVFP4 too):
 
                       16-bit/32768      fp8/262144
       JSON list       31.67 t/s 5.95   37.53 t/s 6.01   +18%
@@ -65,21 +105,22 @@ notes: |-
     serving mixed traffic gets the average; one serving structured
     output gets most of the 79%.
 
-    DFlash2 speculative decoding against Qwen3.8-27B-FP8.
+    DFlash2 speculative decoding, at the time against Qwen3.8-27B-FP8
+    (the checkpoint the 2026-08-22 table above was run against; the
+    deployed target is NVFP4 as of 2026-08-26, at the top).
 
     ITS IMAGE IS LOCALLY BUILT AND ON NO REGISTRY. vLLM PR 52816 adds
     DFlash2DraftModel, which no released vLLM and no SGLang carries. A
     node without that image cannot deploy this recipe.
 
-    FP8 rather than NVFP4: the DFlash2 selector cannot take a quantized
-    target lm_head yet, and NVFP4 quantizes it. This checkpoint does not.
+    bf16 was never viable regardless of target quantization: decode
+    here is bandwidth-bound near 273 GB/s, so bf16's 51.77 GiB against
+    either quantized target roughly halves the base rate - and ~3x
+    speculation on a halved base lands below the unspeculated NVFP4 +
+    MTP baseline (23.97 tok/s). bf16 clears every software blocker and
+    loses on physics regardless of which quantized format wins.
 
-    FP8 rather than bf16: decode here is bandwidth-bound near 273 GB/s,
-    so bf16's 51.77 GiB against NVFP4's 24.87 roughly halves the base
-    rate - and ~3x speculation on a halved base lands BELOW the 23.97
-    tok/s already measured on NVFP4 + MTP. bf16 clears every software
-    blocker and loses on physics.
-
-    Block-scaled FP8 DOES work on sm_121: this build logs
-    CutlassFp8BlockScaledMMKernel and auto-disables DeepGemm on
-    Blackwell, which is the path that crashed earlier attempts.
+    Block-scaled FP8 DID work on sm_121 (historical, from when FP8 was
+    the target): that build logged CutlassFp8BlockScaledMMKernel and
+    auto-disabled DeepGemm on Blackwell, which is the path that
+    crashed earlier attempts.

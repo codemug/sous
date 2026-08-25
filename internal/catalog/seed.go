@@ -218,12 +218,12 @@ func Seeds() []recipe.Recipe {
 		},
 		{
 			ID: "qwen38-dflash2", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
-			Model: "Qwen/Qwen3.8-27B-FP8", Image: "fleet/vllm-dflash2:pr52816-aarch64",
+			Model: "Inferact/Qwen3.8-27B-NVFP4", Image: "fleet/vllm-dflash2:pr52816-aarch64",
 			ServedAs: []string{"dflash2"},
-			// Target 28.77 PLUS drafter 3.58: the drafter is resident too, and a
-			// footprint that ignored it would under-plan by 3.58 GiB. vLLM later
-			// reported 32.28 GiB for the pair, against the 32.35 declared here.
-			Declared: recipe.Footprint{WeightsGiB: 32.35, KVGiB: 34},
+			// Target 24.87 (qwen38's own measured NVFP4 figure) PLUS drafter
+			// 3.58: the drafter is resident too, and a footprint that ignored
+			// it would under-plan by 3.58 GiB.
+			Declared: recipe.Footprint{WeightsGiB: 28.45, KVGiB: 34},
 			Args: map[string]any{
 				// 0.5, not the 0.33 this started with. At 0.33 vLLM caps itself
 				// near 40 GiB and weights plus drafter already take 32.33, so it
@@ -279,7 +279,47 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "MEASURED 2026-08-22, fp8 KV vs 16-bit, SAME harness both arms:\n" +
+			Notes: "MEASURED 2026-08-26: NVFP4 target vs the FP8 target below,\n" +
+				"SAME harness both arms, same session:\n" +
+				"\n" +
+				"                  FP8/28.77         NVFP4/24.87\n" +
+				"  JSON list       37.74 t/s 6.04   45.25 t/s 6.20   +20%\n" +
+				"  code + tests    38.40 t/s 6.16   43.33 t/s 5.98   +13%\n" +
+				"  prose           15.52 t/s 2.91   19.77 t/s 2.72   +27%\n" +
+				"  aggregate       30.55 t/s 5.04   36.12 t/s 4.97   +18%\n" +
+				"\n" +
+				"Second column is mean accepted length of 8 (7 drafted + 1\n" +
+				"verified). 1222 draft rounds sampled across the two arms.\n" +
+				"\n" +
+				"THIS IS THE TRADE THE ORIGINAL BUILD OF THIS RECIPE COULD NOT\n" +
+				"TAKE. NVFP4 was refused outright until 2026-08-26: DFlash2's\n" +
+				"candidate selector raised on any quantized target lm_head, and\n" +
+				"the fleet's build of vLLM PR 52816 was frozen at the PR's very\n" +
+				"first commit - a stale clone silently never picked up the 16\n" +
+				"commits landed since, including upstream commit 5fb106ba2\n" +
+				"('DFlash2: let the target LM head be quantized', 2026-08-19),\n" +
+				"which deleted that exact guard. Rebuilding from the PR's\n" +
+				"current head fixed it; verified by grepping the installed\n" +
+				"package for the deleted guard's own error string before ever\n" +
+				"deploying this, then confirmed for real by this measurement.\n" +
+				"\n" +
+				"ACCEPTANCE HELD, 5.04 -> 4.97 aggregate - a smaller target\n" +
+				"checkpoint did not make the drafter's proposals worse, which is\n" +
+				"what the vendor's own PR commit measured too (RadixArk NVFP4 on\n" +
+				"B200: 4.71 mean acceptance, near-identical to its FP8 sibling).\n" +
+				"Every workload is faster, not just the aggregate - NVFP4's\n" +
+				"smaller weights mean fewer bytes read per forward pass on a box\n" +
+				"that is bandwidth-bound at decode, which is the same physics\n" +
+				"argument that ruled bf16 out below, now working the other way.\n" +
+				"\n" +
+				"NVFP4 IS NOW THE DEPLOYED TARGET. The FP8 measurement below is\n" +
+				"kept as the paired baseline for the table above, not as an\n" +
+				"active configuration.\n" +
+				"\n" +
+				"MEASURED 2026-08-22, fp8 KV vs 16-bit, SAME harness both arms\n" +
+				"(FP8 TARGET, since superseded by NVFP4 above - this finding is\n" +
+				"about KV dtype, which is orthogonal to target weight\n" +
+				"quantization and remains in effect under NVFP4 too):\n" +
 				"\n" +
 				"                  16-bit/32768      fp8/262144\n" +
 				"  JSON list       31.67 t/s 5.95   37.53 t/s 6.01   +18%\n" +
@@ -319,20 +359,22 @@ func Seeds() []recipe.Recipe {
 				"for nothing on a box already bandwidth-bound at decode. A model\n" +
 				"serving mixed traffic gets the average; one serving structured\n" +
 				"output gets most of the 79%.\n\n" +
-				"DFlash2 speculative decoding against Qwen3.8-27B-FP8.\n\n" +
+				"DFlash2 speculative decoding, at the time against Qwen3.8-27B-FP8\n" +
+				"(the checkpoint the 2026-08-22 table above was run against; the\n" +
+				"deployed target is NVFP4 as of 2026-08-26, at the top).\n\n" +
 				"ITS IMAGE IS LOCALLY BUILT AND ON NO REGISTRY. vLLM PR 52816 adds\n" +
 				"DFlash2DraftModel, which no released vLLM and no SGLang carries. A\n" +
 				"node without that image cannot deploy this recipe.\n\n" +
-				"FP8 rather than NVFP4: the DFlash2 selector cannot take a quantized\n" +
-				"target lm_head yet, and NVFP4 quantizes it. This checkpoint does not.\n\n" +
-				"FP8 rather than bf16: decode here is bandwidth-bound near 273 GB/s,\n" +
-				"so bf16's 51.77 GiB against NVFP4's 24.87 roughly halves the base\n" +
-				"rate - and ~3x speculation on a halved base lands BELOW the 23.97\n" +
-				"tok/s already measured on NVFP4 + MTP. bf16 clears every software\n" +
-				"blocker and loses on physics.\n\n" +
-				"Block-scaled FP8 DOES work on sm_121: this build logs\n" +
-				"CutlassFp8BlockScaledMMKernel and auto-disables DeepGemm on\n" +
-				"Blackwell, which is the path that crashed earlier attempts.",
+				"bf16 was never viable regardless of target quantization: decode\n" +
+				"here is bandwidth-bound near 273 GB/s, so bf16's 51.77 GiB against\n" +
+				"either quantized target roughly halves the base rate - and ~3x\n" +
+				"speculation on a halved base lands below the unspeculated NVFP4 +\n" +
+				"MTP baseline (23.97 tok/s). bf16 clears every software blocker and\n" +
+				"loses on physics regardless of which quantized format wins.\n\n" +
+				"Block-scaled FP8 DID work on sm_121 (historical, from when FP8 was\n" +
+				"the target): that build logged CutlassFp8BlockScaledMMKernel and\n" +
+				"auto-disabled DeepGemm on Blackwell, which is the path that\n" +
+				"crashed earlier attempts.",
 		},
 		{
 			ID: "nemotron35", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
