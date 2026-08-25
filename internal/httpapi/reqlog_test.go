@@ -116,3 +116,15 @@ func TestGetReqLogReportsState(t *testing.T) {
 		t.Errorf("body = %s", body)
 	}
 }
+
+func TestSetRetentionAcceptsJSON(t *testing.T) {
+	h := newTestServer(t)
+	rr := send(t, h, http.MethodPost, "/admin/reqlog-retention", "application/json", `{"days":10}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	body := send(t, h, http.MethodGet, "/api/reqlog", "", "").Body.String()
+	if !strings.Contains(body, `"RetentionDays":10`) {
+		t.Errorf("body = %s", body)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/codemug/sous/internal/gateway"
@@ -69,13 +70,29 @@ func (s *Server) reqLogView() reqLogView {
 }
 
 // setRetention updates how many days of request logs are kept.
+//
+// FORM AND JSON, matching setHFToken in this same file: the admin page posts
+// a form, and a script provisioning a node should not have to fake one.
 func (s *Server) setRetention(w http.ResponseWriter, r *http.Request) {
 	if s.reqLogR == nil {
 		writeErr(w, http.StatusInternalServerError, "no retention store")
 		return
 	}
-	_ = r.ParseForm()
-	n, err := strconv.Atoi(r.PostFormValue("days"))
+	daysStr := ""
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Days int `json:"days"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "body: "+err.Error())
+			return
+		}
+		daysStr = strconv.Itoa(body.Days)
+	} else {
+		_ = r.ParseForm()
+		daysStr = r.PostFormValue("days")
+	}
+	n, err := strconv.Atoi(daysStr)
 	if err != nil || n < 0 {
 		msg := "days must be a whole number, 0 or more"
 		if wantsHTML(r) {
