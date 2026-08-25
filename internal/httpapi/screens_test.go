@@ -611,3 +611,36 @@ func TestFetchLogsNeedARepo(t *testing.T) {
 		t.Errorf("status = %d, want 400", rr.Code)
 	}
 }
+
+// THE BROWSER PATH, NOT THE API PATH. Every existing larder-delete test posts
+// repo as a URL query parameter with no Content-Type set, which is the
+// UNCONFIRMED API caller path (wantsHTML is false, confirmation is skipped
+// entirely) - none of them exercised what the actual drawer in larder.html
+// sends: repo and confirm as FORM BODY fields, with no query string at all.
+//
+// deleteWeights read repo via r.URL.Query().Get("repo") alone, which only
+// ever sees the query string - so this exact request always saw repo="" and
+// hit larder.Delete's "unsafe repo id" guard. It was invisible before the
+// confirm-button change because confirmed() used to require the typed text
+// to equal that same empty want, which no keystroke can produce - the
+// request was refused at the confirmation step, before ever reaching the
+// empty-repo bug underneath it.
+func TestLarderDeleteReadsTheRepoFromTheFormBody(t *testing.T) {
+	h := newTestServerWithHub(t)
+	// wantsHTML(r) is true for a form post, so a successful browser delete
+	// redirects rather than returning 200 - matching what larder.html's own
+	// form actually triggers.
+	rr := post(t, h, "/api/larder/delete", form, "repo=Kwaipilot%2FKAT-Coder-V2.5-Dev&confirm=yes")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("browser-style delete: %d %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if strings.Contains(loc, "err=1") || strings.Contains(loc, "unsafe+repo") {
+		t.Errorf("delete redirected with an error: %s", loc)
+	}
+	// The weights are actually gone, not just a clean-looking redirect.
+	body := send(t, h, http.MethodGet, "/api/larder", "", "").Body.String()
+	if strings.Contains(body, "KAT-Coder-V2.5-Dev") {
+		t.Error("the repo is still listed after a confirmed browser delete")
+	}
+}

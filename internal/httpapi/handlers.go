@@ -87,7 +87,17 @@ func (s *Server) listLarder(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
+	// FormValue, not URL.Query alone: URL.Query() reads only the query
+	// string, and the browser drawer posts repo as a body field with no
+	// query string at all - action="/api/larder/delete", nothing after it.
+	// That meant every browser delete read repo="" and hit larder.Delete's
+	// own "unsafe repo id" guard. It went unnoticed because confirmed() used
+	// to compare the typed text against this same empty want - "" can never
+	// equal a non-empty typed string, so the request was refused at the
+	// confirmation step, before ever reaching the empty-repo bug underneath
+	// it. Replacing typed confirmation with a fixed sentinel removed that
+	// accidental cover and let the real bug through.
+	repo := r.FormValue("repo")
 	force := r.URL.Query().Get("force") == "true"
 
 	entries, err := s.larderView()
