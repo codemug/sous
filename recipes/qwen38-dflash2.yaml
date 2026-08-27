@@ -2,7 +2,7 @@ id: qwen38-dflash2
 kind: vllm
 modality: text
 model: Inferact/Qwen3.8-27B-NVFP4
-image: fleet/vllm-dflash2:pr52816-aarch64
+image: vllm/vllm-openai@sha256:2a7cde230b59f3ce6cab33dd245ba6bee41aa87b38c9fe84f966ff24016813ce
 served_as:
     - dflash2
 declared:
@@ -22,6 +22,44 @@ env:
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
 notes: |-
+    MEASURED 2026-08-27: the official vllm/vllm-openai:v0.28.0
+    image vs the fleet's own local PR-branch build, same NVFP4 target
+    and DFlash2 drafter, same harness, same node:
+
+                      local build         official 0.28.0
+      JSON list       45.25 t/s 6.20      46.51 t/s 6.40
+      code + tests    43.33 t/s 5.98      43.40 t/s 5.98
+      prose           19.77 t/s 2.72      18.88 t/s 2.59
+      aggregate       36.12 t/s 4.97      36.26 t/s 4.99
+
+    INDISTINGUISHABLE, which is the point - this is a no-regression
+    check, not a performance claim. vLLM 0.28.0 (2026-08-26) merged
+    PR 52816 - the DFlash2 selector this recipe depends on - upstream,
+    which retires the local build entirely: no more multi-hour
+    aarch64 CUDA compile, no more PR clone to keep in sync (see the
+    fleet repo's vllm-dflash2-clone.sh history - a git fetch without
+    + silently left that clone frozen at the PR's FIRST commit for
+    days, missing 16 follow-on commits including the NVFP4 fix below,
+    while reporting success).
+
+    VERIFIED, NOT ASSUMED, IN THREE STAGES BEFORE THIS TABLE. 1) The
+    PR merge commit b389ac2 (2026-08-21) was checked directly for the
+    lm_head fix: grepped the installed package for the OLD guard's
+    own error string ("DFlash2 requires an unquantized target LM
+    head") - absent. 2) torch.cuda.get_arch_list() on the official
+    image shows sm_80/90/100/110/120 - NO sm_121, no PTX fallback -
+    which looked like it might rule GB10 out the way an unpinned
+    arch list always has on this box; that turned out to be a red
+    herring for actual execution, not a blocker. 3) This exact
+    config, on the official image, answered a real completion and
+    ran DFlash2 speculative decoding correctly before this benchmark
+    table was ever measured.
+
+    PINNED BY DIGEST, not tag, same convention pinnedVLLM already
+    uses for the same reason: a floating tag drifting out from under
+    a deployed recipe is exactly the failure class this whole switch
+    was triggered by investigating.
+
     MEASURED 2026-08-26: NVFP4 target vs the FP8 target below,
     SAME harness both arms, same session:
 

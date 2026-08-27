@@ -11,6 +11,11 @@ import "github.com/codemug/sous/internal/recipe"
 // elsewhere would start with estimates and earn observations on first load.
 func Seeds() []recipe.Recipe {
 	const pinnedVLLM = "vllm/vllm-openai@sha256:d5a8e53ad2534e24b99ba1a2e3f183a213adc0da48ed83166cb75534a5903a17"
+	// v0.28.0, arm64. The DFlash2 PR (52816) shipped in this release, which is
+	// what retired the fleet's own local build - see the notes on
+	// qwen38-dflash2 below for the digest-vs-tag reasoning and the measured
+	// comparison against that build.
+	const pinnedVLLMDFlash2 = "vllm/vllm-openai@sha256:2a7cde230b59f3ce6cab33dd245ba6bee41aa87b38c9fe84f966ff24016813ce"
 
 	return []recipe.Recipe{
 		{
@@ -218,7 +223,7 @@ func Seeds() []recipe.Recipe {
 		},
 		{
 			ID: "qwen38-dflash2", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
-			Model: "Inferact/Qwen3.8-27B-NVFP4", Image: "fleet/vllm-dflash2:pr52816-aarch64",
+			Model: "Inferact/Qwen3.8-27B-NVFP4", Image: pinnedVLLMDFlash2,
 			ServedAs: []string{"dflash2"},
 			// Target 24.87 (qwen38's own measured NVFP4 figure) PLUS drafter
 			// 3.58: the drafter is resident too, and a footprint that ignored
@@ -279,7 +284,45 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "MEASURED 2026-08-26: NVFP4 target vs the FP8 target below,\n" +
+			Notes: "MEASURED 2026-08-27: the official vllm/vllm-openai:v0.28.0\n" +
+				"image vs the fleet's own local PR-branch build, same NVFP4 target\n" +
+				"and DFlash2 drafter, same harness, same node:\n" +
+				"\n" +
+				"                  local build         official 0.28.0\n" +
+				"  JSON list       45.25 t/s 6.20      46.51 t/s 6.40\n" +
+				"  code + tests    43.33 t/s 5.98      43.40 t/s 5.98\n" +
+				"  prose           19.77 t/s 2.72      18.88 t/s 2.59\n" +
+				"  aggregate       36.12 t/s 4.97      36.26 t/s 4.99\n" +
+				"\n" +
+				"INDISTINGUISHABLE, which is the point - this is a no-regression\n" +
+				"check, not a performance claim. vLLM 0.28.0 (2026-08-26) merged\n" +
+				"PR 52816 - the DFlash2 selector this recipe depends on - upstream,\n" +
+				"which retires the local build entirely: no more multi-hour\n" +
+				"aarch64 CUDA compile, no more PR clone to keep in sync (see the\n" +
+				"fleet repo's vllm-dflash2-clone.sh history - a git fetch without\n" +
+				"+ silently left that clone frozen at the PR's FIRST commit for\n" +
+				"days, missing 16 follow-on commits including the NVFP4 fix below,\n" +
+				"while reporting success).\n" +
+				"\n" +
+				"VERIFIED, NOT ASSUMED, IN THREE STAGES BEFORE THIS TABLE. 1) The\n" +
+				"PR merge commit b389ac2 (2026-08-21) was checked directly for the\n" +
+				"lm_head fix: grepped the installed package for the OLD guard's\n" +
+				"own error string (\"DFlash2 requires an unquantized target LM\n" +
+				"head\") - absent. 2) torch.cuda.get_arch_list() on the official\n" +
+				"image shows sm_80/90/100/110/120 - NO sm_121, no PTX fallback -\n" +
+				"which looked like it might rule GB10 out the way an unpinned\n" +
+				"arch list always has on this box; that turned out to be a red\n" +
+				"herring for actual execution, not a blocker. 3) This exact\n" +
+				"config, on the official image, answered a real completion and\n" +
+				"ran DFlash2 speculative decoding correctly before this benchmark\n" +
+				"table was ever measured.\n" +
+				"\n" +
+				"PINNED BY DIGEST, not tag, same convention pinnedVLLM already\n" +
+				"uses for the same reason: a floating tag drifting out from under\n" +
+				"a deployed recipe is exactly the failure class this whole switch\n" +
+				"was triggered by investigating.\n" +
+				"\n" +
+				"MEASURED 2026-08-26: NVFP4 target vs the FP8 target below,\n" +
 				"SAME harness both arms, same session:\n" +
 				"\n" +
 				"                  FP8/28.77         NVFP4/24.87\n" +
