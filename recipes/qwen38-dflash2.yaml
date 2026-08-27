@@ -13,6 +13,7 @@ args:
     gpu-memory-utilization: 0.62
     kv-cache-dtype: fp8
     max-model-len: 262144
+    max-num-seqs: 24
     reasoning-parser: qwen3
     speculative-config: '{"method":"dflash","model":"incoai/Qwen3.8-27B-DFlash2","num_speculative_tokens":7}'
     tool-call-parser: qwen3_coder
@@ -22,6 +23,46 @@ env:
     TORCH_CUDA_ARCH_LIST: 12.1a
     VLLM_LOGGING_LEVEL: INFO
 notes: |-
+    MEASURED 2026-08-27: concurrency sweep, 1 to 32 simultaneous
+    requests, short generations (150 tokens), threaded client:
+
+      n    aggregate    per-stream    p95 TTFT    accept_len
+      1     43.6 t/s      47.3 t/s      0.29s        6.70
+      2     81.9 t/s      47.0 t/s      0.49s        6.80
+      4    138.3 t/s      39.6 t/s      0.49s        6.35
+      8    261.0 t/s      36.9 t/s      0.58s        7.14
+     12    324.2 t/s      31.0 t/s      0.69s        7.03
+     16    326.4 t/s      28.3 t/s      0.77s        6.81
+     24    394.3 t/s      21.5 t/s      0.98s        6.84
+     32    352.1 t/s      19.9 t/s      6.00s        6.77
+
+    1 -> 2 IS NEARLY FREE (47.3 -> 47.0 per-stream): DFlash2 already
+    reads the full ~28.45 GiB target+drafter weights on every verify
+    cycle for ONE stream, close to saturating bandwidth alone -
+    continuous batching shares that same read across whatever else is
+    in the step, so a second stream costs almost nothing extra. Past
+    that, compute (not bandwidth) is what grows with concurrency, and
+    per-stream throughput degrades steadily as the batch widens.
+
+    n=32 IS NOT A PLATEAU, IT IS A REGRESSION: aggregate drops below
+    n=24 and p95 TTFT jumps 6x. That is requests queuing and degrading
+    each other, not a graceful compute ceiling - which is why
+    max-num-seqs is capped at the measured peak (24) rather than left
+    unset: below it the scheduler admits freely, above it excess
+    requests queue in an orderly way instead of dragging every running
+    request down with them.
+
+    ACCEPTANCE DID NOT DEGRADE UNDER LOAD, including at the n=32
+    collapse (6.3-7.1 throughout) - the expectation going in was that
+    speculative decoding might lose value as verify competes for
+    compute at higher batch sizes. It did not; what breaks is pure
+    admission/scheduling capacity, not DFlash2 itself.
+
+    MEMORY WAS NEVER CLOSE. kv_cache_size_tokens=914,472 at this
+    config - the whole sweep ran at request lengths nowhere near where
+    that would bind. The bottleneck here is compute/scheduling, not
+    the KV budget.
+
     MEASURED 2026-08-27: the official vllm/vllm-openai:v0.28.0
     image vs the fleet's own local PR-branch build, same NVFP4 target
     and DFlash2 drafter, same harness, same node:

@@ -243,6 +243,23 @@ func Seeds() []recipe.Recipe {
 				// 0.62 leaves ~43 GiB, which is roughly 331k. Same value the
 				// base qwen38 recipe uses, for the same arithmetic.
 				"gpu-memory-utilization": 0.62, "max-model-len": 262144,
+				// 24, not vLLM's own default. MEASURED 2026-08-27: aggregate
+				// throughput scales close to linearly to n=8, plateaus through
+				// n=16-24 (peak 394 tok/s aggregate at n=24, up from 43.6 at
+				// n=1), then n=32 is not a plateau but a REGRESSION - aggregate
+				// drops to 352 and p95 TTFT jumps 6x (0.98s -> 6.00s), which is
+				// requests queuing and degrading each other, not a graceful
+				// compute ceiling. 24 has real margin below that collapse, not
+				// the exact edge of it. Below this cap the scheduler admits
+				// freely; above it, excess requests queue in an orderly way
+				// instead of being let into the batch and dragging every
+				// running request's latency down with them.
+				//
+				// spec-decode acceptance held steady across the whole sweep
+				// (6.3-7.1, no degradation even at the n=32 collapse) - what
+				// breaks under load is admission/scheduling capacity, not
+				// DFlash2 itself.
+				"max-num-seqs": 24,
 				// fp8 KV, and this is what makes the length affordable. This
 				// architecture is 48 Gated DeltaNet + 16 full-attention layers,
 				// and qwen38's recipe measured fp8 at 136 KiB/token against
@@ -284,7 +301,47 @@ func Seeds() []recipe.Recipe {
 				"HF_HOME":              "/root/.cache/huggingface",
 				"VLLM_LOGGING_LEVEL":   "INFO",
 			},
-			Notes: "MEASURED 2026-08-27: the official vllm/vllm-openai:v0.28.0\n" +
+			Notes: "MEASURED 2026-08-27: concurrency sweep, 1 to 32 simultaneous\n" +
+				"requests, short generations (150 tokens), threaded client:\n" +
+				"\n" +
+				"  n    aggregate    per-stream    p95 TTFT    accept_len\n" +
+				"  1     43.6 t/s      47.3 t/s      0.29s        6.70\n" +
+				"  2     81.9 t/s      47.0 t/s      0.49s        6.80\n" +
+				"  4    138.3 t/s      39.6 t/s      0.49s        6.35\n" +
+				"  8    261.0 t/s      36.9 t/s      0.58s        7.14\n" +
+				" 12    324.2 t/s      31.0 t/s      0.69s        7.03\n" +
+				" 16    326.4 t/s      28.3 t/s      0.77s        6.81\n" +
+				" 24    394.3 t/s      21.5 t/s      0.98s        6.84\n" +
+				" 32    352.1 t/s      19.9 t/s      6.00s        6.77\n" +
+				"\n" +
+				"1 -> 2 IS NEARLY FREE (47.3 -> 47.0 per-stream): DFlash2 already\n" +
+				"reads the full ~28.45 GiB target+drafter weights on every verify\n" +
+				"cycle for ONE stream, close to saturating bandwidth alone -\n" +
+				"continuous batching shares that same read across whatever else is\n" +
+				"in the step, so a second stream costs almost nothing extra. Past\n" +
+				"that, compute (not bandwidth) is what grows with concurrency, and\n" +
+				"per-stream throughput degrades steadily as the batch widens.\n" +
+				"\n" +
+				"n=32 IS NOT A PLATEAU, IT IS A REGRESSION: aggregate drops below\n" +
+				"n=24 and p95 TTFT jumps 6x. That is requests queuing and degrading\n" +
+				"each other, not a graceful compute ceiling - which is why\n" +
+				"max-num-seqs is capped at the measured peak (24) rather than left\n" +
+				"unset: below it the scheduler admits freely, above it excess\n" +
+				"requests queue in an orderly way instead of dragging every running\n" +
+				"request down with them.\n" +
+				"\n" +
+				"ACCEPTANCE DID NOT DEGRADE UNDER LOAD, including at the n=32\n" +
+				"collapse (6.3-7.1 throughout) - the expectation going in was that\n" +
+				"speculative decoding might lose value as verify competes for\n" +
+				"compute at higher batch sizes. It did not; what breaks is pure\n" +
+				"admission/scheduling capacity, not DFlash2 itself.\n" +
+				"\n" +
+				"MEMORY WAS NEVER CLOSE. kv_cache_size_tokens=914,472 at this\n" +
+				"config - the whole sweep ran at request lengths nowhere near where\n" +
+				"that would bind. The bottleneck here is compute/scheduling, not\n" +
+				"the KV budget.\n" +
+				"\n" +
+				"MEASURED 2026-08-27: the official vllm/vllm-openai:v0.28.0\n" +
 				"image vs the fleet's own local PR-branch build, same NVFP4 target\n" +
 				"and DFlash2 drafter, same harness, same node:\n" +
 				"\n" +
