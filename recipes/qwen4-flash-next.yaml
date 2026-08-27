@@ -1,0 +1,53 @@
+id: qwen4-flash-next
+kind: vllm
+modality: text
+model: RadixArk/Qwen3.8-Flash-Next-NVFP4
+image: 'UNSUPPORTED: no vLLM build registers qwen4_exp - see notes'
+served_as:
+    - qwen4-flash-next
+declared:
+    weights_gib: 125.96
+    kv_gib: 0
+env:
+    CUTE_DSL_ARCH: sm_121a
+    HF_HOME: /root/.cache/huggingface
+    TORCH_CUDA_ARCH_LIST: 12.1a
+    VLLM_LOGGING_LEVEL: INFO
+notes: |-
+    INFEASIBLE. Never deployed, and cannot be with anything this fleet
+    runs - saved as a recipe so the next person who finds this model on
+    HuggingFace does not spend an afternoon re-deriving why.
+
+    NOT ACTUALLY QWEN3.8. Despite the repo name, config.json declares
+    "architectures": ["Qwen4ExpForConditionalGeneration"], "model_type":
+    "qwen4_exp" - an experimental Qwen4 preview built on
+    Qwen/Qwen3.8-Flash-Next. Hybrid linear/full attention (interval 4,
+    same shape as qwen38's Gated DeltaNet), 48 layers, 512 experts, 10
+    active per token, an MTP layer, PLE n-gram embedding tables, and an
+    "indexer" component none of this fleet's other recipes have -
+    genuinely novel architecture, not a rename.
+
+    BLOCKER 1 - NO RUNTIME. Checked directly, not assumed from the model
+    card: zero hits for "qwen4_exp" or "Qwen4ExpForConditionalGeneration"
+    anywhere in vLLM's history (GitHub code search, whole repo). The
+    model's own qualification-notes.md is explicit about why - it
+    requires SGLang plus an UNMERGED community PR
+    (Qiaolin-Yu/sglang-qwen-next #40) for the PLE loader specifically,
+    and warns that a loader which only upcasts the FP8 PLE bytes "will
+    serve wrong PLE embeddings silently" - a correctness trap, not just a
+    startup failure, for anyone tempted to force it through a generic
+    loader. This fleet runs vLLM exclusively; SGLang is not deployed
+    anywhere on it.
+
+    BLOCKER 2 - DOES NOT FIT REGARDLESS. 135,253,624,416 bytes of
+    weights per the checkpoint's own qualification notes - 125.96 GiB -
+    already exceeds gx10's entire 121.6 GiB unified pool before KV
+    cache, the OS, or any other resident model. It is already quantized
+    to NVFP4 (4-bit); there is no further quantization step available.
+    Declared KV is 0 here because the weights alone already fail the
+    arithmetic - a KV estimate would not change the answer.
+
+    What would have to change: vLLM adding qwen4_exp support (blocker 1),
+    and either a smaller checkpoint or a node with more than 126 GiB of
+    addressable memory (blocker 2). Neither is close.
+archived: true

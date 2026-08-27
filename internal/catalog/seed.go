@@ -643,5 +643,64 @@ func Seeds() []recipe.Recipe {
 				"reporting the GPU as visible.\n\n" +
 				"To go back: set the image to the -cpu tag AND set weights_gib to 0, or\n" +
 				"the container gets a GPU it does not use."},
+		{
+			ID: "qwen4-flash-next", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
+			Model: "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+			// No working image exists - see BLOCKER 1 in the notes. Deliberately
+			// not a real reference: a plausible-looking image here is what lets
+			// someone actually click Deploy on an archived card and get a
+			// confusing docker-level failure instead of the reason, which is
+			// sitting right here.
+			Image:    "UNSUPPORTED: no vLLM build registers qwen4_exp - see notes",
+			ServedAs: []string{"qwen4-flash-next"},
+			Archived: true,
+			// 135,253,624,416 bytes from the checkpoint's own qualification notes.
+			Declared: recipe.Footprint{WeightsGiB: 125.96, KVGiB: 0},
+			// Still the right env for THIS HARDWARE even though nothing can run
+			// it: if vLLM ever adds qwen4_exp support, gx10 would still need
+			// these same values. The blocker is the architecture, not the node.
+			Env: map[string]string{
+				"TORCH_CUDA_ARCH_LIST": "12.1a",
+				"CUTE_DSL_ARCH":        "sm_121a",
+				"HF_HOME":              "/root/.cache/huggingface",
+				"VLLM_LOGGING_LEVEL":   "INFO",
+			},
+			Notes: "INFEASIBLE. Never deployed, and cannot be with anything this fleet\n" +
+				"runs - saved as a recipe so the next person who finds this model on\n" +
+				"HuggingFace does not spend an afternoon re-deriving why.\n" +
+				"\n" +
+				"NOT ACTUALLY QWEN3.8. Despite the repo name, config.json declares\n" +
+				"\"architectures\": [\"Qwen4ExpForConditionalGeneration\"], \"model_type\":\n" +
+				"\"qwen4_exp\" - an experimental Qwen4 preview built on\n" +
+				"Qwen/Qwen3.8-Flash-Next. Hybrid linear/full attention (interval 4,\n" +
+				"same shape as qwen38's Gated DeltaNet), 48 layers, 512 experts, 10\n" +
+				"active per token, an MTP layer, PLE n-gram embedding tables, and an\n" +
+				"\"indexer\" component none of this fleet's other recipes have -\n" +
+				"genuinely novel architecture, not a rename.\n" +
+				"\n" +
+				"BLOCKER 1 - NO RUNTIME. Checked directly, not assumed from the model\n" +
+				"card: zero hits for \"qwen4_exp\" or \"Qwen4ExpForConditionalGeneration\"\n" +
+				"anywhere in vLLM's history (GitHub code search, whole repo). The\n" +
+				"model's own qualification-notes.md is explicit about why - it\n" +
+				"requires SGLang plus an UNMERGED community PR\n" +
+				"(Qiaolin-Yu/sglang-qwen-next #40) for the PLE loader specifically,\n" +
+				"and warns that a loader which only upcasts the FP8 PLE bytes \"will\n" +
+				"serve wrong PLE embeddings silently\" - a correctness trap, not just a\n" +
+				"startup failure, for anyone tempted to force it through a generic\n" +
+				"loader. This fleet runs vLLM exclusively; SGLang is not deployed\n" +
+				"anywhere on it.\n" +
+				"\n" +
+				"BLOCKER 2 - DOES NOT FIT REGARDLESS. 135,253,624,416 bytes of\n" +
+				"weights per the checkpoint's own qualification notes - 125.96 GiB -\n" +
+				"already exceeds gx10's entire 121.6 GiB unified pool before KV\n" +
+				"cache, the OS, or any other resident model. It is already quantized\n" +
+				"to NVFP4 (4-bit); there is no further quantization step available.\n" +
+				"Declared KV is 0 here because the weights alone already fail the\n" +
+				"arithmetic - a KV estimate would not change the answer.\n" +
+				"\n" +
+				"What would have to change: vLLM adding qwen4_exp support (blocker 1),\n" +
+				"and either a smaller checkpoint or a node with more than 126 GiB of\n" +
+				"addressable memory (blocker 2). Neither is close.",
+		},
 	}
 }
