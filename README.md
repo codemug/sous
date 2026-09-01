@@ -7,8 +7,8 @@ fits before you start it, deploy it on a free port, and see what it actually did
 
 [![build](https://github.com/codemug/sous/actions/workflows/build.yml/badge.svg)](https://github.com/codemug/sous/actions/workflows/build.yml)
 [![Go](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![image](https://img.shields.io/badge/ghcr.io-codemug%2Fsous-2496ED?logo=docker&logoColor=white)](https://github.com/codemug/sous/pkgs/container/sous)
-[![arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4FB9A6)](https://github.com/codemug/sous/pkgs/container/sous)
+[![image](https://img.shields.io/badge/ghcr.io-codemug%2Fsous--api-2496ED?logo=docker&logoColor=white)](https://github.com/codemug/sous/pkgs/container/sous-api)
+[![arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-4FB9A6)](https://github.com/codemug/sous/pkgs/container/sous-api)
 
 </div>
 
@@ -72,31 +72,82 @@ for it.
 
 ## Quickstart
 
+Two binaries now: `sous-api` is the control plane (one instance — the catalog, the UI, and the
+mTLS gRPC server every node dials into), `souslet` runs on every node that actually serves
+models. `sous-api` alone, with no `souslet` connected, is a working single-node control plane —
+it still deploys locally as a fallback — but a real fleet needs at least one `souslet`.
+
+**1. Start `sous-api`:**
+
 ```bash
-docker run -d --name sous \
+docker run -d --name sous-api \
   --privileged \
   --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /opt/sous:/var/lib/sous \
+  -v /opt/sous-api:/var/lib/sous-api \
   -v /models:/models \
-  ghcr.io/codemug/sous:latest \
+  ghcr.io/codemug/sous-api:latest \
     -listen 10.0.0.5:8090 \
+    -grpc-listen 10.0.0.5:8091 \
+    -ca-state /var/lib/sous-api/ca-state.json \
     -models /models
 ```
 
 Then open `http://10.0.0.5:8090`. The catalog seeds itself on first run.
 
-**`-listen` is required and refuses `0.0.0.0`.** Sous creates and destroys containers, which
-makes it root-equivalent on its node; the network boundary is the mitigation, so binding
-everything would remove the only protection it has.
+**2. Register a node and copy its cert onto it.** `node add` is a subcommand of the same binary,
+run against the same `-ca-state` file the running server uses:
 
-**Why `--privileged`:** Sous drops page cache before every model start, and `/proc/sys` is
-read-only inside Docker. Without it, the next model sizes its KV cache against memory the
-kernel is holding — a real OOM, not a theoretical one. If that trade is unacceptable in your
-environment, run the binary under systemd instead; it needs no container.
+```bash
+docker exec sous-api sous-api node add \
+  -ca-state /var/lib/sous-api/ca-state.json -out /var/lib/sous-api/certs asus-gx10
+```
 
-**Mount the model cache at the same path inside and out.** Sous hands paths to the Docker
-daemon, and the daemon resolves them on the *host*.
+That writes `ca.pem`, `asus-gx10.cert.pem` and `asus-gx10.key.pem` under `/var/lib/sous-api/certs`
+inside the container — `/opt/sous-api/certs` on the host, per the volume above. Copy those three
+files onto the node. **Restart `sous-api`** after adding a node: it loaded its CA into memory at
+startup, so it will not accept a connection signed for a node added since.
+
+**3. Start `souslet`** on that node, pointed at the cert material you just copied over:
+
+```bash
+docker run -d --name souslet \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /models:/models \
+  -v /opt/souslet/certs:/certs:ro \
+  ghcr.io/codemug/sous-souslet:latest \
+    -api-addr 10.0.0.5:8091 \
+    -node-id asus-gx10 \
+    -model-dir /models \
+    -ca /certs/ca.pem \
+    -cert /certs/asus-gx10.cert.pem \
+    -key /certs/asus-gx10.key.pem \
+    -pool-gib 128
+```
+
+`-pool-gib` is this node's real usable memory, not the nominal spec figure — a box specced at
+128 GiB commonly reports less once the OS and firmware take their share, and planning against
+the nominal number over-commits before anything is even deployed. `souslet` has no UI and no
+listener of its own; it dials `-api-addr` and stays connected, reconnecting with backoff if that
+drops.
+
+**`-listen`/`-grpc-listen` (on `sous-api`) are both required and both refuse `0.0.0.0`.** Sous
+creates and destroys containers — directly on `sous-api`'s own box via its local fallback path,
+and remotely on every connected node once `souslet` is deployed there — which makes either
+listener root-equivalent-by-proxy; the network boundary is the mitigation, so binding everything
+would remove the only protection either one has.
+
+**Why `--privileged` on `sous-api`:** its local deploy path drops page cache before every model
+it starts on its own box, and `/proc/sys` is read-only inside Docker without it. Without that
+drop, the next model sizes its KV cache against memory the kernel is still holding — a real OOM,
+not a theoretical one. `souslet` does not need `--privileged` today; its deploy path does not yet
+carry this same cache-drop step. If `--privileged` is unacceptable in your environment, run the
+binary under systemd instead; it needs no container.
+
+**Mount the model cache (`-models`/`-model-dir`) at the same path inside and out, on every box
+running one of these images.** Sous hands paths to the Docker daemon, and the daemon resolves
+them on the *host*.
 
 ## Design decisions worth knowing
 

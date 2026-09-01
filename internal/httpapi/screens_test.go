@@ -552,4 +552,3 @@ func TestFetchLogsNeedARepo(t *testing.T) {
 		t.Errorf("status = %d, want 400", rr.Code)
 	}
 }
-
