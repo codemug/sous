@@ -6,6 +6,33 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
   {{template "pool-bar" .Pool}}
   {{template "orphans" .Pool.Orphans}}
 
+  {{/* THE FLEET GRID (Task 12). .NodeCards is nil on a single-node server
+       (no gRPC fleet configured - see pageData.NodeCards' own doc comment),
+       so this whole section disappears there rather than showing an empty
+       one. Each card reuses the SAME "pool-bar" partial as the section
+       above, fed that node's own PoolGiB/ReserveGiB/MarginGiB rather than
+       this box's - a node that has never gone quiet draws exactly like the
+       single-node bar; one that has still renders from its last-known
+       snapshot, only greyed out by the disconnected chip below. */}}
+  {{if .NodeCards}}
+  <h2>Fleet</h2>
+  <div class="cards wide">
+  {{range .NodeCards}}
+    <article class="card{{if not .Connected}} is-idle{{end}}" data-node="{{.NodeID}}">
+      <div class="card-head">
+        <span class="card-title">{{.NodeID}}</span>
+        {{if .Connected}}
+          <span class="chip is-ready">connected</span>
+        {{else}}
+          <span class="chip is-idle">disconnected</span>
+        {{end}}
+      </div>
+      {{template "pool-bar" .Bar}}
+    </article>
+  {{end}}
+  </div>
+  {{end}}
+
   {{if .Pool.Residents}}
   <h2>Deployed</h2>
   <div class="cards">

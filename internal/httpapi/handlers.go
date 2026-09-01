@@ -48,6 +48,15 @@ type pageData struct {
 	// action (Task 11): CachedWeightRepos says which (recipe, node) pairs
 	// have something on disk to clear.
 	Nodes []nodecatalog.NodeView
+	// NodeCards is the multi-node dashboard grid node.html draws (Task 12):
+	// one card per node in Nodes above, pre-shaped with its own pool bar
+	// (see httpapi.NodeCardView's own doc comment). A separate field from
+	// Nodes rather than reusing it - Nodes is already
+	// []nodecatalog.NodeView for models.html's per-node weights actions,
+	// and node.html needs a different shape (its own PoolBar per card, not
+	// a raw snapshot) for the same underlying data. nil on a single-node
+	// server, exactly like Nodes.
+	NodeCards []NodeCardView
 	// WeightsProtection is keyed by recipe ID, present only for a recipe
 	// whose repo is still referenced by some OTHER recipe (see
 	// weights.go's classifyProtection) - models.html uses this to decide
