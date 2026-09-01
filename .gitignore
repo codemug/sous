@@ -7,3 +7,6 @@ progress.txt
 # Session scratch from the agent harness, not source.
 .omc/
 **/.omc/
+
+# Protoc build artifacts (downloaded binary, not source)
+.bin/
