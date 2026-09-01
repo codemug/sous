@@ -162,8 +162,13 @@ func main() {
 
 	// The larder scans MODEL_DIR/hub, which is where huggingface_hub places
 	// snapshots under the HF_HOME bind mount.
+	//
+	// nil, nil: this is the single-node binary, with no souslet fleet to
+	// route node-scoped deploy/undeploy/plan requests to. Those routes are
+	// additive (see internal/httpapi/server.go's New doc comment) and this
+	// binary never receives requests aimed at them.
 	h, err := httpapi.New(mgr, cat, keys, fx, hfs, reqLogW, reqLogR, mem.TotalGiB,
-		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard)
+		filepath.Join(cfg.ModelDir, "hub"), filepath.Join(cfg.DataDir, "sources"), guard, nil, nil)
 	if err != nil {
 		log.Fatalf("http: %v", err)
 	}

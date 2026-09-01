@@ -21,6 +21,8 @@ import (
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
+	"github.com/codemug/sous/internal/grpcserver"
+	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/ports"
 	"github.com/codemug/sous/internal/store"
 )
@@ -130,6 +132,26 @@ func newTestServerWithReqLogDir(t *testing.T) (http.Handler, string) {
 
 func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string) {
 	t.Helper()
+	h, dir, _ := buildServerFull(t, hub, rt, guard)
+	return h, dir
+}
+
+// newTestServerWithNodes hands back the nodecatalog powering the new
+// node-scoped deploy/undeploy/plan routes as well, so a test can seed it
+// directly via ReplaceSnapshot - the same catalog grpcserver would fill from
+// a connected souslet's NodeSnapshot, but reachable synchronously without
+// standing up a real gRPC connection.
+func newTestServerWithNodes(t *testing.T) (http.Handler, *nodecatalog.Catalog) {
+	t.Helper()
+	h, _, nodes := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true})
+	return h, nodes
+}
+
+// buildServerFull is buildServerWith's real implementation, broken out so
+// node-scoped tests can also get at the *nodecatalog.Catalog backing the new
+// routes; every other existing helper wraps this and discards it.
+func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string, *nodecatalog.Catalog) {
+	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -168,11 +190,17 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard)
+	// A real nodecatalog + grpcserver pair, not nil: node-scoped route tests
+	// need somewhere to seed a node snapshot via ReplaceSnapshot, and this
+	// server is never asked to actually connect to a souslet, so an empty
+	// pair costs the existing single-node tests nothing.
+	nodes := nodecatalog.New()
+	gsrv := grpcserver.New(nodes)
+	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard, gsrv, nodes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, reqLogDir
+	return h, reqLogDir, nodes
 }
 
 func TestListRecipesReturnsSeeds(t *testing.T) {

@@ -256,6 +256,22 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	if nodeID := r.PathValue("nodeID"); nodeID != "" {
+		rec, err := s.cat.Get(v)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		res, err := planOnNode(s.nodes, v, nodeID, rec.Declared.TotalGiB())
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
 	res, err := s.mgr.Plan(v)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
@@ -283,6 +299,11 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		port = n
+	}
+
+	if nodeID := r.PathValue("nodeID"); nodeID != "" {
+		s.deployNode(w, v, nodeID, port, force)
+		return
 	}
 
 	rec, err := s.mgr.Deploy(r.Context(), v, port, force)
@@ -318,11 +339,68 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec)
 }
 
+// deployNode is the node-scoped half of deploy: the recipe travels to nodeID
+// over gRPC instead of running against this process's own local
+// deploy.Manager. Always answers JSON - the node-scoped routes are new, have
+// no existing form-posting UI, and Task 13's drag-and-drop deploy calls this
+// with fetch(), which never sends the form Content-Type wantsHTML checks for.
+func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, force bool) {
+	rec, err := s.cat.Get(v)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Capacity checking here reads margin from the nodecatalog snapshot
+	// rather than issuing a live call - see planOnNode's doc comment for why.
+	plan, err := planOnNode(s.nodes, v, nodeID, rec.Declared.TotalGiB())
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if !plan.Fits && !force {
+		// Same shape as the legacy path's JSON capacity refusal
+		// (writeJSON(w, http.StatusConflict, ce.Result)): a script gets the
+		// margin and MustFree list either way.
+		writeJSON(w, http.StatusConflict, plan)
+		return
+	}
+
+	recipeYAML, err := recipeToYAML(rec)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	res, err := deployToNode(s.gsrv, nodeID, recipeYAML, port, force)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) undeploy(w http.ResponseWriter, r *http.Request) {
 	v, ok := id(r, w)
 	if !ok {
 		return
 	}
+
+	// Node-scoped: synchronous, unlike the legacy path below. undeployFromNode
+	// blocks on the node's own reply (matching deployToNode's shape), so this
+	// inherits the same hanging-POST-during-a-slow-stop tradeoff the legacy
+	// path's own comment warns about - carried forward from the brief as a
+	// known gap rather than solved here, since souslet's stop and this
+	// route's request/reply framing are both outside this task's scope.
+	if nodeID := r.PathValue("nodeID"); nodeID != "" {
+		res, err := undeployFromNode(s.gsrv, nodeID, v)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
 	// ASYNCHRONOUS ON PURPOSE. Docker's stop carries a 60 second grace period
 	// and a 61 GiB model spends most of it releasing the pool. Doing that here
 	// left the browser on a hanging POST for a minute with nothing to show for

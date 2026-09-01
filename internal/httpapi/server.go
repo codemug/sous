@@ -10,7 +10,9 @@ import (
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/gateway"
+	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/hf"
+	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/reqlog"
 	"html/template"
 	"net/http"
@@ -33,6 +35,16 @@ type Server struct {
 	reqLogR *reqlog.RetentionStore
 	tpl     *template.Template
 
+	// gsrv and nodes are the multi-node deploy path added alongside mgr
+	// during the migration described in docs/superpowers/specs/2026-09-01-
+	// sous-multinode-design.md: deploy/undeploy/plan requests that carry a
+	// node ID route through gsrv to a specific connected souslet instead of
+	// mgr's local deploy.Manager. Both fields are optional (nil is valid) so
+	// existing single-node callers of New that pass nil here keep working
+	// exactly as before - only the new node-scoped routes ever touch them.
+	gsrv  *grpcserver.Server
+	nodes *nodecatalog.Catalog
+
 	pool float64
 	// hubDir is the HuggingFace cache under the model directory. The larder
 	// scans it per request: the disk is the source of truth, and caching it
@@ -50,15 +62,20 @@ type Server struct {
 	guard auth.Config
 }
 
+// gsrv and nodes are the multi-node deploy path (see the Server.gsrv/nodes
+// doc comment): pass nil for both from a caller with no souslet fleet to
+// talk to - a single-node caller like cmd/sous - since only the new
+// node-scoped routes ever dereference them.
 func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.Manager,
 	hfs *hf.Store, rl *reqlog.Writer, rs *reqlog.RetentionStore,
-	poolGiB float64, hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
+	poolGiB float64, hubDir, sourcesDir string, guard auth.Config,
+	gsrv *grpcserver.Server, nodes *nodecatalog.Catalog) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{mgr: m, cat: c, keys: keys, fetch: fx, hf: hfs, reqLogW: rl, reqLogR: rs, tpl: tpl,
-		pool: poolGiB, hubDir: hubDir, guard: guard,
+		pool: poolGiB, hubDir: hubDir, guard: guard, gsrv: gsrv, nodes: nodes,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	// The OpenAI-compatible surface. Every deployed model behind one endpoint,
@@ -155,6 +172,15 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	s.mux.HandleFunc("GET /api/plan/{id}", s.plan)
 	s.mux.HandleFunc("POST /api/deploy/{id}", s.deploy)
 	s.mux.HandleFunc("POST /api/undeploy/{id}", s.undeploy)
+	// Node-scoped routes for the multi-node rollout, alongside the
+	// single-node routes above rather than replacing them (kept during the
+	// migration period; the single-node routes are marked for removal in
+	// Task 14 once every deploy path is node-scoped). {id}/{nodeID} is
+	// unambiguous against {id} alone - different segment counts, so the
+	// mux never has to choose between them.
+	s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
+	s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
+	s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
 	s.mux.HandleFunc("GET /api/larder", s.listLarder)
 	s.mux.HandleFunc("POST /api/larder/delete", s.deleteWeights)
 	s.mux.HandleFunc("GET /api/sources", s.listSources)
