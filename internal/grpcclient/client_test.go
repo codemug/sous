@@ -114,13 +114,18 @@ func (f *twoCommandServer) Connect(stream pb.Souslet_ConnectServer) error {
 			return err
 		}
 	}
-	for range f.commands {
+	// Count DeployResults, not messages: a successful deploy is now followed
+	// by a pushed NodeSnapshot (see dispatch's resnapshot handling), so the
+	// two replies this waits for are not necessarily the next two envelopes
+	// on the stream.
+	for got := 0; got < len(f.commands); {
 		env, err := stream.Recv()
 		if err != nil {
 			return err
 		}
 		if res := env.GetDeployResult(); res != nil {
 			f.received <- res
+			got++
 		}
 	}
 	<-stream.Context().Done()

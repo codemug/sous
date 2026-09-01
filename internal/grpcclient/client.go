@@ -26,6 +26,21 @@ type Client struct {
 	PoolGiB     float64
 	ReserveGiB  float64
 
+	// SnapshotInterval is how often this node re-reports its full state
+	// while a connection stays up. Zero means defaultSnapshotInterval.
+	//
+	// Not optional polish: sous-api's whole view of a node's residency
+	// (capacity planning for the next deploy, the fleet cards, MarginGiB,
+	// the "weights cached" chips) comes from these snapshots, and with a
+	// connect-time snapshot alone that view was accurate only at the
+	// instant a node connected. The concrete failure it caused: planOnNode
+	// (internal/httpapi/deploy_grpc.go) sizes a deploy against
+	// view.Deployments, so a second, third and fourth deploy onto an
+	// already-full node all passed the capacity gate against a snapshot
+	// taken when the node was empty - precisely the over-commitment this
+	// codebase's capacity planning exists to prevent.
+	SnapshotInterval time.Duration
+
 	// proxyReqs assembles a proxied HTTP request's HTTPRequestHead + its
 	// HTTPRequestChunk(s) - which dispatch below receives as separate,
 	// individually-routed Envelopes correlated only by stream_id - back
@@ -106,11 +121,7 @@ func (c *Client) connectOnce(ctx context.Context, resetBackoff func()) error {
 	// can never contend with - or block - a fresh reconnect's sends.
 	var sendMu sync.Mutex
 
-	snap := c.Handlers.Snapshot(ctx, c.NodeID, c.PoolGiB, c.ReserveGiB)
-	sendMu.Lock()
-	err = stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: snap}})
-	sendMu.Unlock()
-	if err != nil {
+	if err := c.sendSnapshot(ctx, stream, &sendMu); err != nil {
 		return err
 	}
 
@@ -124,6 +135,19 @@ func (c *Client) connectOnce(ctx context.Context, resetBackoff func()) error {
 	if resetBackoff != nil {
 		resetBackoff()
 	}
+
+	// Keep re-reporting this node's state for as long as the connection
+	// lives. The design is level-triggered by intent - a full snapshot,
+	// never a diff, "so a node's last snapshot is always exactly what that
+	// node itself reported" (nodecatalog's package doc) - but level-
+	// triggered only converges if the level is actually re-read. This makes
+	// it periodic rather than once-per-connection. Scoped to this connection
+	// generation: closing connDone stops this loop when connectOnce returns,
+	// so a reconnect never leaves an older generation's ticker writing to a
+	// dead stream.
+	connDone := make(chan struct{})
+	defer close(connDone)
+	go c.snapshotLoop(ctx, stream, &sendMu, connDone)
 
 	for {
 		env, err := stream.Recv()
@@ -151,8 +175,64 @@ func (c *Client) connectOnce(ctx context.Context, resetBackoff func()) error {
 	}
 }
 
+// defaultSnapshotInterval is how often a connected node re-reports its full
+// state when SnapshotInterval is left at zero. Short enough that sous-api's
+// view of a fleet - and therefore the capacity gate on the next deploy -
+// converges within seconds of anything changing on a node; long enough that
+// a node with nothing happening on it costs one cheap Docker query and one
+// small message every few seconds, not a stream of chatter.
+const defaultSnapshotInterval = 15 * time.Second
+
+func (c *Client) snapshotInterval() time.Duration {
+	if c.SnapshotInterval > 0 {
+		return c.SnapshotInterval
+	}
+	return defaultSnapshotInterval
+}
+
+// sendSnapshot builds this node's current state from Docker and sends it.
+// Every snapshot on a connection goes through here - the connect-time one,
+// the ticker's, and the post-command pushes - so they cannot drift apart in
+// how they are built or locked.
+func (c *Client) sendSnapshot(ctx context.Context, stream pb.Souslet_ConnectClient, sendMu *sync.Mutex) error {
+	snap := c.Handlers.Snapshot(ctx, c.NodeID, c.PoolGiB, c.ReserveGiB)
+	sendMu.Lock()
+	defer sendMu.Unlock()
+	return stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: snap}})
+}
+
+// snapshotLoop re-reports this node's state on a ticker until the connection
+// it belongs to ends. A send failure means the stream is already gone (the
+// receive loop in connectOnce is about to return the same failure and
+// trigger a reconnect), so it just stops rather than retrying against a dead
+// stream.
+func (c *Client) snapshotLoop(ctx context.Context, stream pb.Souslet_ConnectClient, sendMu *sync.Mutex, connDone <-chan struct{}) {
+	t := time.NewTicker(c.snapshotInterval())
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			if err := c.sendSnapshot(ctx, stream, sendMu); err != nil {
+				return
+			}
+		case <-connDone:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (c *Client) dispatch(ctx context.Context, stream pb.Souslet_ConnectClient, sendMu *sync.Mutex, env *pb.Envelope) {
 	var reply *pb.Envelope
+	// resnapshot marks the commands that CHANGE this node's state. The
+	// ticker above would pick those changes up on its own within a few
+	// seconds, but a deploy is exactly when sous-api most needs an accurate
+	// picture (the operator's very next action is often another deploy onto
+	// the same node, planned against this data), so these push a fresh
+	// snapshot the moment the work is done instead of waiting for the next
+	// tick.
+	var resnapshot bool
 	switch {
 	case env.GetHttpReqHead() != nil:
 		c.proxyReqs.Store(env.StreamId, &pendingProxyReq{head: env})
@@ -175,10 +255,12 @@ func (c *Client) dispatch(ctx context.Context, stream pb.Souslet_ConnectClient, 
 		reply = &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeployResult{
 			DeployResult: c.Handlers.HandleDeploy(ctx, env.GetDeploy()),
 		}}
+		resnapshot = true
 	case env.GetUndeploy() != nil:
 		reply = &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_UndeployResult{
 			UndeployResult: c.Handlers.HandleUndeploy(ctx, env.GetUndeploy()),
 		}}
+		resnapshot = true
 	case env.GetFetch() != nil:
 		reply = &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{
 			FetchProgress: c.Handlers.HandleFetch(ctx, env.GetFetch()),
@@ -187,6 +269,7 @@ func (c *Client) dispatch(ctx context.Context, stream pb.Souslet_ConnectClient, 
 		reply = &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeleteWeightsResult{
 			DeleteWeightsResult: c.Handlers.HandleDeleteWeights(ctx, env.GetDeleteWeights()),
 		}}
+		resnapshot = true
 	default:
 		return // snapshot/heartbeat/error - nothing this side needs to reply to
 	}
@@ -195,6 +278,16 @@ func (c *Client) dispatch(ctx context.Context, stream pb.Souslet_ConnectClient, 
 	sendMu.Unlock()
 	if err != nil {
 		log.Printf("souslet: failed to send reply for stream %s: %v", env.StreamId, err)
+		return
+	}
+	// AFTER the reply, never before: sous-api's caller is blocked on that
+	// reply (grpcserver.Send correlates exactly one), and a snapshot is
+	// worth nothing to it if it arrives at the cost of delaying the answer
+	// it is waiting on.
+	if resnapshot {
+		if err := c.sendSnapshot(ctx, stream, sendMu); err != nil {
+			log.Printf("souslet: failed to push a post-command snapshot: %v", err)
+		}
 	}
 }
 
