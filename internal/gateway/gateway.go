@@ -493,7 +493,7 @@ func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name str
 			fmt.Sprintf("%s did not accept the request: %v", nodeID, err))
 		return
 	}
-	if err := stream.SendChunk(body, true); err != nil {
+	if err := sendChunkedProxyBody(stream, body); err != nil {
 		writeErr(w, http.StatusBadGateway, "upstream_error",
 			fmt.Sprintf("%s did not accept the request body: %v", nodeID, err))
 		return
@@ -523,12 +523,38 @@ func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name str
 			// failure (node disconnected, souslet reported an error) is
 			// stop - a second status/error body now would be invisible to
 			// most clients and would corrupt a response already in
-			// progress. This mirrors ReverseProxy's own behavior on a
-			// write error mid-copy.
+			// progress.
 			return
 		}
 		if len(chunk.GetData()) > 0 {
-			_, _ = w.Write(chunk.GetData())
+			if _, werr := w.Write(chunk.GetData()); werr != nil {
+				// THE ORIGINAL CLIENT IS GONE (connection reset, browser
+				// navigation, client-side cancel - all normal for a long
+				// LLM/TTS/ASR generation someone gave up waiting on).
+				// Unlike a plain forwarding loop that ignores this, stop
+				// relaying immediately and let the deferred stream.Close()
+				// release this stream_id, rather than continuing to drain a
+				// response nobody will ever read. httputil.ReverseProxy's
+				// own copyBuffer already checks its write error the same
+				// way; this loop previously discarded it, which was both a
+				// resource-usage bug and a factually wrong comment (it
+				// claimed to mirror ReverseProxy's behavior while doing the
+				// opposite) - both fixed here.
+				//
+				// DISCLOSED, DEFERRED LIMITATION: this bounds the GATEWAY
+				// side only. It does not (yet) tell souslet to stop -
+				// there's no Cancel/Abort message in the wire protocol
+				// (proto/souslet/v1/souslet.proto, Task 1's already-
+				// committed schema) to carry that signal, and adding one is
+				// out of this fix's scope. souslet keeps forwarding
+				// whatever the local model container produces until that
+				// response completes naturally or the node disconnects; the
+				// model itself may keep generating and burning GPU compute
+				// for a request nobody's listening to anymore. A real fix
+				// needs a new proto message type and is a good candidate
+				// for a dedicated follow-up task.
+				return
+			}
 			// Flushed after every chunk, exactly like the local path's
 			// FlushInterval: -1 - without this, Go's own response buffering
 			// would hold token-by-token SSE output until the whole
@@ -541,7 +567,50 @@ func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name str
 		if chunk.GetEof() {
 			return
 		}
+		if r.Context().Err() != nil {
+			// Caught here too, not just via a failed Write: a client can
+			// disconnect between two chunks (e.g. right after a write that
+			// happened to still succeed, or during an empty/keep-alive
+			// chunk with no data to write at all), and this loop should not
+			// wait for the NEXT write to notice - same reasoning and same
+			// disclosed limitation as the write-error branch above.
+			return
+		}
 	}
+}
+
+// proxyChunkSize matches handleProxyRequest's own response-side read size
+// (internal/grpcclient/client.go) - not load-bearing that the two match
+// exactly, just consistent, so anyone tracing a proxied request's frames on
+// the wire sees one convention rather than two.
+const proxyChunkSize = 4096
+
+// sendChunkedProxyBody sends body as a series of fixed-size
+// HTTPRequestChunk messages instead of one big one. This matters for
+// correctness, not just style: grpc-go defaults to a 4MB max receive
+// message size, and this package's own maxRequestBytes (32MB, "audio
+// uploads are the large case") already documents that bodies well past 4MB
+// are the expected case, not an edge case - a single oversized message
+// would fail with ResourceExhausted inside souslet's connectOnce receive
+// loop, and per Run's reconnect-on-any-stream-error design, that doesn't
+// just fail the one request, it drops the ENTIRE node's gRPC connection,
+// taking every other in-flight request and deployment on it down too.
+// Mirrors handleProxyRequest's response-side chunking (client.go) exactly,
+// just in the opposite direction.
+func sendChunkedProxyBody(stream *grpcserver.ProxyStream, body []byte) error {
+	if len(body) == 0 {
+		return stream.SendChunk(nil, true)
+	}
+	for offset := 0; offset < len(body); offset += proxyChunkSize {
+		end := offset + proxyChunkSize
+		if end > len(body) {
+			end = len(body)
+		}
+		if err := stream.SendChunk(body[offset:end], end == len(body)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const maxRequestBytes = 32 << 20 // audio uploads are the large case

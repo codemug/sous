@@ -698,6 +698,281 @@ func TestProxyOverGRPCFailsFastWhenTheNodeIsNotConnected(t *testing.T) {
 	}
 }
 
+// THE FIX FOR FINDING 1 (review round). A request body larger than one
+// proxyChunkSize must actually travel as MULTIPLE HTTPRequestChunk messages,
+// not one big one - grpc-go's default 4MB max receive message size means a
+// single-message body in the 4-32MB range (this gateway's own
+// maxRequestBytes says audio uploads are the expected large case, not an
+// edge case) would fail with ResourceExhausted inside souslet's receive
+// loop, which - per Run's reconnect-on-any-stream-error design - drops the
+// WHOLE node's connection, not just that one request. This test proves both
+// that the body round-trips byte for byte AND that it was genuinely split
+// into more than one chunk on the wire (via the fake souslet's own chunk
+// count, echoed back in a response header) - a body that merely "still
+// works" would not by itself prove chunking is actually happening.
+func TestProxyOverGRPCChunksRequestBodiesLargerThanOneChunk(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId:      "asus-gx10",
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	})
+	gsrv := grpcserver.New(nodes)
+	stop := dialFakeSousletThatEchoesTheRequestBody(t, gsrv, "asus-gx10")
+	defer stop()
+
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	// proxyChunkSize is 4096; comfortably more than one chunk's worth so a
+	// regression back to "one SendChunk call for the whole body" cannot
+	// accidentally still pass by coincidence.
+	padding := strings.Repeat("x", proxyChunkSize*3+100)
+	body := `{"model":"dflash2","padding":"` + padding + `"}`
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	g.Proxy(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != body {
+		t.Fatalf("body did not round-trip intact: got %d bytes, want %d bytes", rec.Body.Len(), len(body))
+	}
+	chunks, err := strconv.Atoi(rec.Header().Get("X-Chunk-Count"))
+	if err != nil {
+		t.Fatalf("X-Chunk-Count header missing or not a number: %q", rec.Header().Get("X-Chunk-Count"))
+	}
+	if chunks < 2 {
+		t.Fatalf("chunk count = %d, want at least 2 - the body was sent as a single message, not actually chunked", chunks)
+	}
+}
+
+// dialFakeSousletThatEchoesTheRequestBody accumulates every HTTPRequestChunk
+// for a stream (across however many arrive before Eof) and echoes the
+// reassembled body back verbatim as the response body, with the number of
+// chunks it took to arrive reported in an X-Chunk-Count response header -
+// direct, wire-level proof of how many HTTPRequestChunk messages the
+// gateway actually sent, independent of whether the reassembled bytes
+// happen to be correct.
+func dialFakeSousletThatEchoesTheRequestBody(t *testing.T, srv *grpcserver.Server, nodeID string) func() {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	s := grpc.NewServer()
+	pb.RegisterSousletServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	client := pb.NewSousletClient(conn)
+	stream, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{
+		NodeId:      nodeID,
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	}}}); err != nil {
+		t.Fatalf("send snapshot: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var streamID string
+		var body []byte
+		var count int
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if env.GetHttpReqHead() != nil {
+				streamID = env.StreamId
+				body = nil
+				count = 0
+				continue
+			}
+			chunk := env.GetHttpReqChunk()
+			if chunk == nil || env.StreamId != streamID {
+				continue
+			}
+			body = append(body, chunk.Data...)
+			count++
+			if !chunk.Eof {
+				continue
+			}
+			_ = stream.Send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespHead{
+				HttpRespHead: &pb.HTTPResponseHead{Status: 200, Headers: map[string]string{
+					"X-Chunk-Count": strconv.Itoa(count),
+				}},
+			}})
+			_ = stream.Send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: body, Eof: true},
+			}})
+		}
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ps, err := srv.OpenProxyStream(nodeID)
+		if err == nil {
+			ps.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node %q never showed as connected to srv: %v", nodeID, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return func() {
+		_ = stream.CloseSend()
+		_ = conn.Close()
+		s.Stop()
+		<-done
+	}
+}
+
+// THE FIX FOR FINDING 2 (review round). When the original HTTP client
+// disconnects mid-stream, the gateway must stop relaying promptly instead
+// of silently draining the rest of the response into a discarded write
+// error - bounding the GATEWAY side's resource usage even though it cannot
+// (yet, see proxyOverGRPC's doc comment) stop souslet's own generation.
+// Proven here by a fake souslet that streams chunks indefinitely (an
+// unbounded generation, the realistic LLM-streaming shape) and a client
+// that cancels its own request context after the first chunk - the gateway
+// goroutine driving Proxy must return promptly rather than keep looping
+// forever alongside a souslet that never stops on its own.
+func TestProxyOverGRPCStopsRelayingWhenTheClientDisconnects(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId:      "asus-gx10",
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	})
+	gsrv := grpcserver.New(nodes)
+	firstChunkSent := make(chan struct{}, 1)
+	stop := dialFakeSousletThatStreamsForever(t, gsrv, "asus-gx10", firstChunkSent)
+	defer stop()
+
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"dflash2"}`)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		g.Proxy(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-firstChunkSent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake souslet never got a chance to stream a first chunk")
+	}
+	cancel() // simulate the client going away mid-stream
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Proxy kept relaying after the client's context was cancelled - it must stop promptly, not drain forever alongside a souslet that never stops on its own")
+	}
+}
+
+// dialFakeSousletThatStreamsForever sends a response head, then chunks in
+// a tight loop with no Eof, ever - standing in for a real, unbounded LLM
+// token stream. Signals firstChunkSent once the first one is on the wire,
+// so a test can cancel the client side only after streaming has genuinely
+// started (not racing against the request not having reached the fake
+// souslet yet).
+func dialFakeSousletThatStreamsForever(t *testing.T, srv *grpcserver.Server, nodeID string, firstChunkSent chan struct{}) func() {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	s := grpc.NewServer()
+	pb.RegisterSousletServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	client := pb.NewSousletClient(conn)
+	stream, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{
+		NodeId:      nodeID,
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	}}}); err != nil {
+		t.Fatalf("send snapshot: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if env.GetHttpReqHead() == nil {
+				continue
+			}
+			sid := env.StreamId
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespHead{
+				HttpRespHead: &pb.HTTPResponseHead{Status: 200},
+			}})
+			for i := 0; ; i++ {
+				if err := stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespChunk{
+					HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("tok")},
+				}}); err != nil {
+					return // the client side (this test's grpc.ClientConn) went away
+				}
+				if i == 0 {
+					select {
+					case firstChunkSent <- struct{}{}:
+					default:
+					}
+				}
+				time.Sleep(2 * time.Millisecond) // paced, so this loop doesn't just spin CPU forever in the background
+			}
+		}
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ps, err := srv.OpenProxyStream(nodeID)
+		if err == nil {
+			ps.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node %q never showed as connected to srv: %v", nodeID, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return func() {
+		_ = stream.CloseSend()
+		_ = conn.Close()
+		s.Stop()
+		<-done
+	}
+}
+
 // scopedCtx puts a scoped key on the request, as the auth middleware does.
 func scopedCtx(r *http.Request, models ...string) *http.Request {
 	return r.WithContext(authWithKey(r.Context(), models))
