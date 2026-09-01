@@ -640,7 +640,17 @@ code,.mono{font-family:var(--font-mono);font-size:.95em}
 .confirmform label strong{overflow-wrap:anywhere}
 .card-sub,.card-title,.stat .v{overflow-wrap:anywhere;min-width:0}
 
+/* DRAG-AND-DROP DEPLOY (Task 13). [data-recipe-id] cards on Models are the
+   drag source; [data-node-id] fleet cards on Node are the drop target.
+   drop-hover is the only visual affordance while a drag is over a target -
+   toggled by dragdrop.js, not by :hover, since a plain CSS hover cannot
+   tell a drag-carrying pointer from an ordinary one. A grab cursor on the
+   source is the one static hint that a card can be picked up at all. */
+[data-recipe-id]{cursor:grab}
+.drop-target.drop-hover{outline:2px dashed var(--accent);outline-offset:-2px}
+
 </style>
+<script src="/static/dragdrop.js" defer></script>
 </head>
 <body>
 <div class="shell">

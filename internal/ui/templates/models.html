@@ -81,7 +81,11 @@ args:
 
 <div class="cards wide">
   {{range .Models}}
-    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}">
+    {{/* DRAG SOURCE (Task 13): draggable plus a stable id dragdrop.js reads
+         off the card at dragstart and posts straight to
+         /api/deploy/{recipeID}/{nodeID} on drop - no JS framework, just the
+         DOM attribute this card already had every other field of. */}}
+    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}" draggable="true" data-recipe-id="{{.Recipe.ID}}">
       <div class="card-head">
         <span class="card-title"><a href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a></span>
         {{if .Deployed}}

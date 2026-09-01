@@ -17,6 +17,25 @@ import (
 //go:embed templates/*.html
 var files embed.FS
 
+// staticFS is the panel's client-side JS (Task 13, drag-and-drop deploy):
+// the first static asset this project has ever served - everything before
+// it was templates rendered server-side with zero client-side script. Kept
+// as its own embed.FS rather than folded into files above so a future
+// second static asset doesn't have to be told apart from *.html by a
+// pattern match.
+//
+//go:embed static/dragdrop.js
+var staticFS embed.FS
+
+// StaticFS exposes the embedded static assets for httpapi to serve (see
+// server.go's "GET /static/dragdrop.js" route). The embedded paths keep
+// their "static/" directory prefix, which is exactly what
+// http.FileServerFS resolves a request for "/static/dragdrop.js" to once it
+// strips the URL's leading slash - so no fs.Sub rewrite is needed here.
+func StaticFS() embed.FS {
+	return staticFS
+}
+
 func Templates() (*template.Template, error) {
 	return template.New("").Funcs(template.FuncMap{
 		// dict builds the argument for a partial that needs more than one

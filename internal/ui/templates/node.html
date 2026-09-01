@@ -18,7 +18,13 @@ share of it — the bar is drawn to scale, so what is left is what you can deplo
   <h2>Fleet</h2>
   <div class="cards wide">
   {{range .NodeCards}}
-    <article class="card{{if not .Connected}} is-idle{{end}}" data-node="{{.NodeID}}">
+    {{/* DROP TARGET (Task 13): dragdrop.js listens for dragover/drop on
+         every [data-node-id] element and posts the dropped recipe to
+         /api/deploy/{recipeID}/{nodeID}. drop-target is a hook for that JS
+         to toggle drop-hover on, not new box styling of its own - data-node
+         stays too, since nodeCards()/nothing else here depended on renaming
+         it. */}}
+    <article class="card drop-target{{if not .Connected}} is-idle{{end}}" data-node="{{.NodeID}}" data-node-id="{{.NodeID}}">
       <div class="card-head">
         <span class="card-title">{{.NodeID}}</span>
         {{if .Connected}}

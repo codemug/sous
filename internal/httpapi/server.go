@@ -116,6 +116,13 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// The panel's one static asset (Task 13): dragdrop.js, served straight
+	// from the embedded FS rather than through html/template - it is
+	// unchanging JS, not a page. Registered unconditionally (not gated
+	// behind gsrv/nodes != nil like the node-scoped routes below) because
+	// the script itself is harmless to load on a single-node server too -
+	// it just never finds a [data-node-id] drop target to attach to there.
+	s.mux.Handle("GET /static/dragdrop.js", http.FileServerFS(ui.StaticFS()))
 	s.mux.HandleFunc("GET /api/recipes", s.listRecipes)
 	s.mux.HandleFunc("POST /api/recipes/sync", s.syncRecipes)
 	s.mux.HandleFunc("POST /api/recipes", s.createRecipe)
