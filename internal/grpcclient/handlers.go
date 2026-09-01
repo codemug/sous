@@ -7,6 +7,7 @@ package grpcclient
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/fetch"
 	pb "github.com/codemug/sous/internal/pb/souslet/v1"
+	"github.com/codemug/sous/internal/ports"
 	"github.com/codemug/sous/internal/recipe"
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +32,31 @@ type Handlers struct {
 	Runtime  deploy.Runtime
 	Fetch    *fetch.Manager
 	ModelDir string
+
+	// Ports allocates the host port a deployed model listens on when the
+	// DeployCommand does not name one (WantPort 0 - which is every
+	// drag-and-drop deploy, since the UI sends no port at all).
+	//
+	// ALLOCATED HERE, ON THE NODE, not on sous-api. The legacy single-node
+	// path used the same ports.Allocator from inside deploy.Manager, and
+	// that allocator decides availability by ACTUALLY BINDING the port
+	// (see the ports package doc: a foreign process holding a port is
+	// invisible to a records-based check, which is how k3s Traefik silently
+	// owning 443 went undetected on this fleet). Binding is only meaningful
+	// on the machine the container will run on, so sous-api cannot answer
+	// this question for a remote node - it would be testing its own
+	// listening sockets and handing the node a port some other process
+	// there already holds.
+	//
+	// A zero-value Allocator falls back to defaultPortLow/defaultPortHigh,
+	// so a Handlers built without one still allocates real ports rather
+	// than silently handing Docker port 0.
+	Ports ports.Allocator
+
+	// BindHost is the host the allocator probes and the container publishes
+	// on. Empty means 127.0.0.1, matching ports.Allocator's own usage in
+	// deploy.Manager.
+	BindHost string
 
 	// footprintsMu guards footprints, which HandleDeploy writes and
 	// Snapshot reads - both reachable concurrently from the dispatch loop.
@@ -158,16 +185,68 @@ func (h *Handlers) footprintFor(recipeID string) recipe.Footprint {
 	return h.footprints[recipeID]
 }
 
+// Default port range, matching cmd/sous-api's own -port-low/-port-high
+// defaults so a node's deployments land where this fleet already expects
+// them even if souslet was started without the flags.
+const (
+	defaultPortLow  = 18000
+	defaultPortHigh = 18100
+)
+
+func (h *Handlers) bindHost() string {
+	if h.BindHost == "" {
+		return "127.0.0.1"
+	}
+	return h.BindHost
+}
+
+// resolvePort turns a DeployCommand's want_port into the port the container
+// will actually publish on, mirroring deploy.Manager.Deploy's own rule
+// exactly: 0 means "pick a free one", and an explicitly requested port must
+// actually be free (that is what makes ADOPTION of an already-running
+// service's port safe - see the deploy handler's own comment on the -port
+// query parameter).
+//
+// Before this, want_port went straight into engine.BuildSpec, so a
+// drag-and-drop deploy (which sends no port at all) handed Docker HostPort 0
+// - meaning "pick an ephemeral port" - and nothing anywhere recorded what
+// Docker actually picked. The model ran but had no discoverable address:
+// DeployResult.HostPort stayed 0, the snapshot's DeploymentState.HostPort
+// stayed 0, and portFor returned 0, so the proxy path built
+// http://127.0.0.1:0/... and failed.
+func (h *Handlers) resolvePort(want int) (int, error) {
+	alloc := h.Ports
+	if alloc.Low == 0 && alloc.High == 0 {
+		alloc = ports.Allocator{Low: defaultPortLow, High: defaultPortHigh}
+	}
+	if want == 0 {
+		return alloc.Free(h.bindHost())
+	}
+	if !alloc.IsFree(h.bindHost(), want) {
+		return 0, fmt.Errorf("port %d is already in use on this node", want)
+	}
+	return want, nil
+}
+
 // HandleDeploy starts a container from a recipe sent whole on the wire, so
 // souslet never needs its own copy of the catalog. The recipe is untrusted
 // input, not a local file, so engine.BuildSpec's validation is exactly what
 // stands between a malformed recipe and a call into Docker.
+//
+// The host port is resolved HERE rather than by sous-api - see resolvePort
+// and the Ports field's doc comment - and the resolved port, never the
+// requested one, is what gets remembered, reported back in DeployResult, and
+// carried in every subsequent NodeSnapshot.
 func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.DeployResult {
 	var rec recipe.Recipe
 	if err := yaml.Unmarshal([]byte(cmd.RecipeYaml), &rec); err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: "invalid recipe: " + err.Error()}
 	}
-	spec, err := engine.BuildSpec(rec, int(cmd.WantPort), h.ModelDir)
+	port, err := h.resolvePort(int(cmd.WantPort))
+	if err != nil {
+		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
+	}
+	spec, err := engine.BuildSpec(rec, port, h.ModelDir)
 	if err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
@@ -176,9 +255,9 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
 	h.rememberFootprint(cmd.RecipeId, rec.Declared)
-	h.rememberPort(cmd.RecipeId, int(cmd.WantPort))
+	h.rememberPort(cmd.RecipeId, port)
 	h.rememberModel(cmd.RecipeId, rec.Model)
-	return &pb.DeployResult{RecipeId: cmd.RecipeId, ContainerId: containerID, HostPort: cmd.WantPort}
+	return &pb.DeployResult{RecipeId: cmd.RecipeId, ContainerId: containerID, HostPort: int32(port)}
 }
 
 // HandleUndeploy stops and removes the container. deploy.Runtime.Stop
@@ -289,8 +368,15 @@ func (h *Handlers) Snapshot(ctx context.Context, nodeID string, poolGiB, reserve
 	for name, st := range states {
 		recipeID := strings.TrimPrefix(name, containerNamePrefix)
 		footprint := h.footprintFor(recipeID)
+		// HostPort comes from the same ports cache HandleDeploy fills in and
+		// the proxy path reads (portFor): the port this souslet actually
+		// resolved and started the container on. A recipe this process did
+		// not deploy in its current run reports 0, which is an honest
+		// "unknown" - the same convention WeightsGib/KvGib already use here.
+		port, _ := h.portFor(recipeID)
 		deployments = append(deployments, &pb.DeploymentState{
 			RecipeId:   recipeID,
+			HostPort:   int32(port),
 			Phase:      st.Status,
 			WeightsGib: footprint.WeightsGiB,
 			KvGib:      footprint.KVGiB,

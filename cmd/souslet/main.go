@@ -16,6 +16,7 @@ import (
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/grpcclient"
 	"github.com/codemug/sous/internal/mtls"
+	"github.com/codemug/sous/internal/ports"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -29,6 +30,14 @@ func main() {
 	keyPath := flag.String("key", "", "path to this node's issued key PEM")
 	poolGiB := flag.Float64("pool-gib", 0, "this node's total usable memory pool")
 	reserveGiB := flag.Float64("reserve-gib", 24, "GiB reserved for the OS, never committed to a deployment")
+	// The port range models on THIS node are published on. Allocation
+	// happens here rather than on sous-api because ports.Allocator decides
+	// availability by binding, which is only meaningful on the machine the
+	// container runs on - see Handlers.Ports. Defaults match sous-api's own
+	// -port-low/-port-high.
+	portLow := flag.Int("port-low", 18000, "low end of this node's deploy port range")
+	portHigh := flag.Int("port-high", 18100, "high end of this node's deploy port range")
+	bindHost := flag.String("bind-host", "127.0.0.1", "host deployed models are published on, and the host port availability is probed against")
 	flag.Parse()
 
 	for name, v := range map[string]string{"-api-addr": *apiAddr, "-node-id": *nodeID, "-model-dir": *modelDir, "-ca": *caPath, "-cert": *certPath, "-key": *keyPath} {
@@ -66,7 +75,11 @@ func main() {
 		NodeID:      *nodeID,
 		PoolGiB:     *poolGiB,
 		ReserveGiB:  *reserveGiB,
-		Handlers:    &grpcclient.Handlers{Runtime: dockerEngine, Fetch: fetchMgr, ModelDir: *modelDir},
+		Handlers: &grpcclient.Handlers{
+			Runtime: dockerEngine, Fetch: fetchMgr, ModelDir: *modelDir,
+			Ports:    ports.Allocator{Low: *portLow, High: *portHigh},
+			BindHost: *bindHost,
+		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

@@ -126,10 +126,16 @@ func TestHandleDeployStartsTheContainerFromTheEmbeddedRecipeYAML(t *testing.T) {
 	rt := &fakeRuntime{}
 	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
 
+	// An explicitly requested port has to be genuinely free, since
+	// HandleDeploy now checks (mirroring deploy.Manager.Deploy's own rule for
+	// the -port query parameter). Asking the OS for one and releasing it is
+	// how this test names a port that is free on any machine, rather than
+	// hardcoding one and hoping.
+	wantPort := freePort(t)
 	result := h.HandleDeploy(context.Background(), &pb.DeployCommand{
 		RecipeId:   "dflash2",
 		RecipeYaml: validRecipeYAML(t, "dflash2"),
-		WantPort:   8123,
+		WantPort:   int32(wantPort),
 	})
 
 	if result.Error != "" {
@@ -141,8 +147,8 @@ func TestHandleDeployStartsTheContainerFromTheEmbeddedRecipeYAML(t *testing.T) {
 	if result.ContainerId != "fake-container-id" {
 		t.Fatalf("ContainerId = %q, want fake-container-id", result.ContainerId)
 	}
-	if result.HostPort != 8123 {
-		t.Fatalf("HostPort = %d, want 8123", result.HostPort)
+	if result.HostPort != int32(wantPort) {
+		t.Fatalf("HostPort = %d, want %d", result.HostPort, wantPort)
 	}
 	if len(rt.started) != 1 {
 		t.Fatalf("Start called %d times, want 1", len(rt.started))
