@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
@@ -30,6 +31,53 @@ type Handlers struct {
 	Runtime  deploy.Runtime
 	Fetch    *fetch.Manager
 	ModelDir string
+
+	// footprintsMu guards footprints, which HandleDeploy writes and
+	// Snapshot reads - both reachable concurrently from the dispatch loop.
+	footprintsMu sync.Mutex
+	// footprints remembers each currently-deployed recipe's DECLARED
+	// footprint (recipe.Footprint, i.e. WeightsGiB/KVGiB from the recipe's
+	// own Declared field), keyed by recipe ID. This is the cheapest thing
+	// Snapshot can report without a store: single-node Sous refines a
+	// declared footprint against a measured observe.Observation once a
+	// model has actually loaded, but that refinement needs
+	// store.KindObservation, which souslet has no equivalent of. Declared
+	// figures are an honest, if less precise, substitute - not a
+	// regression this task is expected to fix.
+	footprints map[string]recipe.Footprint
+}
+
+// rememberFootprint records a successfully deployed recipe's declared
+// footprint under its recipe ID (pb.DeployCommand.RecipeId - the same
+// identifier HandleUndeploy uses to derive the container to stop via
+// engine.ContainerName, and therefore the same identifier Snapshot derives
+// back out of the live container name) so Snapshot can find it later.
+func (h *Handlers) rememberFootprint(recipeID string, f recipe.Footprint) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	if h.footprints == nil {
+		h.footprints = make(map[string]recipe.Footprint)
+	}
+	h.footprints[recipeID] = f
+}
+
+// forgetFootprint drops a recipe's cached declared footprint once it is no
+// longer deployed, so a stopped model does not keep contributing to
+// Snapshot's capacity figures after it is gone.
+func (h *Handlers) forgetFootprint(recipeID string) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	delete(h.footprints, recipeID)
+}
+
+// footprintFor returns the zero recipe.Footprint for a recipe ID this
+// process has no record of - an honest "unknown" (e.g. a container that
+// predates this souslet process's current run, so it was never deployed
+// through HandleDeploy), never a fabricated figure.
+func (h *Handlers) footprintFor(recipeID string) recipe.Footprint {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	return h.footprints[recipeID]
 }
 
 // HandleDeploy starts a container from a recipe sent whole on the wire, so
@@ -49,6 +97,7 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 	if err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
+	h.rememberFootprint(cmd.RecipeId, rec.Declared)
 	return &pb.DeployResult{RecipeId: cmd.RecipeId, ContainerId: containerID, HostPort: cmd.WantPort}
 }
 
@@ -61,6 +110,7 @@ func (h *Handlers) HandleUndeploy(ctx context.Context, cmd *pb.UndeployCommand) 
 	if err := h.Runtime.Stop(ctx, engine.ContainerName(cmd.RecipeId)); err != nil {
 		return &pb.UndeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
+	h.forgetFootprint(cmd.RecipeId)
 	return &pb.UndeployResult{RecipeId: cmd.RecipeId}
 }
 
@@ -117,16 +167,28 @@ const containerNamePrefix = "sous-"
 // a readiness probe, neither of which souslet's dispatch layer holds. This
 // is the most complete answer available from deploy.Runtime alone.
 //
-// HostPort, WeightsGib and KvGib are left at their zero value for the same
-// reason: that data lives in store.Record and observe.Observation, which
-// this handler has no access to.
+// WeightsGib/KvGib come from the footprints cache HandleDeploy fills in -
+// DECLARED figures, not a measured observe.Observation (single-node Sous's
+// refinement of declared-vs-measured has no equivalent here, since souslet
+// keeps no persistent store to refine against - an accepted simplification,
+// not a regression). A recipe ID with no cache entry (never deployed
+// through this handler in this process's current run - e.g. a container
+// left over from before souslet last restarted) reports 0, which is an
+// honest "unknown", not a claim that the deployment has no footprint.
+//
+// HostPort is left at its zero value: that data lives in store.Record,
+// which this handler has no access to.
 func (h *Handlers) Snapshot(ctx context.Context, nodeID string, poolGiB, reserveGiB float64) *pb.NodeSnapshot {
 	states, _ := h.Runtime.States(ctx)
 	deployments := make([]*pb.DeploymentState, 0, len(states))
 	for name, st := range states {
+		recipeID := strings.TrimPrefix(name, containerNamePrefix)
+		footprint := h.footprintFor(recipeID)
 		deployments = append(deployments, &pb.DeploymentState{
-			RecipeId: strings.TrimPrefix(name, containerNamePrefix),
-			Phase:    st.Status,
+			RecipeId:   recipeID,
+			Phase:      st.Status,
+			WeightsGib: footprint.WeightsGiB,
+			KvGib:      footprint.KVGiB,
 		})
 	}
 	return &pb.NodeSnapshot{

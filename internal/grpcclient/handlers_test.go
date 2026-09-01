@@ -285,6 +285,94 @@ func TestSnapshotReportsNodeIdentityAndLiveDeploymentsFromDocker(t *testing.T) {
 	if d.Phase != "running" {
 		t.Fatalf("Phase = %q, want running", d.Phase)
 	}
+	// This container was never deployed through h.HandleDeploy in this
+	// process, so its footprint is genuinely unknown to it - 0 here is the
+	// honest "unknown", not a claim the deployment has no footprint.
+	if d.WeightsGib != 0 || d.KvGib != 0 {
+		t.Fatalf("WeightsGib/KvGib = %v/%v, want 0/0 for a recipe never deployed through this handler", d.WeightsGib, d.KvGib)
+	}
+}
+
+func TestSnapshotReportsTheDeclaredFootprintOfARecipeDeployedThroughThisHandler(t *testing.T) {
+	name := engine.ContainerName("dflash2")
+	rt := &fakeRuntime{states: map[string]engine.ContainerState{
+		name: {Name: name, Status: "running"},
+	}}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+
+	rec := recipe.Recipe{
+		ID: "dflash2", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
+		Model: "Inferact/Qwen3.8-27B-NVFP4", Image: "vllm/vllm-openai:latest",
+		Declared: recipe.Footprint{WeightsGiB: 24.5, KVGiB: 6},
+	}
+	recipeYAML, err := yaml.Marshal(rec)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+
+	deployResult := h.HandleDeploy(context.Background(), &pb.DeployCommand{
+		RecipeId:   "dflash2",
+		RecipeYaml: string(recipeYAML),
+	})
+	if deployResult.Error != "" {
+		t.Fatalf("HandleDeploy: unexpected error: %s", deployResult.Error)
+	}
+
+	snap := h.Snapshot(context.Background(), "node-a", 80, 8)
+
+	if len(snap.Deployments) != 1 {
+		t.Fatalf("Deployments = %v, want 1 entry", snap.Deployments)
+	}
+	d := snap.Deployments[0]
+	if d.WeightsGib != 24.5 {
+		t.Fatalf("WeightsGib = %v, want 24.5", d.WeightsGib)
+	}
+	if d.KvGib != 6 {
+		t.Fatalf("KvGib = %v, want 6", d.KvGib)
+	}
+}
+
+func TestSnapshotForgetsTheDeclaredFootprintAfterUndeploy(t *testing.T) {
+	name := engine.ContainerName("dflash2")
+	rt := &fakeRuntime{states: map[string]engine.ContainerState{
+		name: {Name: name, Status: "running"},
+	}}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+
+	rec := recipe.Recipe{
+		ID: "dflash2", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
+		Model: "Inferact/Qwen3.8-27B-NVFP4", Image: "vllm/vllm-openai:latest",
+		Declared: recipe.Footprint{WeightsGiB: 24.5, KVGiB: 6},
+	}
+	recipeYAML, err := yaml.Marshal(rec)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	if result := h.HandleDeploy(context.Background(), &pb.DeployCommand{
+		RecipeId:   "dflash2",
+		RecipeYaml: string(recipeYAML),
+	}); result.Error != "" {
+		t.Fatalf("HandleDeploy: unexpected error: %s", result.Error)
+	}
+
+	// Deliberately leave the container in rt.states across the undeploy
+	// call, simulating Docker not having caught up yet: this isolates the
+	// assertion to "did HandleUndeploy forget the cache entry" rather than
+	// "did the container disappear from the deployment list", which would
+	// be true either way.
+	if result := h.HandleUndeploy(context.Background(), &pb.UndeployCommand{RecipeId: "dflash2"}); result.Error != "" {
+		t.Fatalf("HandleUndeploy: unexpected error: %s", result.Error)
+	}
+
+	snap := h.Snapshot(context.Background(), "node-a", 80, 8)
+
+	if len(snap.Deployments) != 1 {
+		t.Fatalf("Deployments = %v, want 1 entry (container still present in Docker state)", snap.Deployments)
+	}
+	d := snap.Deployments[0]
+	if d.WeightsGib != 0 || d.KvGib != 0 {
+		t.Fatalf("WeightsGib/KvGib = %v/%v, want 0/0 - HandleUndeploy should have forgotten the cached footprint", d.WeightsGib, d.KvGib)
+	}
 }
 
 func TestSnapshotToleratesADockerErrorAndReportsNoDeployments(t *testing.T) {
