@@ -162,11 +162,39 @@ func (h *Handlers) HandleUndeploy(ctx context.Context, cmd *pb.UndeployCommand) 
 	return &pb.UndeployResult{RecipeId: cmd.RecipeId}
 }
 
-// HandleFetch starts a weights download and returns immediately with its
-// initial phase; fetch.Manager.Start is itself idempotent against a fetch
-// already in flight, so a retried FetchCommand joins the existing job
-// rather than starting a second one.
+// HandleFetch reports a repo's fetch status, starting a download only when
+// none has ever been attempted (or its container is gone).
+//
+// This checks fetch.Manager.Status FIRST, and only falls through to
+// fetch.Manager.Start when Status reports PhaseAbsent - deliberately NOT the
+// other way around. fetch.Manager.Start is idempotent against a fetch
+// already IN FLIGHT (a still-running job of the same name is left alone,
+// its "downloading" phase reported back as-is), but it is NOT idempotent
+// against a fetch that has already FINISHED: Start's own logic treats any
+// non-running job of the same name - success or failure alike - as stale
+// leftover blocking a new container, and removes and restarts it
+// unconditionally (see Start's doc comment: "clear it so a retry is
+// possible without a manual docker rm"). It has no way to tell "done" from
+// "abandoned," because that was never a distinction its one caller before
+// this task needed - the single-node dashboard's own POST /api/fetch calls
+// Start exactly once, then polls Status (never Start) to watch it finish.
+//
+// FetchCommand's whole design (see deployToNode's fetchWeights in
+// internal/httpapi/deploy_grpc.go) is a REPEATED poll, unlike that one-shot
+// dashboard call - so calling Start on every poll, as this handler
+// originally did, meant a poll landing just after a download actually
+// finished would silently wipe it out and restart the whole thing from
+// scratch, never once reporting "done" to a caller that keeps asking.
+// Status is a pure read (see its own doc comment) with no such side effect,
+// so checking it first - and answering "done"/"failed"/"downloading"
+// straight from it - is what makes repeated FetchCommand polling actually
+// safe to observe completion with. Start is reached only for a genuinely
+// absent job: never attempted, or one whose container is gone (e.g.
+// Forgotten via the dashboard's forgetFetch).
 func (h *Handlers) HandleFetch(ctx context.Context, cmd *pb.FetchCommand) *pb.FetchProgress {
+	if status := h.Fetch.Status(ctx, cmd.Repo); status.Phase != fetch.PhaseAbsent {
+		return &pb.FetchProgress{Repo: cmd.Repo, Phase: string(status.Phase)}
+	}
 	job, err := h.Fetch.Start(ctx, cmd.Repo)
 	if err != nil {
 		return &pb.FetchProgress{Repo: cmd.Repo, Phase: string(fetch.PhaseFailed)}

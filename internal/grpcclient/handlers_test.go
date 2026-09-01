@@ -66,14 +66,24 @@ func (f *fakeRuntime) States(context.Context) (map[string]engine.ContainerState,
 func (f *fakeRuntime) ImageExposedPort(context.Context, string) (int, error) { return 0, nil }
 
 // fakeFetchRuntime is the same shape as fetch.Runtime (internal/fetch/fetch.go).
+//
+// startCalls/removedJobs record every StartJob/RemoveJob invocation (not
+// just whether one happened) so a test can assert Start's destructive
+// "remove and restart" path was never reached at all - the exact thing
+// HandleFetch must avoid once a job has already finished, done or failed
+// (see HandleFetch's own doc comment).
 type fakeFetchRuntime struct {
-	startErr error
-	states   map[string]engine.ContainerState
+	startErr    error
+	startCalls  int
+	removedJobs []string
+
+	states map[string]engine.ContainerState
 }
 
 var _ fetch.Runtime = (*fakeFetchRuntime)(nil)
 
 func (f *fakeFetchRuntime) StartJob(context.Context, engine.JobSpec) (string, error) {
+	f.startCalls++
 	if f.startErr != nil {
 		return "", f.startErr
 	}
@@ -84,7 +94,10 @@ func (f *fakeFetchRuntime) JobStates(context.Context) (map[string]engine.Contain
 	return f.states, nil
 }
 
-func (f *fakeFetchRuntime) RemoveJob(context.Context, string) error { return nil }
+func (f *fakeFetchRuntime) RemoveJob(_ context.Context, name string) error {
+	f.removedJobs = append(f.removedJobs, name)
+	return nil
+}
 
 func (f *fakeFetchRuntime) Logs(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
@@ -245,6 +258,88 @@ func TestHandleFetchReportsFailedPhaseOnInvalidRepo(t *testing.T) {
 
 	if progress.Phase != string(fetch.PhaseFailed) {
 		t.Fatalf("Phase = %q, want %q", progress.Phase, fetch.PhaseFailed)
+	}
+}
+
+// TestHandleFetchReportsDoneWithoutRestartingAnAlreadyCompletedJob guards
+// the fix that makes repeated FetchCommand polling actually safe to observe
+// completion with: a poll landing after a download has already finished
+// successfully must report "done" straight away, not silently wipe out the
+// finished job and restart the whole download. fetch.Manager.Start alone
+// cannot make this distinction - its own logic treats ANY non-running job
+// of the same name, success or failure alike, as stale leftover to remove
+// and replace (see Start's doc comment) - so this only works because
+// HandleFetch checks Status first and never reaches Start at all here.
+//
+// The fake job container here (keyed by fetch.Name(repo), the same name
+// fetch.Manager.Start/Status derive internally) represents exactly the
+// state a real completed download leaves behind: Status "exited", ExitCode
+// 0 - distinct from the zero-value/absent-from-the-map state the other
+// HandleFetch tests exercise for "never attempted."
+func TestHandleFetchReportsDoneWithoutRestartingAnAlreadyCompletedJob(t *testing.T) {
+	const repo = "Inferact/Qwen3.8-27B-NVFP4"
+	frt := &fakeFetchRuntime{states: map[string]engine.ContainerState{
+		fetch.Name(repo): {Status: "exited", ExitCode: 0},
+	}}
+	h := &Handlers{Fetch: &fetch.Manager{Runtime: frt, ModelDir: t.TempDir(), Image: "vllm/vllm-openai:latest"}}
+
+	progress := h.HandleFetch(context.Background(), &pb.FetchCommand{Repo: repo})
+
+	if progress.Phase != string(fetch.PhaseDone) {
+		t.Fatalf("Phase = %q, want %q", progress.Phase, fetch.PhaseDone)
+	}
+	if frt.startCalls != 0 {
+		t.Fatalf("StartJob called %d times, want 0 - a completed job must never be restarted by a poll", frt.startCalls)
+	}
+	if len(frt.removedJobs) != 0 {
+		t.Fatalf("RemoveJob called for %v, want none - a completed job's container must be left alone", frt.removedJobs)
+	}
+}
+
+// TestHandleFetchReportsFailedWithoutRestartingAFailedJob mirrors the "done"
+// case above for a job that finished but failed: a poll must report
+// "failed" directly from Status, not silently retry it via Start. A
+// deliberate retry after failure is a separate, operator-initiated action -
+// the single-node dashboard's own POST /api/fetch calls Start directly for
+// that - not something a passive status poll should decide on its own.
+func TestHandleFetchReportsFailedWithoutRestartingAFailedJob(t *testing.T) {
+	const repo = "Inferact/Qwen3.8-27B-NVFP4"
+	frt := &fakeFetchRuntime{states: map[string]engine.ContainerState{
+		fetch.Name(repo): {Status: "exited", ExitCode: 1},
+	}}
+	h := &Handlers{Fetch: &fetch.Manager{Runtime: frt, ModelDir: t.TempDir(), Image: "vllm/vllm-openai:latest"}}
+
+	progress := h.HandleFetch(context.Background(), &pb.FetchCommand{Repo: repo})
+
+	if progress.Phase != string(fetch.PhaseFailed) {
+		t.Fatalf("Phase = %q, want %q", progress.Phase, fetch.PhaseFailed)
+	}
+	if frt.startCalls != 0 {
+		t.Fatalf("StartJob called %d times, want 0 - a failed job must not be silently restarted by a poll", frt.startCalls)
+	}
+}
+
+// TestHandleFetchReportsDownloadingWithoutCallingStartAgain proves the
+// still-in-progress case also short-circuits from Status rather than ever
+// touching Start: Start's own fast path for a still-running job happens to
+// be harmless (it just returns "already downloading"), but answering
+// directly from Status means a poll against an in-flight download never has
+// to reach Start - and its destructive remove-and-restart branch - at all
+// unless the job is genuinely absent.
+func TestHandleFetchReportsDownloadingWithoutCallingStartAgain(t *testing.T) {
+	const repo = "Inferact/Qwen3.8-27B-NVFP4"
+	frt := &fakeFetchRuntime{states: map[string]engine.ContainerState{
+		fetch.Name(repo): {Status: "running"},
+	}}
+	h := &Handlers{Fetch: &fetch.Manager{Runtime: frt, ModelDir: t.TempDir(), Image: "vllm/vllm-openai:latest"}}
+
+	progress := h.HandleFetch(context.Background(), &pb.FetchCommand{Repo: repo})
+
+	if progress.Phase != string(fetch.PhaseDownloading) {
+		t.Fatalf("Phase = %q, want %q", progress.Phase, fetch.PhaseDownloading)
+	}
+	if frt.startCalls != 0 {
+		t.Fatalf("StartJob called %d times, want 0 - a poll against a still-running job should never reach Start", frt.startCalls)
 	}
 }
 
