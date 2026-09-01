@@ -93,7 +93,16 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// node's naming should not travel with it.
 	al := &alias.Manager{Store: m.Store, Cat: c}
 	s.alias = al
-	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, ReqLog: reqLog(rl), Host: m.BindHost}
+	// Nodes/GRPC are what make the OpenAI surface work for a model running on
+	// another machine: without them set, gateway.Proxy's multi-node branch is
+	// unreachable in the shipped binary and every inference request for a
+	// model on a connected node falls through to the local deploy.Manager and
+	// 404s. They are the same instances the node-scoped deploy routes below
+	// use. Passing them through unconditionally is safe: nil in means nil on
+	// the Gateway, which is exactly the single-node configuration the
+	// local-forward path already expects.
+	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, ReqLog: reqLog(rl), Host: m.BindHost,
+		Nodes: nodes, GRPC: gsrv}
 	s.mux.HandleFunc("GET /v1/models", gw.ListModels)
 	for _, p := range []string{
 		"POST /v1/chat/completions",

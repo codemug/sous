@@ -97,11 +97,13 @@ type Gateway struct {
 	// gsrv/nodes fields: both nil is the normal single-node case (every
 	// pre-existing test in this file constructs a Gateway without them,
 	// and must keep working exactly as before), both set is sous-api's
-	// multi-node case. Proxy branches on their presence BEFORE touching
-	// Res/Cat at all, so this path works even when Res/Cat are nil (no
-	// local deploy.Manager exists in a pure multi-node deployment) - see
-	// Proxy's doc comment for exactly what this path does and does not
-	// carry over from the local-forward path (aliasing, phase-gating).
+	// multi-node case. Proxy asks the node catalog FIRST and only consults
+	// Res/Cat if no connected node runs the requested model, so this path
+	// works even when Res/Cat are nil (no local deploy.Manager exists in a
+	// pure multi-node deployment) while a still-migrating sous-api - which
+	// has both - can serve models from either place. See Proxy's doc comment
+	// for exactly what the node path does and does not carry over from the
+	// local-forward path (aliasing, phase-gating).
 	Nodes *nodecatalog.Catalog
 	GRPC  *grpcserver.Server
 
@@ -321,10 +323,7 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 		g.ReqLog.Log(sender, r.RemoteAddr, name, body)
 	}
 
-	// MULTI-NODE PATH. Checked before touching Res/Cat at all, so it works
-	// even when this Gateway carries no local deploy.Manager (sous-api's
-	// eventual end state per the design doc's migration plan - see the
-	// Nodes/GRPC field doc). Deliberately does not reuse resolve()'s
+	// MULTI-NODE PATH. Deliberately does not reuse resolve()'s
 	// alias/phase machinery: nodecatalog only knows a recipe ID and
 	// Docker's own raw phase string, not this package's richer
 	// deploy.Phase vocabulary or the operator alias store, so a proxied
@@ -332,9 +331,21 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 	// served-model rewrite - the same simplification
 	// grpcclient.forwardToLocalContainer's own doc comment already notes
 	// on the souslet side of this same request.
+	//
+	// PREFER A NODE, FALL BACK LOCALLY. A connected node running this model
+	// wins; otherwise, if this process still has a local deploy.Manager (the
+	// migration-period sous-api does - see cmd/sous-api's package doc for why
+	// internal/deploy is still live), the local-forward path below gets its
+	// chance rather than the request 404ing for a model deployed right here.
+	// When there is no local Resolver at all (Res nil, the design's eventual
+	// pure multi-node end state, and every node-path test in this file), the
+	// node path owns the request outright, including its own 400/404/503
+	// error answers.
 	if g.Nodes != nil && g.GRPC != nil {
-		g.proxyOverGRPC(w, r, name, body)
-		return
+		if _, onNode := g.Nodes.NodeFor(strings.TrimSpace(name)); onNode || g.Res == nil {
+			g.proxyOverGRPC(w, r, name, body)
+			return
+		}
 	}
 
 	rt, err := g.resolve(r.Context(), name)
@@ -436,12 +447,18 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 // vocabulary - there is no equivalent-quality "still loading" signal to act
 // on here yet) and does not consult Alias/Cat for served-model rewriting -
 // name is forwarded exactly as the caller sent it, and must match a recipe
-// ID directly. Scope enforcement (auth.FromContext) is intentionally still
-// skipped too, matching what the local path does for an unscoped caller;
-// wiring a scope check in here as well is straightforward future work, not
-// done in this task because nothing in this task's brief or tests exercises
-// it and the file list does not include the auth-scoping change that would
-// need review alongside it.
+// ID directly.
+//
+// SCOPE IS ENFORCED, using the same allowedBy helper the local path uses.
+// It was previously skipped here on the reasoning that this "matches what
+// the local path does for an unscoped caller" - but the local path's gate
+// exists for SCOPED callers, and skipping it here meant an API key
+// restricted to particular models could reach any model on any node.
+// internal/apikey scoping is a shipped feature, so that was a real bypass,
+// not a cosmetic inconsistency. The one unavoidable difference from the
+// local path: with no Cat/Alias on this path there are no aliases to match
+// against, so the allowlist is compared against the recipe ID the caller
+// named (which, on this path, IS the model name - see the doc above).
 func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name string, body []byte) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -454,6 +471,18 @@ func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name str
 		writeErr(w, http.StatusNotFound, "model_not_found",
 			fmt.Sprintf("no connected node is running %q", name))
 		return
+	}
+
+	// Gated AFTER resolving the node and BEFORE anything is forwarded, the
+	// same order the local path uses (resolve, then scope): a caller whose
+	// key does not cover this model should learn that the model is real and
+	// that their credential is the problem - 403, not 404.
+	if k, ok := auth.FromContext(r.Context()); ok && len(k.Models) > 0 {
+		if !allowedBy(k.Models, name, route{RecipeID: name}) {
+			writeErr(w, http.StatusForbidden, "model_not_permitted",
+				fmt.Sprintf("this key may not use %q", name))
+			return
+		}
 	}
 
 	// OpenProxyStream fails immediately if nodeID has no live gRPC
