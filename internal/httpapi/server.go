@@ -39,9 +39,11 @@ type Server struct {
 	// during the migration described in docs/superpowers/specs/2026-09-01-
 	// sous-multinode-design.md: deploy/undeploy/plan requests that carry a
 	// node ID route through gsrv to a specific connected souslet instead of
-	// mgr's local deploy.Manager. Both fields are optional (nil is valid) so
-	// existing single-node callers of New that pass nil here keep working
-	// exactly as before - only the new node-scoped routes ever touch them.
+	// mgr's local deploy.Manager. Both fields are optional (nil is valid):
+	// New only registers the node-scoped routes that dereference them when
+	// both are non-nil (see New's route registration below), so an existing
+	// single-node caller that passes nil here never has a request reach
+	// code that would nil-panic on them - the routes simply don't exist.
 	gsrv  *grpcserver.Server
 	nodes *nodecatalog.Catalog
 
@@ -178,9 +180,23 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// Task 14 once every deploy path is node-scoped). {id}/{nodeID} is
 	// unambiguous against {id} alone - different segment counts, so the
 	// mux never has to choose between them.
-	s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
-	s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
-	s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
+	//
+	// Registered ONLY when gsrv and nodes are both non-nil. A single-node
+	// caller like cmd/sous passes nil for both (see New's doc comment) -
+	// grpcserver.Server.Send and nodecatalog.Catalog.Node both start by
+	// locking an embedded sync.RWMutex field, which nil-panics on a nil
+	// receiver. So these routes must not exist at all on such a server
+	// rather than exist and crash the process on the first request that
+	// reaches one: net/http's ServeMux answers an unregistered path with a
+	// normal 404 or 405 instead (see deploy_grpc_test.go's
+	// TestNodeScopedRoutesReturnCleanErrorsWhenGRPCIsNotConfigured for
+	// exactly which, and why - it depends on this package's own "GET /"
+	// catch-all), never a panic.
+	if gsrv != nil && nodes != nil {
+		s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
+		s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
+		s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
+	}
 	s.mux.HandleFunc("GET /api/larder", s.listLarder)
 	s.mux.HandleFunc("POST /api/larder/delete", s.deleteWeights)
 	s.mux.HandleFunc("GET /api/sources", s.listSources)

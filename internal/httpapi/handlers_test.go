@@ -132,7 +132,7 @@ func newTestServerWithReqLogDir(t *testing.T) (http.Handler, string) {
 
 func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string) {
 	t.Helper()
-	h, dir, _ := buildServerFull(t, hub, rt, guard)
+	h, dir, _ := buildServerFull(t, hub, rt, guard, true)
 	return h, dir
 }
 
@@ -143,14 +143,30 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 // standing up a real gRPC connection.
 func newTestServerWithNodes(t *testing.T) (http.Handler, *nodecatalog.Catalog) {
 	t.Helper()
-	h, _, nodes := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true})
+	h, _, nodes := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, true)
 	return h, nodes
+}
+
+// newTestServerNilGRPC mirrors exactly how cmd/sous - the single-node binary
+// actually deployed today - constructs a Server: New(..., nil, nil), with no
+// grpcserver.Server or nodecatalog.Catalog at all. It exists to prove hitting
+// one of the node-scoped routes on that real configuration cannot reach code
+// that would nil-panic (grpcserver.Server.Send and nodecatalog.Catalog.Node
+// both start by locking an embedded sync.RWMutex field on their receiver).
+func newTestServerNilGRPC(t *testing.T) http.Handler {
+	t.Helper()
+	h, _, _ := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, false)
+	return h
 }
 
 // buildServerFull is buildServerWith's real implementation, broken out so
 // node-scoped tests can also get at the *nodecatalog.Catalog backing the new
-// routes; every other existing helper wraps this and discards it.
-func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string, *nodecatalog.Catalog) {
+// routes; every other existing helper wraps this and discards it. withGRPC
+// selects which of the two ways New can legitimately be called this test
+// suite exercises: true builds a real nodecatalog/grpcserver pair (the
+// eventual cmd/sous-api shape), false passes nil for both, matching
+// cmd/sous's actual call today.
+func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config, withGRPC bool) (http.Handler, string, *nodecatalog.Catalog) {
 	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
@@ -190,12 +206,18 @@ func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A real nodecatalog + grpcserver pair, not nil: node-scoped route tests
-	// need somewhere to seed a node snapshot via ReplaceSnapshot, and this
-	// server is never asked to actually connect to a souslet, so an empty
-	// pair costs the existing single-node tests nothing.
-	nodes := nodecatalog.New()
-	gsrv := grpcserver.New(nodes)
+	// withGRPC picks between the two real ways New is actually called: a
+	// nodecatalog + grpcserver pair (node-scoped route tests need somewhere
+	// to seed a node snapshot via ReplaceSnapshot, and this server is never
+	// asked to actually connect to a souslet, so an empty pair costs the
+	// existing single-node tests nothing) versus nil, nil, exactly what
+	// cmd/sous passes today.
+	var nodes *nodecatalog.Catalog
+	var gsrv *grpcserver.Server
+	if withGRPC {
+		nodes = nodecatalog.New()
+		gsrv = grpcserver.New(nodes)
+	}
 	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard, gsrv, nodes)
 	if err != nil {
 		t.Fatal(err)

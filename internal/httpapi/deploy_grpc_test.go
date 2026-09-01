@@ -87,6 +87,30 @@ func TestPlanOnNodeComputesMarginFromTheCatalogSnapshot(t *testing.T) {
 	}
 }
 
+// TestPlanOnNodeWarnsWhenMarginIsThin guards a review finding on Task 8:
+// planOnNode's capacity.Planner previously left WarnFreeGiB at its zero
+// value, silently dropping the swap-risk warning capacity.Planner.Plan sets
+// when a plan fits but only barely - a real safety signal (see
+// cmd/sous/main.go's own WarnFreeGiB: 12 and capacity/plan.go's package doc
+// for the fleet measurements behind that number), not a cosmetic one. This
+// margin (10 GiB, i.e. under 12) fits but must still carry a warning.
+func TestPlanOnNodeWarnsWhenMarginIsThin(t *testing.T) {
+	cat := nodecatalog.New()
+	cat.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24})
+	// usable = 121.6-24 = 97.6; committed = 87.6 -> margin = 10 (< the 12
+	// GiB WarnFreeGiB threshold, but still >= 0, so it should fit AND warn).
+	res, err := planOnNode(cat, "incoming-model", "asus-gx10", 87.6)
+	if err != nil {
+		t.Fatalf("planOnNode: %v", err)
+	}
+	if !res.Fits {
+		t.Fatalf("expected the plan to still fit at a 10 GiB margin, got %+v", res)
+	}
+	if res.Warning == "" {
+		t.Fatalf("expected a swap-risk warning at a 10 GiB margin (below the 12 GiB WarnFreeGiB threshold), got none: %+v", res)
+	}
+}
+
 // ---------- node-scoped routes, end to end ----------
 //
 // These exercise the actual HTTP wiring (route registration, the deploy/
@@ -175,5 +199,54 @@ func TestLegacyDeployRouteStillWorksAlongsideNodeScoped(t *testing.T) {
 	rr := post(t, h, "/api/deploy/kokoro", "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("legacy deploy: %d %s", rr.Code, rr.Body)
+	}
+}
+
+// TestNodeScopedRoutesReturnCleanErrorsWhenGRPCIsNotConfigured guards a
+// review finding on Task 8: cmd/sous - the single-node binary actually
+// deployed on gx10 today - calls httpapi.New with nil gsrv/nodes. Before the
+// fix, hitting any node-scoped route on that exact configuration reached
+// grpcserver.Server.Send or nodecatalog.Catalog.Node on a nil receiver -
+// both start by locking an embedded sync.RWMutex field, which nil-panics.
+// The fix registers the three node-scoped routes only when gsrv and nodes
+// are both non-nil, so on a nil-configured server they simply don't exist
+// and no handler that could reach a nil gsrv/nodes ever runs.
+//
+// The two expected status codes below differ, and that asymmetry is real
+// Go net/http.ServeMux behavior, not a loose end: this package registers
+// "GET /" as the node-dashboard catch-all (s.pageNode), which itself
+// answers 404 for any path but the literal root (TestNodePageDoesNot
+// SwallowUnknownPaths covers that separately) - so an unmatched GET lands
+// there and gets 404. POST has no catch-all registered at "/" at all (only
+// GET is), so the mux sees the path matches SOME registered pattern - the
+// GET catch-all - just not for POST, and answers 405 with an Allow header
+// instead. Either way, nothing dispatches to deployNode/undeployFromNode/
+// planOnNode and nothing nil-panics, which is what this test actually
+// guards; asserting the exact codes (rather than a loose "any 4xx") keeps
+// this test honest about what Go's mux really does here, and would catch a
+// regression to the wrong KIND of error (a 500, say) just as well as to a
+// panic.
+func TestNodeScopedRoutesReturnCleanErrorsWhenGRPCIsNotConfigured(t *testing.T) {
+	h := newTestServerNilGRPC(t)
+
+	for _, tc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, "/api/plan/kokoro/asus-gx10", http.StatusNotFound},
+		{http.MethodPost, "/api/deploy/kokoro/asus-gx10", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/api/undeploy/kokoro/asus-gx10", http.StatusMethodNotAllowed},
+	} {
+		rr := send(t, h, tc.method, tc.path, "", "")
+		if rr.Code != tc.want {
+			t.Errorf("%s %s: status = %d, want %d; body: %s", tc.method, tc.path, rr.Code, tc.want, rr.Body)
+		}
+	}
+
+	// The legacy, non-node-scoped route must still work normally on this
+	// exact configuration - this is the shape cmd/sous runs in production.
+	rr := post(t, h, "/api/deploy/kokoro", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("legacy deploy on a nil-gsrv/nodes server: %d %s", rr.Code, rr.Body)
 	}
 }

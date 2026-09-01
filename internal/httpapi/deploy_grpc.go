@@ -87,7 +87,15 @@ func planOnNode(nodes *nodecatalog.Catalog, recipeID, nodeID string, incomingGiB
 		}
 		resident = append(resident, capacity.Entry{ID: d.RecipeId, GiB: d.WeightsGib + d.KvGib})
 	}
-	planner := capacity.Planner{PoolGiB: view.PoolGiB, ReserveGiB: view.ReserveGiB}
+	// WarnFreeGiB: 12 matches the constant cmd/sous/main.go hardcodes for the
+	// legacy path's own capacity.Planner (not configurable via the recipe or
+	// the wire protocol - a real per-fleet-observed swap-risk threshold, not
+	// a placeholder). Omitting it here would silently drop the swap-risk
+	// warning for every node-scoped plan/deploy; a fully per-node-
+	// configurable value would need a wire-protocol change and is out of
+	// scope for this task, so this hardcodes the same number the single-node
+	// path already ships with.
+	planner := capacity.Planner{PoolGiB: view.PoolGiB, ReserveGiB: view.ReserveGiB, WarnFreeGiB: 12}
 	return planner.Plan(resident, capacity.Entry{ID: recipeID, GiB: incomingGiB}), nil
 }
 
