@@ -136,20 +136,48 @@ func TestUndeployFromNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
 	}
 }
 
+// withFetchPollInterval shortens fetchPollInterval for the duration of a
+// test, restoring it afterward. fetchWeights' poll loop otherwise sleeps the
+// real production interval (several seconds) between retries while a fetch
+// reports "downloading" - fine for one production download, but it would
+// make a test that deliberately exercises more than one poll iteration take
+// unreasonably long for no benefit.
+func withFetchPollInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := fetchPollInterval
+	fetchPollInterval = d
+	t.Cleanup(func() { fetchPollInterval = old })
+}
+
 // TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode is the fetch-
 // triggers-on-cache-miss case: a node whose last-known snapshot carries no
-// CachedWeightRepos for this recipe's model must see a FetchCommand, and its
-// FetchProgress must report phase "done", before deployToNode ever sends the
-// DeployCommand.
+// CachedWeightRepos for this recipe's model must see a FetchCommand before
+// deployToNode ever sends the DeployCommand.
+//
+// The fake souslet here deliberately answers the FIRST FetchCommand with
+// phase "downloading" and only reports "done" on a later one - mirroring
+// souslet's real fetch.Manager.Start, which starts a genuine cache-miss
+// download and returns immediately without waiting for it to finish (see
+// fetchWeights' own doc comment). A fake that answered "done" on the very
+// first reply would never exercise fetchWeights' poll loop at all - only
+// the fact that it eventually re-sends FetchCommand after a non-terminal
+// reply proves the loop actually loops.
 func TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode(t *testing.T) {
+	withFetchPollInterval(t, 10*time.Millisecond)
+
 	nodes := nodecatalog.New()
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"}) // no cached_weight_repos
 	gsrv := grpcserver.New(nodes)
-	var sawFetch, sawDeploy bool
+	var fetchCalls int
+	var sawDeploy bool
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
 		if f := env.GetFetch(); f != nil {
-			sawFetch = true
-			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{FetchProgress: &pb.FetchProgress{Repo: f.Repo, Phase: "done"}}}
+			fetchCalls++
+			phase := "downloading"
+			if fetchCalls >= 2 {
+				phase = "done"
+			}
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{FetchProgress: &pb.FetchProgress{Repo: f.Repo, Phase: phase}}}
 		}
 		if d := env.GetDeploy(); d != nil {
 			sawDeploy = true
@@ -163,11 +191,67 @@ func TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deployToNode: %v", err)
 	}
-	if !sawFetch {
-		t.Fatal("expected a FetchCommand before the DeployCommand")
+	if fetchCalls < 2 {
+		t.Fatalf("expected deployToNode to re-send FetchCommand after a \"downloading\" reply (proving the poll loop actually loops), got %d fetch call(s)", fetchCalls)
 	}
 	if !sawDeploy {
 		t.Fatal("expected a DeployCommand after the fetch completed")
+	}
+}
+
+// TestDeployFailsWhenFetchReportsFailed proves fetchWeights treats "failed"
+// as a terminal outcome, not something to keep polling through: it must
+// return an error immediately, and deployToNode must never send the
+// DeployCommand afterward.
+func TestDeployFailsWhenFetchReportsFailed(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
+	gsrv := grpcserver.New(nodes)
+	var sawDeploy bool
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if f := env.GetFetch(); f != nil {
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{FetchProgress: &pb.FetchProgress{Repo: f.Repo, Phase: "failed"}}}
+		}
+		if env.GetDeploy() != nil {
+			sawDeploy = true
+		}
+		return nil
+	})
+	defer stop()
+
+	_, err := deployToNode(gsrv, nodes, "asus-gx10", "id: dflash2\nmodel: Inferact/Qwen3.8-27B-NVFP4\n", 18000, false)
+	if err == nil {
+		t.Fatal("expected an error when the fetch reports phase \"failed\"")
+	}
+	if sawDeploy {
+		t.Fatal("must not deploy after a failed fetch")
+	}
+}
+
+// TestDeployFailsWhenFetchNeverCompletesWithinTheTimeout proves fetchWeights'
+// poll loop is bounded as a whole by fetchTimeout, not just per FetchCommand
+// round trip: a fetch that reports "downloading" forever must eventually
+// give up rather than hang deployToNode forever.
+func TestDeployFailsWhenFetchNeverCompletesWithinTheTimeout(t *testing.T) {
+	withFetchPollInterval(t, 5*time.Millisecond)
+	oldTimeout := fetchTimeout
+	fetchTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { fetchTimeout = oldTimeout })
+
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
+	gsrv := grpcserver.New(nodes)
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if f := env.GetFetch(); f != nil {
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{FetchProgress: &pb.FetchProgress{Repo: f.Repo, Phase: "downloading"}}}
+		}
+		return nil
+	})
+	defer stop()
+
+	_, err := deployToNode(gsrv, nodes, "asus-gx10", "id: dflash2\nmodel: Inferact/Qwen3.8-27B-NVFP4\n", 18000, false)
+	if err == nil {
+		t.Fatal("expected an error when the fetch never leaves \"downloading\" within the timeout")
 	}
 }
 

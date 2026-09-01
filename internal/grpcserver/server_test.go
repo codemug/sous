@@ -185,6 +185,130 @@ func TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait(t *testing.T) {
 	}, fmt.Sprintf("node %q never showed as disconnected", nodeID))
 }
 
+// TestSendNeverRacesTheCatalogShowingANodeAsConnected guards the ordering
+// Connect must maintain: s.conns[nodeID] has to be registered BEFORE
+// s.cat.ReplaceSnapshot ever makes the catalog report this node as
+// connected - not after. Real callers (deployToNode, the gateway's
+// proxyOverGRPC) both read the catalog first and, if it says connected, call
+// Send/OpenProxyStream immediately afterward with no retry loop of their
+// own - so if the catalog could ever say "connected" before s.conns
+// actually had the entry, that exact sequence would intermittently fail
+// with a spurious "not connected" (this is what an earlier version of this
+// package's own test helper hit, before the ordering was fixed in Connect).
+//
+// This drives many connect cycles CONCURRENTLY (not one after another) over
+// one reused grpc.Server/ClientConn (matching
+// TestConnectDoesNotLeakGoroutinesOnDisconnect's setup below, for the same
+// reason: a fresh server+conn per cycle would swamp this with unrelated
+// transport-setup timing). Concurrency is the point, not just throughput: on
+// an otherwise-idle test machine, Connect's two writes (register in
+// s.conns, then update the catalog) execute back to back with nothing to
+// preempt the goroutine between them, so a sequential, one-at-a-time
+// version of this test does not reliably reproduce the old, buggy ordering
+// even with a short poll interval - confirmed while writing this test, which
+// passed even against a deliberately-reverted, provably-buggy ordering when
+// run one cycle at a time. Running many cycles at once creates real
+// contention on s.mu and s.cat's own mutex from multiple goroutines, which
+// is what actually gives the scheduler a reason to interleave a prober's
+// read between Connect's two writes.
+//
+// Each worker uses t.Errorf, never t.Fatalf/t.Fatal: those must only be
+// called from the goroutine running the test function itself, not from
+// spawned goroutines (see the testing package's own doc comment on FailNow).
+// The overall wait is bounded by a select against a timer, not a bare
+// wg.Wait(), so a genuine hang here fails loudly instead of stalling the
+// whole suite - the same "bounded window, not an unbounded wait" style
+// TestSendDoesNotPanicWhenRacingDisconnect already uses below.
+func TestSendNeverRacesTheCatalogShowingANodeAsConnected(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+
+	lis := bufconn.Listen(1024 * 1024)
+	gs := grpc.NewServer()
+	pb.RegisterSousletServer(gs, srv)
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := pb.NewSousletClient(conn)
+
+	const concurrency = 100
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nodeID := fmt.Sprintf("order-node-%d", i)
+			stream, err := client.Connect(context.Background())
+			if err != nil {
+				t.Errorf("Connect (worker %d): %v", i, err)
+				return
+			}
+			// Echo a DeployResult so the probe Send below actually
+			// completes instead of timing out - this test is about
+			// whether Send fails immediately with "not connected", not
+			// about the reply's content. This goroutine is the sole
+			// reader of stream: nothing else here calls Recv on it.
+			go func() {
+				for {
+					env, err := stream.Recv()
+					if err != nil {
+						return
+					}
+					if cmd := env.GetDeploy(); cmd != nil {
+						_ = stream.Send(&pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeployResult{
+							DeployResult: &pb.DeployResult{RecipeId: cmd.RecipeId},
+						}})
+					}
+				}
+			}()
+			if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+				t.Errorf("Send snapshot (worker %d): %v", i, err)
+				return
+			}
+
+			// Poll until the catalog first shows this node connected,
+			// then immediately probe Send - no retry loop, no grace
+			// period beyond the short sleep between polls.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if view, ok := cat.Node(nodeID); ok && view.Connected {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Errorf("node %q never showed as connected (worker %d)", nodeID, i)
+					return
+				}
+				time.Sleep(100 * time.Microsecond)
+			}
+			probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_, err = srv.Send(probeCtx, nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: "probe"}}})
+			cancel()
+			if err != nil {
+				t.Errorf("Send raced the catalog showing %q connected (worker %d): %v - the instant the catalog reports a node connected, Send must already succeed", nodeID, i, err)
+			}
+			_ = stream.CloseSend()
+		}(i)
+	}
+
+	waitCh := make(chan struct{})
+	go func() { wg.Wait(); close(waitCh) }()
+	select {
+	case <-waitCh:
+	case <-time.After(20 * time.Second):
+		t.Fatal("workers did not finish within 20s - suspected hang, not just a slow race")
+	}
+}
+
 // TestConnectDoesNotLeakGoroutinesOnDisconnect guards against the write-loop
 // goroutine inside Connect never exiting when the *read* loop is the one
 // that notices the stream died (the common case: the client hangs up, the

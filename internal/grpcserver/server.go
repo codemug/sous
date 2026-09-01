@@ -67,14 +67,13 @@ func (s *Server) Catalog() *nodecatalog.Catalog {
 // registered - i.e. whether Send(ctx, nodeID, ...) would proceed past its
 // initial "not connected" check right now, rather than fail immediately.
 //
-// This is a narrower and more precise question than the catalog's own
-// Connected flag: Connect's handshake updates the catalog via
-// s.cat.ReplaceSnapshot a few instructions BEFORE this connection's entry is
-// added to s.conns (see Connect's body), so a caller polling
-// Catalog().Node(nodeID).Connected alone can observe a false positive during
-// that narrow window and then hit a spurious "not connected" from Send
-// immediately after. Callers that need to wait for a fake/real node to be
-// actually ready for Send (test helpers, mainly) should poll this instead.
+// Connect registers a new connection in s.conns BEFORE its handshake ever
+// makes the catalog report the node as connected (see the ordering comment
+// in Connect's body), so by the time Catalog().Node(nodeID).Connected is
+// true, Connected(nodeID) is already true too - this is here mainly so
+// tests (and any other caller that wants the more direct question, without
+// going through the catalog) don't have to reach into unexported state to
+// ask it.
 func (s *Server) Connected(nodeID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -102,7 +101,6 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 		return fmt.Errorf("first message on Connect must be a NodeSnapshot")
 	}
 	nodeID := snap.NodeId
-	s.cat.ReplaceSnapshot(nodeID, snap)
 
 	nc := &nodeConn{
 		send:         make(chan *pb.Envelope, 32),
@@ -110,9 +108,22 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 		proxyStreams: make(map[string]chan *pb.Envelope),
 		done:         make(chan struct{}),
 	}
+	// Register the connection BEFORE the catalog ever reflects this node as
+	// connected - not after. s.conns is what Send/OpenProxyStream actually
+	// check; s.cat is what callers like deployToNode and the gateway's
+	// proxyOverGRPC read first to decide whether it's even worth trying a
+	// live call. If the catalog said "connected" while s.conns was still
+	// empty, a caller reading the catalog and immediately calling Send could
+	// observe a spurious "not connected" - a real, reachable race (not just a
+	// test-timing artifact), since both of those callers do exactly this
+	// read-catalog-then-Send sequence. Registering conns first closes that
+	// window: nothing can observe this node as connected in the catalog
+	// before Send/OpenProxyStream would actually find it.
 	s.mu.Lock()
 	s.conns[nodeID] = nc
 	s.mu.Unlock()
+	s.cat.ReplaceSnapshot(nodeID, snap)
+
 	defer func() {
 		s.mu.Lock()
 		delete(s.conns, nodeID)

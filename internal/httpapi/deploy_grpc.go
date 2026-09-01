@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/codemug/sous/internal/capacity"
+	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/nodecatalog"
 	pb "github.com/codemug/sous/internal/pb/souslet/v1"
@@ -27,15 +28,32 @@ const (
 	// a few seconds is not "about to" - it's unresponsive, and the caller
 	// deserves a fast, honest error rather than a long hang.
 	sendTimeout = 5 * time.Second
+)
 
-	// fetchTimeout bounds a FetchCommand round trip, which - unlike deploy/
-	// undeploy - blocks on souslet actually downloading a model's weights,
-	// tens of GiB for the larger recipes in this fleet. 30 minutes matches
-	// the brief's own suggested bound for a weight download: long enough
-	// for a real fetch to complete, short enough that a fetch that is
-	// genuinely stuck (not just slow) still eventually fails instead of
-	// hanging this call forever.
+var (
+	// fetchTimeout bounds the WHOLE fetch-and-poll loop below, not any single
+	// FetchCommand round trip - a real weight download can take many minutes
+	// for a 20+ GiB model, tens of GiB for the larger recipes in this fleet.
+	// 30 minutes matches the brief's own suggested bound: long enough for a
+	// real fetch to complete, short enough that a fetch that is genuinely
+	// stuck (not just slow) still eventually fails instead of hanging this
+	// call forever.
+	//
+	// A package-level var, not a const, purely so tests can shorten it - see
+	// deploy_grpc_test.go's withFetchPollInterval-style helpers.
 	fetchTimeout = 30 * time.Minute
+
+	// fetchPollInterval is how long fetchWeights sleeps between FetchCommand
+	// retries while souslet reports phase "downloading". souslet's own
+	// fetch.Manager.Start (see HandleFetch's doc comment in
+	// internal/grpcclient/handlers.go) is idempotent against a fetch already
+	// in flight, so re-sending FetchCommand while one is running safely joins
+	// the existing job rather than starting a second one - that is what
+	// makes "keep sending FetchCommand" a correct way to poll rather than a
+	// hack. A few seconds keeps the chatter low against a download that
+	// realistically takes minutes, without risking a caller waiting long
+	// past the point the download actually finished.
+	fetchPollInterval = 3 * time.Second
 )
 
 // deployToNode sends a DeployCommand to nodeID and waits for its correlated
@@ -43,13 +61,13 @@ const (
 // keeps no catalog of its own - the recipe has to arrive with the command.
 //
 // Before deploying, it checks cat's last-known snapshot of nodeID: if the
-// recipe's model is not among that node's CachedWeightRepos, it sends a
-// FetchCommand first and waits for the correlated FetchProgress to report
-// phase "done" before ever sending the DeployCommand. A node deploy would
-// otherwise fail (or, worse, silently trigger souslet's own on-demand fetch
-// mid-deploy) for a model that has never been downloaded there - fetching
-// first makes that step explicit, visible, and something this call actually
-// waits on and can report an error for.
+// recipe's model is not among that node's CachedWeightRepos, it fetches the
+// weights first (see fetchWeights) and waits for that to actually complete
+// before ever sending the DeployCommand. A node deploy would otherwise fail
+// (or, worse, silently trigger souslet's own on-demand fetch mid-deploy) for
+// a model that has never been downloaded there - fetching first makes that
+// step explicit, visible, and something this call actually waits on and can
+// report an error for.
 //
 // If cat has no snapshot for nodeID at all (an unknown node), the fetch
 // check is skipped and the DeployCommand is sent directly - the same "let
@@ -63,16 +81,8 @@ func deployToNode(gsrv *grpcserver.Server, cat *nodecatalog.Catalog, nodeID stri
 	}
 
 	if view, ok := cat.Node(nodeID); ok && !view.CachedWeightRepos[rec.Model] {
-		fetchCtx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
-		reply, err := gsrv.Send(fetchCtx, nodeID, &pb.Envelope{Payload: &pb.Envelope_Fetch{
-			Fetch: &pb.FetchCommand{Repo: rec.Model},
-		}})
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("fetch %s on %s: %w", rec.Model, nodeID, err)
-		}
-		if p := reply.GetFetchProgress(); p == nil || p.Phase != "done" {
-			return nil, fmt.Errorf("fetch %s on %s did not complete: %+v", rec.Model, nodeID, reply)
+		if err := fetchWeights(gsrv, nodeID, rec.Model); err != nil {
+			return nil, err
 		}
 	}
 
@@ -92,6 +102,62 @@ func deployToNode(gsrv *grpcserver.Server, cat *nodecatalog.Catalog, nodeID stri
 		return nil, fmt.Errorf("deploy to %s: %s", nodeID, res.Error)
 	}
 	return res, nil
+}
+
+// fetchWeights makes sure repo's weights are on nodeID's disk before
+// returning, blocking until that is true or fetchTimeout has passed.
+//
+// A single FetchCommand is NOT enough: souslet's HandleFetch dispatches
+// straight to fetch.Manager.Start, and for a genuine cache miss that starts
+// the download and returns immediately with phase "downloading" - it does
+// not itself wait for the download to finish (see fetch.Manager.Start's own
+// doc comment: "begins a download and returns immediately"). So this polls,
+// resending FetchCommand every fetchPollInterval and inspecting the phase
+// each reply reports:
+//
+//   - "done": the weights are on disk - return.
+//   - "failed" or "absent": a terminal failure - return an error rather
+//     than polling forever against a download that already gave up.
+//   - "downloading": still in progress - sleep fetchPollInterval and ask
+//     again. Re-sending FetchCommand while a job is running safely joins the
+//     existing one instead of starting a second (see HandleFetch's doc
+//     comment in internal/grpcclient/handlers.go) - that idempotency is what
+//     makes polling via repeated FetchCommand correct here, not a hack.
+//
+// The whole loop, not any single round trip, is bounded by fetchTimeout:
+// deployToNode must not hang forever on a fetch that never resolves either
+// way.
+func fetchWeights(gsrv *grpcserver.Server, nodeID, repo string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+
+	for {
+		reply, err := gsrv.Send(ctx, nodeID, &pb.Envelope{Payload: &pb.Envelope_Fetch{
+			Fetch: &pb.FetchCommand{Repo: repo},
+		}})
+		if err != nil {
+			return fmt.Errorf("fetch %s on %s: %w", repo, nodeID, err)
+		}
+		p := reply.GetFetchProgress()
+		if p == nil {
+			return fmt.Errorf("fetch %s on %s: unexpected reply shape: %+v", repo, nodeID, reply)
+		}
+		switch fetch.Phase(p.Phase) {
+		case fetch.PhaseDone:
+			return nil
+		case fetch.PhaseFailed, fetch.PhaseAbsent:
+			return fmt.Errorf("fetch %s on %s did not complete: %+v", repo, nodeID, reply)
+		case fetch.PhaseDownloading:
+			// Fall through to the poll sleep below.
+		default:
+			return fmt.Errorf("fetch %s on %s: unrecognized phase %q", repo, nodeID, p.Phase)
+		}
+		select {
+		case <-time.After(fetchPollInterval):
+		case <-ctx.Done():
+			return fmt.Errorf("fetch %s on %s did not complete within %s: %w", repo, nodeID, fetchTimeout, ctx.Err())
+		}
+	}
 }
 
 // undeployFromNode sends an UndeployCommand to nodeID and waits for its
