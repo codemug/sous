@@ -7,10 +7,18 @@
   <div class="pool-bar" role="img"
        aria-label="{{gib1 .PoolGiB}} GiB pool: {{gib1 .MarginGiB}} GiB free">
     {{range .Segments}}
-      <div class="seg{{if .Reserve}} seg-reserve{{else if .Free}} seg-free{{else}} seg-{{.Phase}}{{end}}"
+      {{/* UNKNOWN IS NOT A PHASE COLOR. A fleet-card segment built from a
+           node's raw Docker status word carries no real deploy.Phase
+           reading (see Segment.Unknown's own doc comment) - routing it
+           through the same class the Phase branch below uses would borrow
+           PhaseReady's green "usable" color for a container whose health
+           this data cannot actually vouch for, up to and including one
+           that is crash-looping. seg-unknown is its own neutral style
+           instead. */}}
+      <div class="seg{{if .Reserve}} seg-reserve{{else if .Free}} seg-free{{else if .Unknown}} seg-unknown{{else}} seg-{{.Phase}}{{end}}"
            {{if .ID}}data-seg="{{.ID}}"{{end}}
            style="width:{{pctf .Pct}}%"
-           title="{{if .ID}}{{.ID}} — {{gib1 .GiB}} GiB · {{.Phase}}{{else if .Reserve}}reserved for the OS, containers and CUDA contexts — {{gib1 .GiB}} GiB{{else}}free — {{gib1 .GiB}} GiB{{end}}">
+           title="{{if .ID}}{{.ID}} — {{gib1 .GiB}} GiB · {{if .Unknown}}status unknown (docker: {{.RawStatus}}){{else}}{{.Phase}}{{end}}{{else if .Reserve}}reserved for the OS, containers and CUDA contexts — {{gib1 .GiB}} GiB{{else}}free — {{gib1 .GiB}} GiB{{end}}">
         {{.Label}}
       </div>
     {{end}}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -285,6 +286,50 @@ func TestPageNodeCardShowsDisconnectedNodeGreyedOutNotVanished(t *testing.T) {
 	}
 	if !strings.Contains(body, "is-idle") {
 		t.Error("disconnected node card missing the is-idle chip/border treatment")
+	}
+}
+
+// TestFleetCardSegmentDoesNotClaimReadyForAnUnhealthyContainer guards a code
+// review finding on this task: nodeCards() originally tagged every
+// committed fleet-card segment deploy.PhaseReady unconditionally.
+// deploy.PhaseReady is documented as "the only phase that means usable" -
+// the most specific "everything is fine" signal in the vocabulary, not a
+// neutral placeholder - so that was a GUARANTEED false-positive health
+// reading on every fleet segment, not an unlucky edge case: a crash-looping
+// or OOM-killed container rendered identically (green, "ready") to a
+// genuinely healthy one.
+//
+// d.Phase on a NodeSnapshot deployment is Docker's own raw status word (see
+// grpcclient.Handlers.Snapshot's own doc comment), and "restarting" is
+// exactly what a crash-looping container reports - proving the fix directly
+// rather than only by inspection: the segment for it must render the
+// neutral seg-unknown class, never seg-ready.
+func TestFleetCardSegmentDoesNotClaimReadyForAnUnhealthyContainer(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
+		Deployments: []*pb.DeploymentState{
+			{RecipeId: "crashloop", Phase: "restarting", WeightsGib: 20, KvGib: 5},
+		},
+	})
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+
+	seg := regexp.MustCompile(`<div class="([^"]*)"[^>]*data-seg="crashloop"`).FindStringSubmatch(body)
+	if seg == nil {
+		t.Fatalf("no segment rendered for the crashloop deployment; body:\n%s", body)
+	}
+	class := seg[1]
+	if strings.Contains(class, "seg-ready") {
+		t.Errorf("crashloop (docker status %q) rendered class %q - claims ready for an unhealthy container", "restarting", class)
+	}
+	if !strings.Contains(class, "seg-unknown") {
+		t.Errorf("expected the neutral seg-unknown class for a fleet segment whose health cannot be read from Phase, got %q", class)
+	}
+	// The raw Docker status must stay visible (in the tooltip) rather than
+	// being hidden behind whichever color the segment ends up with - the
+	// coarseness should be disclosed, not disguised.
+	if !strings.Contains(body, "restarting") {
+		t.Error(`raw docker status "restarting" not surfaced anywhere on the page`)
 	}
 }
 

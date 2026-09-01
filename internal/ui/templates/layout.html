@@ -326,6 +326,11 @@ tbody tr:last-child td{border-bottom:none}
   color:var(--ink-faint);
 }
 .seg-free{background:var(--paper-3);color:var(--ink-faint)}
+/* FLEET CARDS. A committed segment built from a node's raw Docker status
+   word, not deploy.Phase's real vocabulary (see Segment.Unknown's own doc
+   comment) - deliberately NEITHER seg-ready's green nor seg-failed's red,
+   since this data cannot actually vouch for either. */
+.seg-unknown{background:var(--ink-mute)}
 
 .pool-legend{
   display:flex;gap:var(--space-lg);flex-wrap:wrap;

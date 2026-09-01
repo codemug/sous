@@ -315,16 +315,20 @@ func (s *Server) nodeCards() []NodeCardView {
 			// "exited", "restarting", ...), not deploy.Phase's
 			// starting/ready/failed/stopping/gone vocabulary - see
 			// grpcclient.Handlers.Snapshot's own doc comment for exactly
-			// why. Feeding it straight into the phase-colored CSS the
-			// single-node dashboard uses would draw a crash-looping
-			// container as a placid green "ready" segment. Every
-			// committed segment on a node card gets the same neutral
-			// PhaseReady tag instead; what varies is which recipe it
-			// names and how big it is, which is what a capacity-scale
-			// card is actually for.
+			// why. deploy.Phase has no neutral value to fall back on
+			// either: PhaseReady is documented as "the only phase that
+			// means usable", so tagging every committed segment with it
+			// would be a guaranteed false "everything's fine" signal, not
+			// a placeholder - a crash-looping or OOM-killed container
+			// would render identically, green and "ready", to a healthy
+			// one. Segment.Unknown routes this to its own neutral
+			// seg-unknown style instead, with the real Docker word kept
+			// visible in the tooltip via RawStatus rather than hidden
+			// behind a color this data cannot support.
 			bar.Segments = append(bar.Segments, Segment{
-				ID: d.RecipeId, Pct: pct(g, v.PoolGiB), Phase: deploy.PhaseReady,
-				GiB: g, Label: labelIf(d.RecipeId, pct(g, v.PoolGiB) > 11),
+				ID: d.RecipeId, Pct: pct(g, v.PoolGiB), GiB: g,
+				Label:   labelIf(d.RecipeId, pct(g, v.PoolGiB) > 11),
+				Unknown: true, RawStatus: d.Phase,
 			})
 		}
 		margin := v.PoolGiB - v.ReserveGiB - committed
