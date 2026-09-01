@@ -130,7 +130,14 @@ docker run -d --name souslet \
 128 GiB commonly reports less once the OS and firmware take their share, and planning against
 the nominal number over-commits before anything is even deployed. `souslet` has no UI and no
 listener of its own; it dials `-api-addr` and stays connected, reconnecting with backoff if that
-drops.
+drops, and re-reports its full state every few seconds so the control plane's view of the node
+never goes stale between deploys.
+
+`souslet` picks the host port each model publishes on, from `-port-low`/`-port-high`
+(18000–18100 by default) on `-bind-host` (127.0.0.1 by default) — availability is decided by
+actually binding, which only means anything on the machine the container runs on. Clients never
+need those ports: they go through `sous-api`'s one OpenAI-compatible endpoint, which routes to
+whichever node is running the model they named.
 
 **`-listen`/`-grpc-listen` (on `sous-api`) are both required and both refuse `0.0.0.0`.** Sous
 creates and destroys containers — directly on `sous-api`'s own box via its local fallback path,
