@@ -45,6 +45,17 @@ func main() {
 			log.Fatalf("%s is required", name)
 		}
 	}
+	if *portLow <= 0 {
+		// ports.Allocator.Free binds to check availability, and
+		// net.Listen("tcp", host+":0") always succeeds - so a -port-low of 0
+		// makes the allocator hand out port 0 on its very first try, which
+		// silently reintroduces the "deployed but unaddressable" bug (see
+		// Handlers.Ports / resolvePort) rather than allocating a real port.
+		log.Fatal("-port-low must be a positive port number")
+	}
+	if *portLow > *portHigh {
+		log.Fatal("-port-low is above -port-high")
+	}
 
 	caPEM, err := os.ReadFile(*caPath)
 	if err != nil {

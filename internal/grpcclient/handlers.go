@@ -349,9 +349,6 @@ const containerNamePrefix = "sous-"
 // left over from before souslet last restarted) reports 0, which is an
 // honest "unknown", not a claim that the deployment has no footprint.
 //
-// HostPort is left at its zero value: that data lives in store.Record,
-// which this handler has no access to.
-//
 // CachedWeightRepos comes from scanning ModelDir/hub directly (see
 // weights.go's scanWeightRepos, relocated from internal/larder/larder.go's
 // Scan) - the same "the disk is the source of truth" philosophy the old
