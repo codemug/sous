@@ -20,6 +20,15 @@ type nodeConn struct {
 	send    chan *pb.Envelope
 	mu      sync.Mutex
 	pending map[string]chan *pb.Envelope // stream_id -> waiter
+
+	// done is closed exactly once, by Connect's cleanup, when this
+	// connection is torn down. It exists so the write-loop goroutine (and
+	// Send, if it's racing teardown) has something to select on besides
+	// nc.send - closing nc.send itself would be unsafe, since Send can be
+	// writing to it concurrently from another goroutine and a send on a
+	// closed channel panics.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type Server struct {
@@ -56,7 +65,7 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 	nodeID := snap.NodeId
 	s.cat.ReplaceSnapshot(nodeID, snap)
 
-	nc := &nodeConn{send: make(chan *pb.Envelope, 32), pending: make(map[string]chan *pb.Envelope)}
+	nc := &nodeConn{send: make(chan *pb.Envelope, 32), pending: make(map[string]chan *pb.Envelope), done: make(chan struct{})}
 	s.mu.Lock()
 	s.conns[nodeID] = nc
 	s.mu.Unlock()
@@ -64,14 +73,22 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 		s.mu.Lock()
 		delete(s.conns, nodeID)
 		s.mu.Unlock()
+		// Unblock the write loop (and any Send call racing this teardown)
+		// without ever closing nc.send itself - see the done field's doc.
+		nc.closeOnce.Do(func() { close(nc.done) })
 		s.cat.MarkDisconnected(nodeID)
 	}()
 
 	errCh := make(chan error, 2)
 	go func() {
-		for env := range nc.send {
-			if err := stream.Send(env); err != nil {
-				errCh <- err
+		for {
+			select {
+			case env := <-nc.send:
+				if err := stream.Send(env); err != nil {
+					errCh <- err
+					return
+				}
+			case <-nc.done:
 				return
 			}
 		}
@@ -125,7 +142,20 @@ func (s *Server) Send(nodeID string, env *pb.Envelope) (*pb.Envelope, error) {
 
 	select {
 	case nc.send <- env:
+	case <-nc.done:
+		// Lost the race with teardown: the write loop that would have
+		// drained this envelope has already exited (or is exiting), so
+		// nothing will ever consume it or fulfill the waiter. Fail fast
+		// instead of leaving env stuck in the buffer and the caller
+		// blocked on a reply that can never arrive.
+		nc.mu.Lock()
+		delete(nc.pending, env.StreamId)
+		nc.mu.Unlock()
+		return nil, fmt.Errorf("node %q disconnected while sending", nodeID)
 	default:
+		nc.mu.Lock()
+		delete(nc.pending, env.StreamId)
+		nc.mu.Unlock()
 		return nil, fmt.Errorf("node %q's send queue is full", nodeID)
 	}
 

@@ -2,7 +2,10 @@ package grpcserver
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,4 +111,196 @@ func TestSendCorrelatesRequestAndReplyByStreamID(t *testing.T) {
 	if res == nil || res.ContainerId != "abc123" {
 		t.Fatalf("got %+v, want DeployResult{ContainerId: abc123}", reply)
 	}
+}
+
+// TestConnectDoesNotLeakGoroutinesOnDisconnect guards against the write-loop
+// goroutine inside Connect never exiting when the *read* loop is the one
+// that notices the stream died (the common case: the client hangs up, the
+// server observes it via stream.Recv returning io.EOF). The write loop
+// previously had no way to learn about that and would block forever on the
+// now-orphaned nc.send channel - once per disconnect, forever, in a system
+// whose whole premise is nodes connecting and disconnecting repeatedly.
+func TestConnectDoesNotLeakGoroutinesOnDisconnect(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+
+	// One grpc.Server/ClientConn for the whole test, reused across cycles -
+	// each opens its own new Connect stream over it. Standing up a fresh
+	// server+conn per cycle would swamp the goroutine count with transport
+	// setup/teardown noise unrelated to the thing under test.
+	lis := bufconn.Listen(1024 * 1024)
+	gs := grpc.NewServer()
+	pb.RegisterSousletServer(gs, srv)
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := pb.NewSousletClient(conn)
+
+	const cycles = 60
+	baseline := settledGoroutines(t)
+
+	for i := 0; i < cycles; i++ {
+		nodeID := fmt.Sprintf("leak-node-%d", i)
+		stream, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatalf("Connect (cycle %d): %v", i, err)
+		}
+		if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+			t.Fatalf("Send snapshot (cycle %d): %v", i, err)
+		}
+
+		// Wait for the server's Connect handler to actually register this
+		// node - its two inner goroutines (the ones under test) aren't
+		// running until it does.
+		waitUntilTrue(t, 2*time.Second, func() bool {
+			view, ok := cat.Node(nodeID)
+			return ok && view.Connected
+		}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+		// Simulate the node disconnecting: half-close from the client side.
+		// This drives the server's read loop to observe io.EOF - exactly
+		// the teardown path that used to leave the write loop orphaned.
+		if err := stream.CloseSend(); err != nil {
+			t.Fatalf("CloseSend (cycle %d): %v", i, err)
+		}
+		for { // drain until the server ends the RPC on its side too
+			if _, err := stream.Recv(); err != nil {
+				break
+			}
+		}
+
+		waitUntilTrue(t, 2*time.Second, func() bool {
+			view, ok := cat.Node(nodeID)
+			return ok && !view.Connected
+		}, fmt.Sprintf("node %q never showed as disconnected", nodeID))
+	}
+
+	after := settledGoroutines(t)
+	t.Logf("goroutines: baseline=%d after=%d cycles=%d delta=%d", baseline, after, cycles, after-baseline)
+	// Slack covers one-time transport setup (observed: a constant +5,
+	// independent of cycle count - confirmed by running this same test at
+	// cycles=20 and cycles=60 and seeing an identical delta both times)
+	// plus incidental background goroutines (GC workers etc.). The leak
+	// this guards against grows by ~1 goroutine per cycle (60 here), so
+	// any real regression blows straight past this budget.
+	const slack = 10
+	if after > baseline+slack {
+		t.Fatalf("goroutine count grew from %d to %d over %d connect/disconnect cycles (slack %d) - suspected leaked write-loop goroutine", baseline, after, cycles, slack)
+	}
+}
+
+// TestSendDoesNotPanicWhenRacingDisconnect fires a burst of concurrent
+// (*Server).Send calls against a node while the client half of its
+// connection is torn down mid-flight. This is the exact scenario the fix
+// for the write-loop leak had to stay safe under: Send and Connect's
+// cleanup both touch nc.send and nc.done from different goroutines, and
+// the wrong fix (closing nc.send directly) would panic here with "send on
+// closed channel." Every Send must either return normally (success or a
+// clean error) or, if it loses the race and its envelope never gets
+// delivered/replied to, simply block - Send has no cancellation of its own
+// yet (it blocks on a bare context.Background(), unrelated to this fix and
+// already tracked as future work in Task 10's ctx-plumbing change), so a
+// goroutine hanging here is expected and not what this test checks. What
+// it checks is panics: a panic in any of the spawned goroutines fails the
+// test via recover() instead of silently crashing the whole test binary,
+// so a regression in the fix is visible as a normal, readable test
+// failure rather than a process crash.
+func TestSendDoesNotPanicWhenRacingDisconnect(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "race-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	// Echo replies for whatever DeployCommands do make it through before
+	// teardown, so Sends that win the race complete normally instead of
+	// adding to the "expected to hang" pile.
+	go func() {
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if cmd := env.GetDeploy(); cmd != nil {
+				_ = stream.Send(&pb.Envelope{
+					StreamId: env.StreamId,
+					Payload:  &pb.Envelope_DeployResult{DeployResult: &pb.DeployResult{RecipeId: cmd.RecipeId}},
+				})
+			}
+		}
+	}()
+
+	const concurrency = 50
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Send panicked (goroutine %d): %v", i, r)
+				}
+			}()
+			_, _ = srv.Send(nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: fmt.Sprintf("recipe-%d", i)}}})
+		}(i)
+	}
+
+	// Tear the connection down while those Sends are in flight - this is
+	// what races nc.done closing against concurrent writers of nc.send.
+	_ = stream.CloseSend()
+
+	// Give every spawned goroutine a bounded window to run (and, if it
+	// were going to, panic) rather than wg.Wait()-ing unboundedly: some of
+	// them are expected to be left blocked forever on Send's reply wait
+	// per the doc comment above, which is a separate, already-known,
+	// out-of-scope issue, not a hang this test should itself get stuck on.
+	waitCh := make(chan struct{})
+	go func() { wg.Wait(); close(waitCh) }()
+	select {
+	case <-waitCh:
+	case <-time.After(3 * time.Second):
+	}
+}
+
+// settledGoroutines samples runtime.NumGoroutine() a few times with GC and
+// short sleeps in between, so goroutines that are in the process of exiting
+// (but haven't been descheduled yet) don't inflate a one-shot reading.
+func settledGoroutines(t *testing.T) int {
+	t.Helper()
+	var n int
+	for i := 0; i < 10; i++ {
+		runtime.GC()
+		time.Sleep(15 * time.Millisecond)
+		n = runtime.NumGoroutine()
+	}
+	return n
+}
+
+func waitUntilTrue(t *testing.T, timeout time.Duration, cond func() bool, failMsg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal(failMsg)
 }
