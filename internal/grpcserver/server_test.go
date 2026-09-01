@@ -351,6 +351,244 @@ func TestSendDoesNotPanicWhenRacingDisconnect(t *testing.T) {
 	}
 }
 
+// TestOpenProxyStreamFailsForANodeThatIsNotConnected mirrors Send's own
+// "fail fast, don't buffer" guarantee (see TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait's
+// doc) for the proxy path: a caller must learn immediately that a node has
+// no live connection, not queue against one that will never answer.
+func TestOpenProxyStreamFailsForANodeThatIsNotConnected(t *testing.T) {
+	srv := New(nodecatalog.New())
+	if _, err := srv.OpenProxyStream("nonexistent-node"); err == nil {
+		t.Fatal("expected an error opening a proxy stream to a node with no live connection")
+	}
+}
+
+// TestOpenProxyStreamRelaysHeadAndChunksCorrelatedByStreamID is the direct
+// unit-level round trip: Send a request head + chunk, have the fake souslet
+// echo a response head + two chunks back correlated by the SAME stream_id
+// OpenProxyStream minted, and confirm RecvHead/RecvChunk see exactly that -
+// proving the proxyStreams routing added to Connect's read loop (multiple
+// replies per stream_id, never deleted from the map on first message unlike
+// pending) actually works, independent of the gateway package's own,
+// higher-level end-to-end test.
+func TestOpenProxyStreamRelaysHeadAndChunksCorrelatedByStreamID(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "proxy-roundtrip-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	// Fake souslet's side: echo back a head, then two chunks (the second
+	// carrying Eof), all under the SAME stream_id the incoming
+	// HTTPRequestHead carried - exactly what a real souslet's
+	// handleProxyRequest does.
+	go func() {
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if env.GetHttpReqHead() == nil {
+				continue
+			}
+			sid := env.StreamId
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespHead{
+				HttpRespHead: &pb.HTTPResponseHead{Status: 200, Headers: map[string]string{"X-Test": "yes"}},
+			}})
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("hel")},
+			}})
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("lo"), Eof: true},
+			}})
+		}
+	}()
+
+	var ps *ProxyStream
+	var err error
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ps, err = srv.OpenProxyStream(nodeID)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("OpenProxyStream: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer ps.Close()
+
+	if err := ps.Send(&pb.HTTPRequestHead{Method: "GET", Path: "/v1/models"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := ps.SendChunk(nil, true); err != nil {
+		t.Fatalf("SendChunk: %v", err)
+	}
+
+	head, err := ps.RecvHead()
+	if err != nil {
+		t.Fatalf("RecvHead: %v", err)
+	}
+	if head.Status != 200 || head.Headers["X-Test"] != "yes" {
+		t.Fatalf("head = %+v, want Status 200 and X-Test=yes", head)
+	}
+
+	var got []byte
+	for {
+		chunk, err := ps.RecvChunk()
+		if err != nil {
+			t.Fatalf("RecvChunk: %v", err)
+		}
+		got = append(got, chunk.Data...)
+		if chunk.Eof {
+			break
+		}
+	}
+	if string(got) != "hello" {
+		t.Fatalf("body = %q, want hello", got)
+	}
+}
+
+// TestProxyStreamUnblocksWithErrorWhenNodeDisconnectsMidStream is
+// TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait's proxy-path
+// counterpart: RecvHead must not hang forever if the node disconnects
+// before ever answering - this is the exact "bounded failure" property the
+// gateway's HTTP client is relying on to eventually get a response (even an
+// error one) instead of hanging indefinitely.
+func TestProxyStreamUnblocksWithErrorWhenNodeDisconnectsMidStream(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "proxy-mid-wait-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	var ps *ProxyStream
+	var err error
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ps, err = srv.OpenProxyStream(nodeID)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("OpenProxyStream: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := ps.Send(&pb.HTTPRequestHead{Method: "GET", Path: "/v1/models"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Deliberately do not drive a reply loop: nothing is ever going to
+	// answer, so RecvHead is genuinely stuck on <-p.replies, not racing an
+	// incoming reply.
+	type result struct {
+		head *pb.HTTPResponseHead
+		err  error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		head, err := ps.RecvHead()
+		resCh <- result{head, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+
+	select {
+	case res := <-resCh:
+		if res.err == nil {
+			t.Fatalf("RecvHead returned no error after the node disconnected mid-wait; got %+v", res.head)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RecvHead did not unblock within 2s of the node disconnecting - this is the leak this test guards against")
+	}
+}
+
+// TestProxyStreamDoesNotPanicWhenRacingDisconnect is
+// TestSendDoesNotPanicWhenRacingDisconnect's counterpart for the proxy path:
+// a burst of concurrent OpenProxyStream/Send/SendChunk calls while the
+// connection tears down mid-flight must never panic (the read loop's
+// select on nc.done when routing to proxyCh, and Send/SendChunk's own
+// selects on nc.done, are exactly what this exercises).
+func TestProxyStreamDoesNotPanicWhenRacingDisconnect(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "proxy-race-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	go func() {
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if env.GetHttpReqHead() == nil {
+				continue
+			}
+			_ = stream.Send(&pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_HttpRespHead{
+				HttpRespHead: &pb.HTTPResponseHead{Status: 200},
+			}})
+		}
+	}()
+
+	const concurrency = 50
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("proxy stream goroutine %d panicked: %v", i, r)
+				}
+			}()
+			ps, err := srv.OpenProxyStream(nodeID)
+			if err != nil {
+				return
+			}
+			defer ps.Close()
+			_ = ps.Send(&pb.HTTPRequestHead{Method: "GET", Path: fmt.Sprintf("/req-%d", i)})
+			_ = ps.SendChunk(nil, true)
+			_, _ = ps.RecvHead()
+			_, _ = ps.RecvChunk()
+		}(i)
+	}
+
+	_ = stream.CloseSend()
+
+	waitCh := make(chan struct{})
+	go func() { wg.Wait(); close(waitCh) }()
+	select {
+	case <-waitCh:
+	case <-time.After(3 * time.Second):
+	}
+}
+
 // settledGoroutines samples runtime.NumGoroutine() a few times with GC and
 // short sleeps in between, so goroutines that are in the process of exiting
 // (but haven't been descheduled yet) don't inflate a one-shot reading.

@@ -7,17 +7,25 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codemug/sous/internal/auth"
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
+	"github.com/codemug/sous/internal/grpcserver"
+	"github.com/codemug/sous/internal/nodecatalog"
+	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 	"github.com/codemug/sous/internal/recipe"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 type fakeRes struct {
@@ -388,6 +396,306 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// dialFakeEchoingSouslet connects a fake souslet to srv, exactly the way
+// grpcserver's own dialFakeSouslet test helper does (bufconn, no real
+// network), except its read loop ALSO answers any HTTPRequestHead/Chunk pair
+// - the shape Gateway.Proxy's gRPC path sends - with a fixed
+// HTTPResponseHead{Status: 200} followed by an
+// HTTPResponseChunk{Data: []byte("ok"), Eof: true}. Enough to prove the
+// gateway relays a request through gRPC end to end without needing a real
+// vLLM container. Written once here, specific to this test's scenario
+// (grpcserver's own helper doesn't need this behavior and shouldn't be
+// bloated with it - see Task 9's brief).
+//
+// Blocks until srv genuinely has nodeID registered before returning, so the
+// caller can immediately proxy through it without its own retry loop - the
+// readiness probe is a real OpenProxyStream/Close round trip against srv,
+// not a sleep.
+func dialFakeEchoingSouslet(t *testing.T, srv *grpcserver.Server, nodeID string) func() {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	s := grpc.NewServer()
+	pb.RegisterSousletServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	client := pb.NewSousletClient(conn)
+	stream, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{
+		NodeId:      nodeID,
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	}}}); err != nil {
+		t.Fatalf("send snapshot: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if env.GetHttpReqHead() == nil {
+				continue // the request-body chunk that follows the head; nothing to answer
+			}
+			streamID := env.StreamId
+			_ = stream.Send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespHead{
+				HttpRespHead: &pb.HTTPResponseHead{Status: 200},
+			}})
+			_ = stream.Send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("ok"), Eof: true},
+			}})
+		}
+	}()
+
+	// Wait for srv's Connect handler to actually register nodeID - stream.Send
+	// above only hands the snapshot to the local transport, it does not wait
+	// for the server side to finish registering the connection. A real
+	// OpenProxyStream probe (immediately closed) is a direct readiness check
+	// against the thing the test is about to depend on, not a sleep guess.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ps, err := srv.OpenProxyStream(nodeID)
+		if err == nil {
+			ps.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node %q never showed as connected to srv: %v", nodeID, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return func() {
+		_ = stream.CloseSend()
+		_ = conn.Close()
+		s.Stop()
+		<-done
+	}
+}
+
+// THE CORE OF TASK 9. A request for a model deployed on a connected node
+// must be relayed over that node's gRPC connection rather than dialed on a
+// local port - this is what makes the gateway work when the model is
+// running on a different machine than sous-api.
+func TestProxyForwardsToTheNodeCurrentlyRunningTheModel(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId:      "asus-gx10",
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	})
+	gsrv := grpcserver.New(nodes)
+	// A fake souslet that answers any proxied request with a fixed 200 and
+	// body "ok" - enough to prove the gateway relays through gRPC end to
+	// end without needing a real vLLM container.
+	stopFakeSouslet := dialFakeEchoingSouslet(t, gsrv, "asus-gx10")
+	defer stopFakeSouslet()
+
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"dflash2"}`))
+	rec := httptest.NewRecorder()
+	g.Proxy(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "ok" {
+		t.Fatalf("body = %q, want ok", rec.Body.String())
+	}
+}
+
+// Streaming over the gRPC path must arrive AS PRODUCED, not buffered until
+// the whole response completes - the same property TestStreamingIsNotBuffered
+// already proves for the local-forward path, proven here for the node-routed
+// one end to end: gateway -> grpcserver -> fake souslet -> back, with the
+// fake souslet deliberately holding its stream open between two chunks so a
+// buffering relay would visibly block here.
+func TestProxyOverGRPCStreamsWithoutBuffering(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId:      "asus-gx10",
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	})
+	gsrv := grpcserver.New(nodes)
+
+	release := make(chan struct{})
+	stop := dialFakeSousletThatHoldsMidStream(t, gsrv, "asus-gx10", release)
+	defer stop()
+
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	front := httptest.NewServer(http.HandlerFunc(g.Proxy))
+	defer front.Close()
+
+	resp, err := http.Post(front.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"dflash2","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 64)
+	n, err := resp.Body.Read(buf)
+	close(release) // only after the first chunk actually arrived
+	if err != nil {
+		t.Fatalf("first chunk never arrived: %v", err)
+	}
+	if !strings.Contains(string(buf[:n]), "first-chunk") {
+		t.Errorf("first chunk = %q, want it before the stream closed", string(buf[:n]))
+	}
+
+	rest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading the rest of the body: %v", err)
+	}
+	if !strings.Contains(string(rest), "final") {
+		t.Errorf("final chunk missing from the rest of the body: %q", rest)
+	}
+}
+
+// dialFakeSousletThatHoldsMidStream is TestProxyOverGRPCStreamsWithoutBuffering's
+// own helper: like dialFakeEchoingSouslet, but its response has two chunks
+// with a deliberate hold (on release) between them, so a test can prove the
+// first chunk reaches the original HTTP client before the second is even
+// sent - proof the gateway is not buffering the whole response before
+// writing anything.
+func dialFakeSousletThatHoldsMidStream(t *testing.T, srv *grpcserver.Server, nodeID string, release chan struct{}) func() {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	s := grpc.NewServer()
+	pb.RegisterSousletServer(s, srv)
+	go func() { _ = s.Serve(lis) }()
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	client := pb.NewSousletClient(conn)
+	stream, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{
+		NodeId:      nodeID,
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	}}}); err != nil {
+		t.Fatalf("send snapshot: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if env.GetHttpReqHead() == nil {
+				continue
+			}
+			sid := env.StreamId
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespHead{
+				HttpRespHead: &pb.HTTPResponseHead{Status: 200},
+			}})
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("first-chunk")},
+			}})
+			<-release // hold the stream open; a buffering relay would block here
+			_ = stream.Send(&pb.Envelope{StreamId: sid, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("final"), Eof: true},
+			}})
+		}
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ps, err := srv.OpenProxyStream(nodeID)
+		if err == nil {
+			ps.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node %q never showed as connected to srv: %v", nodeID, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return func() {
+		_ = stream.CloseSend()
+		_ = conn.Close()
+		s.Stop()
+		<-done
+	}
+}
+
+// A model name that no connected node reports must fail cleanly - the
+// gateway's whole design ethos ("a 503 naming the phase is more useful than
+// a hang") applies just as much to the gRPC path as the local one.
+func TestProxyOverGRPCReturns404ForAModelNoNodeIsRunning(t *testing.T) {
+	nodes := nodecatalog.New()
+	gsrv := grpcserver.New(nodes)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"nope"}`))
+	rec := httptest.NewRecorder()
+	g.Proxy(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// BOUNDED FAILURE. Opening a proxy stream to a node with no live connection
+// must fail immediately rather than hang the caller - the same "fail fast,
+// don't buffer" guarantee Server.Send already gives command dispatch.
+func TestProxyOverGRPCFailsFastWhenTheNodeIsNotConnected(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("ghost-node", &pb.NodeSnapshot{
+		NodeId:      "ghost-node",
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	})
+	// Deliberately never dial a fake souslet: NodeFor will say the recipe is
+	// on "ghost-node" (the catalog was seeded directly), but grpcserver has
+	// no live connection for it - the exact case a node that crashed after
+	// its last snapshot but before the catalog noticed would produce.
+	gsrv := grpcserver.New(nodes)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"dflash2"}`))
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		g.Proxy(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Proxy did not return within 2s against a node with no live gRPC connection - this is the hang the design must avoid")
+	}
+	if rec.Code != http.StatusServiceUnavailable && rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 503 or 502: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // scopedCtx puts a scoped key on the request, as the auth middleware does.

@@ -1,8 +1,16 @@
 package grpcclient
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +25,25 @@ type Client struct {
 	Handlers    *Handlers
 	PoolGiB     float64
 	ReserveGiB  float64
+
+	// proxyReqs assembles a proxied HTTP request's HTTPRequestHead + its
+	// HTTPRequestChunk(s) - which dispatch below receives as separate,
+	// individually-routed Envelopes correlated only by stream_id - back
+	// into one (*pb.Envelope head, []byte body) pair before
+	// handleProxyRequest is ever spawned. Keyed by stream_id, which
+	// grpcserver mints as a UUID, so entries from a previous connection
+	// generation can never collide with a new one; a value is written and
+	// deleted entirely within dispatch's own synchronous (non-goroutine)
+	// path (see connectOnce), so no additional locking is needed beyond
+	// what sync.Map already gives its Store/Load/Delete calls.
+	proxyReqs sync.Map // stream_id -> *pendingProxyReq
+}
+
+// pendingProxyReq accumulates one proxied request's body across however
+// many HTTPRequestChunk messages arrive before Eof.
+type pendingProxyReq struct {
+	head *pb.Envelope
+	body []byte
 }
 
 // Run dials sous-api and stays connected until ctx is cancelled,
@@ -103,6 +130,23 @@ func (c *Client) connectOnce(ctx context.Context, resetBackoff func()) error {
 		if err != nil {
 			return err
 		}
+		// HTTPRequestHead/Chunk are deliberately dispatched SYNCHRONOUSLY
+		// (not via `go`, unlike every other envelope kind below), and
+		// dispatch's own handling of them does only cheap, non-blocking map
+		// bookkeeping before returning. This matters: stream.Recv() returns
+		// envelopes for one stream_id in the order they were sent (a head,
+		// then its chunk(s)), but two separately-spawned goroutines have no
+		// such ordering guarantee between each other - a `go`-dispatched
+		// chunk handler could in principle run before its own head handler
+		// finished registering. Doing the registration/accumulation inline,
+		// in this single loop, makes correctness independent of goroutine
+		// scheduling; only the actual (potentially slow) forwarding work is
+		// handed to its own goroutine, from inside dispatch, once a request
+		// is fully assembled.
+		if env.GetHttpReqHead() != nil || env.GetHttpReqChunk() != nil {
+			c.dispatch(ctx, stream, &sendMu, env)
+			continue
+		}
 		go c.dispatch(ctx, stream, &sendMu, env)
 	}
 }
@@ -110,6 +154,23 @@ func (c *Client) connectOnce(ctx context.Context, resetBackoff func()) error {
 func (c *Client) dispatch(ctx context.Context, stream pb.Souslet_ConnectClient, sendMu *sync.Mutex, env *pb.Envelope) {
 	var reply *pb.Envelope
 	switch {
+	case env.GetHttpReqHead() != nil:
+		c.proxyReqs.Store(env.StreamId, &pendingProxyReq{head: env})
+		return
+	case env.GetHttpReqChunk() != nil:
+		v, ok := c.proxyReqs.Load(env.StreamId)
+		if !ok {
+			return // a chunk for a stream_id with no registered head - drop defensively
+		}
+		pr := v.(*pendingProxyReq)
+		chunk := env.GetHttpReqChunk()
+		pr.body = append(pr.body, chunk.Data...)
+		if !chunk.Eof {
+			return
+		}
+		c.proxyReqs.Delete(env.StreamId)
+		go c.handleProxyRequest(ctx, stream, sendMu, pr.head, pr.body)
+		return
 	case env.GetDeploy() != nil:
 		reply = &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeployResult{
 			DeployResult: c.Handlers.HandleDeploy(ctx, env.GetDeploy()),
@@ -127,12 +188,180 @@ func (c *Client) dispatch(ctx context.Context, stream pb.Souslet_ConnectClient, 
 			DeleteWeightsResult: c.Handlers.HandleDeleteWeights(ctx, env.GetDeleteWeights()),
 		}}
 	default:
-		return // HTTP proxy frames are handled by Task 9's extension of this switch, not here
+		return // snapshot/heartbeat/error - nothing this side needs to reply to
 	}
 	sendMu.Lock()
 	err := stream.Send(reply)
 	sendMu.Unlock()
 	if err != nil {
 		log.Printf("souslet: failed to send reply for stream %s: %v", env.StreamId, err)
+	}
+}
+
+// handleProxyRequest forwards one fully-assembled proxied HTTP request (head
+// + body, reassembled from possibly-many HTTPRequestChunk messages by
+// dispatch above) to whichever local model container is currently serving
+// the declared model, then streams the response back chunk by chunk AS IT
+// ARRIVES - not buffered until the whole response completes - so SSE/
+// chunked responses (token-by-token inference streaming) forward live.
+//
+// Every stream.Send call here goes through the send helper below, which
+// takes sendMu - the same guard Task 6 already established for dispatch's
+// own reply sends, because ClientStream.SendMsg is documented as unsafe to
+// call concurrently from different goroutines on the same stream. This
+// function runs in its own goroutine (spawned by dispatch once EOF is seen)
+// alongside every other in-flight dispatch/handleProxyRequest goroutine on
+// this same connection, so skipping sendMu here would reintroduce exactly
+// the race Task 6 already fixed once.
+func (c *Client) handleProxyRequest(ctx context.Context, stream pb.Souslet_ConnectClient, sendMu *sync.Mutex, headEnv *pb.Envelope, body []byte) {
+	streamID := headEnv.StreamId
+	head := headEnv.GetHttpReqHead()
+
+	send := func(env *pb.Envelope) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		return stream.Send(env)
+	}
+
+	resp, err := c.forwardToLocalContainer(ctx, head, body)
+	if err != nil {
+		if sendErr := send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_Error{
+			Error: &pb.Error{Message: err.Error()},
+		}}); sendErr != nil {
+			log.Printf("souslet: failed to send proxy error for stream %s: %v", streamID, sendErr)
+		}
+		return
+	}
+	defer resp.Body.Close()
+
+	headers := make(map[string]string, len(resp.Header))
+	for k := range resp.Header {
+		headers[k] = resp.Header.Get(k)
+	}
+	if err := send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespHead{
+		HttpRespHead: &pb.HTTPResponseHead{Status: int32(resp.StatusCode), Headers: headers},
+	}}); err != nil {
+		log.Printf("souslet: failed to send proxy response head for stream %s: %v", streamID, err)
+		return
+	}
+
+	// Read-and-forward in small pieces, sending each one immediately - this
+	// loop IS the streaming: a response held in a buffer until fully read
+	// would turn token-by-token generation into one long pause followed by
+	// a wall of text on the gateway's side, exactly the failure mode the
+	// package doc for internal/gateway already calls out for the old local
+	// httputil.ReverseProxy path.
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...) // buf is reused next iteration; the sent copy must not alias it
+			if err := send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Data: chunk},
+			}}); err != nil {
+				log.Printf("souslet: failed to send proxy response chunk for stream %s: %v", streamID, err)
+				return
+			}
+		}
+		if rerr != nil {
+			// Both a clean io.EOF and a real read error end the response the
+			// same way from the gateway's point of view: a final Eof chunk.
+			// A genuine mid-read error truncates the body, which is the
+			// honest outcome to hand upstream rather than hanging the
+			// gateway's RecvChunk forever waiting for one that will never
+			// come.
+			_ = send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespChunk{
+				HttpRespChunk: &pb.HTTPResponseChunk{Eof: true},
+			}})
+			return
+		}
+	}
+}
+
+// forwardToLocalContainer resolves the target local container and issues
+// the actual request. The wire's HTTPRequestHead deliberately carries no
+// recipe/model identifier (see proto/souslet/v1/souslet.proto - Task 1's
+// already-committed, unmodified schema); this task cannot add one, so it
+// wires against the SAME "learn the model from the body" mechanism
+// internal/gateway/gateway.go's own Proxy already uses locally, and against
+// Handlers.portFor (backed by the port state HandleDeploy already tracks -
+// see handlers.go's rememberPort/forgetPort) rather than inventing a second
+// port-tracking mechanism.
+func (c *Client) forwardToLocalContainer(ctx context.Context, head *pb.HTTPRequestHead, body []byte) (*http.Response, error) {
+	name := modelNameFromProxiedBody(head, body)
+	if name == "" {
+		return nil, fmt.Errorf("proxied request named no model")
+	}
+	port, ok := c.Handlers.portFor(name)
+	if !ok {
+		return nil, fmt.Errorf("no local deployment for model %q", name)
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, head.GetPath())
+	req, err := http.NewRequestWithContext(ctx, head.GetMethod(), url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build local request: %w", err)
+	}
+	for k, v := range head.GetHeaders() {
+		switch k {
+		case "Content-Length", "Host":
+			// The body was reassembled from chunks (a stale length would
+			// corrupt framing) and NewRequestWithContext already derives the
+			// right Host from url - forwarding the caller's original values
+			// for either would only confuse this local hop, exactly why
+			// gateway.go's own local-forward path strips the equivalent
+			// hop-specific headers before dialing.
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s did not answer: %w", url, err)
+	}
+	return resp, nil
+}
+
+// modelNameFromProxiedBody mirrors gateway.go's own probe/multipartModel
+// logic exactly (JSON "model" field first, multipart form field second) -
+// souslet has no other way to learn which deployed recipe a proxied request
+// is for, since HTTPRequestHead carries no such field.
+func modelNameFromProxiedBody(head *pb.HTTPRequestHead, body []byte) string {
+	var probe struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	if probe.Model != "" {
+		return strings.TrimSpace(probe.Model)
+	}
+
+	ct := head.GetHeaders()["Content-Type"]
+	if !strings.HasPrefix(ct, "multipart/form-data") {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return ""
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return ""
+	}
+	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			return ""
+		}
+		if part.FormName() != "model" {
+			_ = part.Close()
+			continue
+		}
+		v, err := io.ReadAll(io.LimitReader(part, 1<<10))
+		_ = part.Close()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(v))
 	}
 }

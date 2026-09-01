@@ -46,6 +46,9 @@ import (
 
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
+	"github.com/codemug/sous/internal/grpcserver"
+	"github.com/codemug/sous/internal/nodecatalog"
+	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 	"github.com/codemug/sous/internal/recipe"
 )
 
@@ -87,6 +90,20 @@ type Gateway struct {
 	Alias  Aliases
 	ReqLog RequestLog
 	Host   string
+
+	// Nodes and GRPC are the multi-node routing path, additive alongside
+	// Res/Cat/Alias/Host's existing local-forward path - the same
+	// migration posture Tasks 7/8 already established for httpapi.Server's
+	// gsrv/nodes fields: both nil is the normal single-node case (every
+	// pre-existing test in this file constructs a Gateway without them,
+	// and must keep working exactly as before), both set is sous-api's
+	// multi-node case. Proxy branches on their presence BEFORE touching
+	// Res/Cat at all, so this path works even when Res/Cat are nil (no
+	// local deploy.Manager exists in a pure multi-node deployment) - see
+	// Proxy's doc comment for exactly what this path does and does not
+	// carry over from the local-forward path (aliasing, phase-gating).
+	Nodes *nodecatalog.Catalog
+	GRPC  *grpcserver.Server
 
 	// Now is injectable so tests do not sleep.
 	Now func() time.Time
@@ -304,6 +321,22 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 		g.ReqLog.Log(sender, r.RemoteAddr, name, body)
 	}
 
+	// MULTI-NODE PATH. Checked before touching Res/Cat at all, so it works
+	// even when this Gateway carries no local deploy.Manager (sous-api's
+	// eventual end state per the design doc's migration plan - see the
+	// Nodes/GRPC field doc). Deliberately does not reuse resolve()'s
+	// alias/phase machinery: nodecatalog only knows a recipe ID and
+	// Docker's own raw phase string, not this package's richer
+	// deploy.Phase vocabulary or the operator alias store, so a proxied
+	// request's declared model IS the recipe ID directly here, with no
+	// served-model rewrite - the same simplification
+	// grpcclient.forwardToLocalContainer's own doc comment already notes
+	// on the souslet side of this same request.
+	if g.Nodes != nil && g.GRPC != nil {
+		g.proxyOverGRPC(w, r, name, body)
+		return
+	}
+
 	rt, err := g.resolve(r.Context(), name)
 	if err != nil {
 		var nm errNoModel
@@ -386,6 +419,129 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 	r.ContentLength = int64(len(body))
 	r.Header.Del("Content-Length")
 	prox.ServeHTTP(w, r)
+}
+
+// proxyOverGRPC is Proxy's multi-node forward: instead of dialing a local
+// container port, it opens a ProxyStream to whichever connected node
+// currently reports name as a deployed recipe (nodecatalog.NodeFor) and
+// relays the request over that node's gRPC connection, copying the
+// response back onto w AS IT ARRIVES - flushing after every chunk, the same
+// way the local ReverseProxy path's FlushInterval: -1 does - so SSE/
+// streaming inference responses keep working end to end regardless of which
+// machine actually runs the model.
+//
+// KNOWN, DISCLOSED SIMPLIFICATION: unlike the local-forward path below, this
+// does not phase-gate (nodecatalog's DeploymentState.Phase is Docker's raw
+// status string, not this package's richer starting/ready/failed
+// vocabulary - there is no equivalent-quality "still loading" signal to act
+// on here yet) and does not consult Alias/Cat for served-model rewriting -
+// name is forwarded exactly as the caller sent it, and must match a recipe
+// ID directly. Scope enforcement (auth.FromContext) is intentionally still
+// skipped too, matching what the local path does for an unscoped caller;
+// wiring a scope check in here as well is straightforward future work, not
+// done in this task because nothing in this task's brief or tests exercises
+// it and the file list does not include the auth-scoping change that would
+// need review alongside it.
+func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name string, body []byte) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "invalid_request_error", "no model named in the request")
+		return
+	}
+
+	nodeID, ok := g.Nodes.NodeFor(name)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "model_not_found",
+			fmt.Sprintf("no connected node is running %q", name))
+		return
+	}
+
+	// OpenProxyStream fails immediately if nodeID has no live gRPC
+	// connection - the exact "fail fast, don't buffer" guarantee Send
+	// already gives command dispatch, now extended to proxied HTTP: a
+	// node that crashed after its last snapshot (so the catalog still
+	// lists it) but before grpcserver noticed cannot silently hang this
+	// request.
+	stream, err := g.GRPC.OpenProxyStream(nodeID)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, "model_unavailable",
+			fmt.Sprintf("%s is not currently reachable: %v", nodeID, err))
+		return
+	}
+	// Always released: on every return path below, including a caller that
+	// stops reading before the response finishes. RecvHead/RecvChunk also
+	// self-close on their own terminal conditions (see ProxyStream's doc);
+	// Close is idempotent, so this is a blanket safety net, not a double
+	// release.
+	defer stream.Close()
+
+	headers := make(map[string]string, len(r.Header))
+	for k := range r.Header {
+		switch k {
+		case "Authorization", "Cookie", "Content-Length", "Host":
+			// Same reasoning as the local-forward path just below: the
+			// upstream is a local process on nodeID that has no use for
+			// auth/hop headers meant for the gateway itself, and the body
+			// was already fully buffered here (Content-Length would be
+			// stale, Host is for this hop not that one).
+			continue
+		}
+		headers[k] = r.Header.Get(k)
+	}
+	if err := stream.Send(&pb.HTTPRequestHead{Method: r.Method, Path: r.URL.RequestURI(), Headers: headers}); err != nil {
+		writeErr(w, http.StatusBadGateway, "upstream_error",
+			fmt.Sprintf("%s did not accept the request: %v", nodeID, err))
+		return
+	}
+	if err := stream.SendChunk(body, true); err != nil {
+		writeErr(w, http.StatusBadGateway, "upstream_error",
+			fmt.Sprintf("%s did not accept the request body: %v", nodeID, err))
+		return
+	}
+
+	head, err := stream.RecvHead()
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "upstream_error",
+			fmt.Sprintf("%s did not answer: %v", nodeID, err))
+		return
+	}
+	for k, v := range head.GetHeaders() {
+		w.Header().Set(k, v)
+	}
+	status := int(head.GetStatus())
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	fl, canFlush := w.(http.Flusher)
+
+	for {
+		chunk, err := stream.RecvChunk()
+		if err != nil {
+			// The status line and headers are already written to w by this
+			// point, so the only honest thing left to do on a mid-stream
+			// failure (node disconnected, souslet reported an error) is
+			// stop - a second status/error body now would be invisible to
+			// most clients and would corrupt a response already in
+			// progress. This mirrors ReverseProxy's own behavior on a
+			// write error mid-copy.
+			return
+		}
+		if len(chunk.GetData()) > 0 {
+			_, _ = w.Write(chunk.GetData())
+			// Flushed after every chunk, exactly like the local path's
+			// FlushInterval: -1 - without this, Go's own response buffering
+			// would hold token-by-token SSE output until the whole
+			// response completes, turning streaming into one long pause
+			// followed by a wall of text.
+			if canFlush {
+				fl.Flush()
+			}
+		}
+		if chunk.GetEof() {
+			return
+		}
+	}
 }
 
 const maxRequestBytes = 32 << 20 // audio uploads are the large case

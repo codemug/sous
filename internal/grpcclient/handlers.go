@@ -45,6 +45,22 @@ type Handlers struct {
 	// figures are an honest, if less precise, substitute - not a
 	// regression this task is expected to fix.
 	footprints map[string]recipe.Footprint
+
+	// ports remembers each currently-deployed recipe's local host port,
+	// keyed by recipe ID - the "which local port is which recipe currently
+	// on" state Task 9's proxied-HTTP path (handleProxyRequest, client.go)
+	// needs to forward a request to the right container. Reuses
+	// footprintsMu rather than a second lock: both maps are written
+	// together by HandleDeploy and cleared together by HandleUndeploy, so
+	// there is never a reason to hold one without the other.
+	//
+	// In the gRPC proxy path the "model name" a forwarded request declares
+	// is the recipe ID directly - sous-api's gateway only rewrites a
+	// request to a recipe's served-model alias in its LOCAL (Res/Cat)
+	// forwarding path (internal/gateway/gateway.go's rewriteModel), which
+	// the node-routed path does not use - so keying this map by recipe ID
+	// is exactly what a proxied request's declared model matches against.
+	ports map[string]int
 }
 
 // rememberFootprint records a successfully deployed recipe's declared
@@ -68,6 +84,36 @@ func (h *Handlers) forgetFootprint(recipeID string) {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
 	delete(h.footprints, recipeID)
+}
+
+// rememberPort records a successfully deployed recipe's local host port
+// under its recipe ID, so a later proxied HTTP request (Task 9's
+// handleProxyRequest) can find the right container.
+func (h *Handlers) rememberPort(recipeID string, port int) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	if h.ports == nil {
+		h.ports = make(map[string]int)
+	}
+	h.ports[recipeID] = port
+}
+
+// forgetPort drops a recipe's cached port once it is no longer deployed -
+// mirrors forgetFootprint exactly, same lifecycle, same reason.
+func (h *Handlers) forgetPort(recipeID string) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	delete(h.ports, recipeID)
+}
+
+// portFor returns the local host port a recipe is currently deployed on, if
+// this process deployed it (through HandleDeploy, in its current run) and
+// has not since undeployed it.
+func (h *Handlers) portFor(recipeID string) (int, bool) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	p, ok := h.ports[recipeID]
+	return p, ok
 }
 
 // footprintFor returns the zero recipe.Footprint for a recipe ID this
@@ -98,6 +144,7 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
 	h.rememberFootprint(cmd.RecipeId, rec.Declared)
+	h.rememberPort(cmd.RecipeId, int(cmd.WantPort))
 	return &pb.DeployResult{RecipeId: cmd.RecipeId, ContainerId: containerID, HostPort: cmd.WantPort}
 }
 
@@ -111,6 +158,7 @@ func (h *Handlers) HandleUndeploy(ctx context.Context, cmd *pb.UndeployCommand) 
 		return &pb.UndeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
 	h.forgetFootprint(cmd.RecipeId)
+	h.forgetPort(cmd.RecipeId)
 	return &pb.UndeployResult{RecipeId: cmd.RecipeId}
 }
 
