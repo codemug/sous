@@ -229,7 +229,7 @@ func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	var gsrv *grpcserver.Server
 	if withGRPC {
 		nodes = nodecatalog.New()
-		gsrv = grpcserver.New(nodes)
+		gsrv = grpcserver.New(nodes, nil)
 	}
 	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard, gsrv, nodes)
 	if err != nil {

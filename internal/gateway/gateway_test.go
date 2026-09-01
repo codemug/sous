@@ -498,7 +498,7 @@ func TestProxyForwardsToTheNodeCurrentlyRunningTheModel(t *testing.T) {
 		NodeId:      "asus-gx10",
 		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
 	})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	// A fake souslet that answers any proxied request with a fixed 200 and
 	// body "ok" - enough to prove the gateway relays through gRPC end to
 	// end without needing a real vLLM container.
@@ -530,7 +530,7 @@ func TestProxyOverGRPCStreamsWithoutBuffering(t *testing.T) {
 		NodeId:      "asus-gx10",
 		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
 	})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 
 	release := make(chan struct{})
 	stop := dialFakeSousletThatHoldsMidStream(t, gsrv, "asus-gx10", release)
@@ -651,7 +651,7 @@ func dialFakeSousletThatHoldsMidStream(t *testing.T, srv *grpcserver.Server, nod
 // a hang") applies just as much to the gRPC path as the local one.
 func TestProxyOverGRPCReturns404ForAModelNoNodeIsRunning(t *testing.T) {
 	nodes := nodecatalog.New()
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	g := &Gateway{Nodes: nodes, GRPC: gsrv}
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"nope"}`))
@@ -676,7 +676,7 @@ func TestProxyOverGRPCFailsFastWhenTheNodeIsNotConnected(t *testing.T) {
 	// on "ghost-node" (the catalog was seeded directly), but grpcserver has
 	// no live connection for it - the exact case a node that crashed after
 	// its last snapshot but before the catalog noticed would produce.
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	g := &Gateway{Nodes: nodes, GRPC: gsrv}
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"dflash2"}`))
@@ -716,7 +716,7 @@ func TestProxyOverGRPCChunksRequestBodiesLargerThanOneChunk(t *testing.T) {
 		NodeId:      "asus-gx10",
 		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
 	})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	stop := dialFakeSousletThatEchoesTheRequestBody(t, gsrv, "asus-gx10")
 	defer stop()
 
@@ -855,7 +855,7 @@ func TestProxyOverGRPCStopsRelayingWhenTheClientDisconnects(t *testing.T) {
 		NodeId:      "asus-gx10",
 		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
 	})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	firstChunkSent := make(chan struct{}, 1)
 	stop := dialFakeSousletThatStreamsForever(t, gsrv, "asus-gx10", firstChunkSent)
 	defer stop()

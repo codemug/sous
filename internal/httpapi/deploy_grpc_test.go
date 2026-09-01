@@ -121,7 +121,7 @@ func recipeYAMLFixture(t *testing.T) string {
 }
 
 func TestDeployToNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
-	gsrv := grpcserver.New(nodecatalog.New())
+	gsrv := grpcserver.New(nodecatalog.New(), nil)
 	_, err := deployToNode(gsrv, nodecatalog.New(), "asus-gx10", recipeYAMLFixture(t), 18000, false)
 	if err == nil {
 		t.Fatal("expected an error deploying to a node with no live connection")
@@ -129,7 +129,7 @@ func TestDeployToNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
 }
 
 func TestUndeployFromNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
-	gsrv := grpcserver.New(nodecatalog.New())
+	gsrv := grpcserver.New(nodecatalog.New(), nil)
 	_, err := undeployFromNode(gsrv, "asus-gx10", "dflash2")
 	if err == nil {
 		t.Fatal("expected an error undeploying from a node with no live connection")
@@ -167,7 +167,7 @@ func TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode(t *testing.T) {
 
 	nodes := nodecatalog.New()
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"}) // no cached_weight_repos
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	var fetchCalls int
 	var sawDeploy bool
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
@@ -206,7 +206,7 @@ func TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode(t *testing.T) {
 func TestDeployFailsWhenFetchReportsFailed(t *testing.T) {
 	nodes := nodecatalog.New()
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	var sawDeploy bool
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
 		if f := env.GetFetch(); f != nil {
@@ -240,7 +240,7 @@ func TestDeployFailsWhenFetchNeverCompletesWithinTheTimeout(t *testing.T) {
 
 	nodes := nodecatalog.New()
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
 		if f := env.GetFetch(); f != nil {
 			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{FetchProgress: &pb.FetchProgress{Repo: f.Repo, Phase: "downloading"}}}
@@ -264,7 +264,7 @@ func TestDeploySkipsFetchWhenWeightsAreAlreadyCached(t *testing.T) {
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
 		NodeId: "asus-gx10", CachedWeightRepos: []string{"Inferact/Qwen3.8-27B-NVFP4"},
 	})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	var sawFetch bool
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
 		if env.GetFetch() != nil {

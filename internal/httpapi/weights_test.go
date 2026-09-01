@@ -23,7 +23,7 @@ const formCT = "application/x-www-form-urlencoded"
 //
 // Mirrors deploy_grpc_test.go's own split: TestDeployTriggersAFetchFirst...
 // and friends drive deployToNode directly against a standalone
-// grpcserver.New(nodes) + dialFakeSousletRecording, rather than through the
+// grpcserver.New(nodes, nil) + dialFakeSousletRecording, rather than through the
 // HTTP layer - httpapi.Server's gsrv field is unexported, so there is no way
 // to recover the real *grpcserver.Server a request built via
 // newTestServerWithNodes is actually using (Task 8's own report disclosed
@@ -37,7 +37,7 @@ const formCT = "application/x-www-form-urlencoded"
 // broken).
 
 func TestDeleteWeightsFromNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
-	gsrv := grpcserver.New(nodecatalog.New())
+	gsrv := grpcserver.New(nodecatalog.New(), nil)
 	_, err := deleteWeightsFromNode(gsrv, "asus-gx10", "Inferact/Qwen3.8-27B-NVFP4", false)
 	if err == nil {
 		t.Fatal("expected an error deleting weights on a node with no live connection")
@@ -50,7 +50,7 @@ func TestDeleteWeightsFromNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
 func TestDeleteWeightsFromNodeSucceedsAndReportsBytesFreed(t *testing.T) {
 	nodes := nodecatalog.New()
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	var gotRepo string
 	var gotForce bool
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
@@ -89,7 +89,7 @@ func TestDeleteWeightsFromNodeSucceedsAndReportsBytesFreed(t *testing.T) {
 func TestDeleteWeightsFromNodeSurfacesAGuardRefusal(t *testing.T) {
 	nodes := nodecatalog.New()
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
-	gsrv := grpcserver.New(nodes)
+	gsrv := grpcserver.New(nodes, nil)
 	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
 		if d := env.GetDeleteWeights(); d != nil {
 			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeleteWeightsResult{

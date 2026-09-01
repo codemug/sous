@@ -46,7 +46,7 @@ func dialFakeSouslet(t *testing.T, srv *Server) pb.Souslet_ConnectClient {
 
 func TestSnapshotFromSousletUpdatesTheNodeCatalog(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 
 	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{
@@ -68,7 +68,7 @@ func TestSnapshotFromSousletUpdatesTheNodeCatalog(t *testing.T) {
 
 func TestSendCorrelatesRequestAndReplyByStreamID(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 	_ = stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: "asus-gx10"}}})
 
@@ -126,7 +126,7 @@ func TestSendCorrelatesRequestAndReplyByStreamID(t *testing.T) {
 // to drops, in a system whose whole premise is nodes reconnecting.
 func TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 
 	const nodeID = "mid-wait-node"
@@ -221,7 +221,7 @@ func TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait(t *testing.T) {
 // TestSendDoesNotPanicWhenRacingDisconnect already uses below.
 func TestSendNeverRacesTheCatalogShowingANodeAsConnected(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 
 	lis := bufconn.Listen(1024 * 1024)
 	gs := grpc.NewServer()
@@ -318,7 +318,7 @@ func TestSendNeverRacesTheCatalogShowingANodeAsConnected(t *testing.T) {
 // whose whole premise is nodes connecting and disconnecting repeatedly.
 func TestConnectDoesNotLeakGoroutinesOnDisconnect(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 
 	// One grpc.Server/ClientConn for the whole test, reused across cycles -
 	// each opens its own new Connect stream over it. Standing up a fresh
@@ -413,7 +413,7 @@ func TestConnectDoesNotLeakGoroutinesOnDisconnect(t *testing.T) {
 // rather than a process crash.
 func TestSendDoesNotPanicWhenRacingDisconnect(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 
 	const nodeID = "race-node"
@@ -480,7 +480,7 @@ func TestSendDoesNotPanicWhenRacingDisconnect(t *testing.T) {
 // doc) for the proxy path: a caller must learn immediately that a node has
 // no live connection, not queue against one that will never answer.
 func TestOpenProxyStreamFailsForANodeThatIsNotConnected(t *testing.T) {
-	srv := New(nodecatalog.New())
+	srv := New(nodecatalog.New(), nil)
 	if _, err := srv.OpenProxyStream("nonexistent-node"); err == nil {
 		t.Fatal("expected an error opening a proxy stream to a node with no live connection")
 	}
@@ -496,7 +496,7 @@ func TestOpenProxyStreamFailsForANodeThatIsNotConnected(t *testing.T) {
 // higher-level end-to-end test.
 func TestOpenProxyStreamRelaysHeadAndChunksCorrelatedByStreamID(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 
 	const nodeID = "proxy-roundtrip-node"
@@ -588,7 +588,7 @@ func TestOpenProxyStreamRelaysHeadAndChunksCorrelatedByStreamID(t *testing.T) {
 // error one) instead of hanging indefinitely.
 func TestProxyStreamUnblocksWithErrorWhenNodeDisconnectsMidStream(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 
 	const nodeID = "proxy-mid-wait-node"
@@ -653,7 +653,7 @@ func TestProxyStreamUnblocksWithErrorWhenNodeDisconnectsMidStream(t *testing.T) 
 // selects on nc.done, are exactly what this exercises).
 func TestProxyStreamDoesNotPanicWhenRacingDisconnect(t *testing.T) {
 	cat := nodecatalog.New()
-	srv := New(cat)
+	srv := New(cat, nil)
 	stream := dialFakeSouslet(t, srv)
 
 	const nodeID = "proxy-race-node"

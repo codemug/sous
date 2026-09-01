@@ -117,12 +117,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("CA: %v", err)
 	}
-	tlsConfig, err := ca.TLSConfigServer()
+	// The server certificate has to carry the address souslets actually dial
+	// as a SAN: souslet verifies this listener in full (mtls.ClientTLSConfig
+	// sets no InsecureSkipVerify and no ServerName override), so a
+	// certificate without a SAN for -grpc-listen's host is one no souslet can
+	// complete a handshake against. requireBindable above already guaranteed
+	// grpcListen splits into host:port and that the host is not a
+	// bind-everything wildcard.
+	grpcHost, _, err := net.SplitHostPort(grpcListen)
+	if err != nil {
+		log.Fatalf("split -grpc-listen %q: %v", grpcListen, err)
+	}
+	tlsConfig, err := ca.TLSConfigServer(grpcHost)
 	if err != nil {
 		log.Fatalf("build server TLS config: %v", err)
 	}
 
-	gsrv := grpcserver.New(nodes)
+	// ca is threaded into grpcserver so Connect can enforce node identity
+	// against the VERIFIED peer certificate (and the CA's known-node set)
+	// rather than trusting the node ID a connecting client asserts about
+	// itself in its first snapshot.
+	gsrv := grpcserver.New(nodes, ca)
 	grpcSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
 	pb.RegisterSousletServer(grpcSrv, gsrv)
 	grpcLis, err := net.Listen("tcp", grpcListen)

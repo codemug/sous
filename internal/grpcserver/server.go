@@ -14,10 +14,33 @@ import (
 	"github.com/codemug/sous/internal/nodecatalog"
 	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 type nodeConn struct {
-	send    chan *pb.Envelope
+	// send carries PROXY traffic only (request heads and body chunks).
+	// ProxyStream.Send/SendChunk block on it when it is full, which is
+	// deliberate: that is the backpressure that keeps a 32MB upload from
+	// buffering without bound inside sous-api.
+	send chan *pb.Envelope
+
+	// controlSend carries COMMANDS only (deploy/undeploy/fetch/
+	// delete-weights) and exists because sharing one channel with proxy
+	// traffic made the two interfere. sendChunkedProxyBody emits 4096-byte
+	// frames, so a single real upload at this gateway's own 32MB
+	// maxRequestBytes limit is over 8000 envelopes - enough to keep a shared
+	// 32-deep buffer saturated for the whole transfer. Send's enqueue fails
+	// fast rather than waiting (see its doc), so every deploy/undeploy/
+	// fetch/weight-delete issued during that window failed spuriously with a
+	// "send queue is full" error that had nothing to do with the command.
+	// Two channels drained by the same write loop removes the interference
+	// entirely rather than merely making it less likely: a control command's
+	// admission no longer depends on how much proxy body is in flight.
+	controlSend chan *pb.Envelope
+
 	mu      sync.Mutex
 	pending map[string]chan *pb.Envelope // stream_id -> waiter, single-shot (Send): deleted the moment its one reply arrives
 
@@ -41,16 +64,40 @@ type nodeConn struct {
 	closeOnce sync.Once
 }
 
+// NodeAuthority is the slice of *mtls.CA this package needs to decide
+// whether a connecting node is allowed in at all: is this node ID one the
+// operator actually registered (and has not since revoked)? Narrow on
+// purpose, and an interface rather than *mtls.CA directly, so a test can
+// supply its own registration set without standing up certificate
+// machinery it isn't testing.
+type NodeAuthority interface {
+	IsKnown(nodeID string) bool
+}
+
 type Server struct {
 	pb.UnimplementedSousletServer
 	cat *nodecatalog.Catalog
+
+	// ca decides node identity. Connect matches the node ID a client claims
+	// in its first snapshot against the CommonName on its VERIFIED peer
+	// certificate and against ca's registration set - without it, a node's
+	// identity is whatever it says it is, revocation is a no-op, and any
+	// holder of any valid cert can evict or impersonate any other node.
+	//
+	// nil disables that enforcement, for a Server that is not fronting a
+	// real mTLS listener (this package's own bufconn tests, which cannot
+	// present a peer certificate at all). cmd/sous-api - the only
+	// production caller - always passes the real CA.
+	ca NodeAuthority
 
 	mu    sync.RWMutex
 	conns map[string]*nodeConn // node_id -> its live connection
 }
 
-func New(cat *nodecatalog.Catalog) *Server {
-	return &Server{cat: cat, conns: make(map[string]*nodeConn)}
+// New builds the server side of the Souslet service. ca may be nil only for
+// a Server not fronting an mTLS listener - see the ca field's doc comment.
+func New(cat *nodecatalog.Catalog, ca NodeAuthority) *Server {
+	return &Server{cat: cat, ca: ca, conns: make(map[string]*nodeConn)}
 }
 
 // Catalog returns the nodecatalog.Catalog this Server feeds NodeSnapshot
@@ -87,11 +134,10 @@ func (s *Server) Connected(nodeID string) bool {
 // waiting on that stream_id), write loop drains the outgoing channel Send
 // publishes to.
 func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
-	// The first message on a new connection must be a snapshot - that's
-	// how this node's ID is learned (see VerifiedNodeID note in Task 2;
-	// full peer-cert-based identity wiring happens in Task 6's server
-	// setup, this handler trusts NodeSnapshot.node_id for now since the
-	// TLS layer already only accepted a cert signed by this CA).
+	// The first message on a new connection must be a snapshot - that's how
+	// this node announces which node it claims to be. That claim is then
+	// checked against the connection's VERIFIED peer certificate by
+	// authorize below; it is not taken on trust.
 	first, err := stream.Recv()
 	if err != nil {
 		return fmt.Errorf("read initial snapshot: %w", err)
@@ -101,9 +147,13 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 		return fmt.Errorf("first message on Connect must be a NodeSnapshot")
 	}
 	nodeID := snap.NodeId
+	if err := s.authorize(stream.Context(), nodeID); err != nil {
+		return err
+	}
 
 	nc := &nodeConn{
 		send:         make(chan *pb.Envelope, 32),
+		controlSend:  make(chan *pb.Envelope, 32),
 		pending:      make(map[string]chan *pb.Envelope),
 		proxyStreams: make(map[string]chan *pb.Envelope),
 		done:         make(chan struct{}),
@@ -125,19 +175,56 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 	s.cat.ReplaceSnapshot(nodeID, snap)
 
 	defer func() {
+		// IDENTITY-CHECKED TEARDOWN. Only unregister if the map still points
+		// at THIS connection. A node reboot or a network partition can leave
+		// this goroutine's stream.Recv blocked long after the node has
+		// reconnected and registered a NEW nodeConn under the same node ID;
+		// when the old stream finally errors out, an unconditional
+		// delete/MarkDisconnected here would tear down that live, working
+		// connection - leaving the node shown as disconnected and
+		// unreachable via Send/OpenProxyStream until a souslet or sous-api
+		// restart, despite nothing actually being wrong with it.
 		s.mu.Lock()
-		delete(s.conns, nodeID)
+		stale := true
+		if cur, ok := s.conns[nodeID]; ok && cur == nc {
+			delete(s.conns, nodeID)
+			stale = false
+		}
 		s.mu.Unlock()
 		// Unblock the write loop (and any Send call racing this teardown)
 		// without ever closing nc.send itself - see the done field's doc.
+		// Always done, superseded or not: this connection's own goroutines
+		// and callers must still be released.
 		nc.closeOnce.Do(func() { close(nc.done) })
-		s.cat.MarkDisconnected(nodeID)
+		if !stale {
+			s.cat.MarkDisconnected(nodeID)
+		}
 	}()
 
 	errCh := make(chan error, 2)
 	go func() {
 		for {
+			// Control commands are drained BEFORE proxy traffic on every
+			// iteration, not merely alongside it: a plain three-way select
+			// picks uniformly among ready cases, so a deploy could still
+			// queue behind thousands of already-buffered body frames. This
+			// non-blocking pre-check gives commands strict priority while
+			// still costing nothing when no command is waiting.
 			select {
+			case env := <-nc.controlSend:
+				if err := stream.Send(env); err != nil {
+					errCh <- err
+					return
+				}
+				continue
+			default:
+			}
+			select {
+			case env := <-nc.controlSend:
+				if err := stream.Send(env); err != nil {
+					errCh <- err
+					return
+				}
 			case env := <-nc.send:
 				if err := stream.Send(env); err != nil {
 					errCh <- err
@@ -203,6 +290,49 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 	return <-errCh
 }
 
+// authorize decides whether a connection claiming to be claimedID is
+// allowed to be that node.
+//
+// The claim arrives in the client's OWN first message, so on its own it is
+// worth nothing: mTLS proves only that the peer holds SOME certificate this
+// CA signed, not which node it is. Without this check any node's cert could
+// claim any other node's ID - evicting the real node from s.conns and
+// receiving its deploys and proxied inference - and CA.Revoke would be a
+// pure no-op, leaving a decommissioned node full control-plane access
+// forever. Both are exactly what the verified peer certificate's CommonName
+// (which IssueNodeCert sets to the node ID) and the CA's registration set
+// are for.
+func (s *Server) authorize(ctx context.Context, claimedID string) error {
+	if s.ca == nil {
+		return nil // no authority configured - see the ca field's doc comment
+	}
+	if claimedID == "" {
+		return status.Error(codes.InvalidArgument, "the initial NodeSnapshot named no node_id")
+	}
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		return status.Error(codes.Unauthenticated, "connection carries no peer authentication information")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "connection is not mTLS; node identity cannot be verified")
+	}
+	chains := tlsInfo.State.VerifiedChains
+	if len(chains) == 0 || len(chains[0]) == 0 {
+		return status.Error(codes.Unauthenticated, "connection presented no verified client certificate")
+	}
+	cn := chains[0][0].Subject.CommonName
+	if cn != claimedID {
+		return status.Errorf(codes.PermissionDenied,
+			"certificate is issued for node %q but the connection claims to be %q", cn, claimedID)
+	}
+	if !s.ca.IsKnown(cn) {
+		return status.Errorf(codes.PermissionDenied,
+			"node %q is not registered with this control plane (revoked, or registered after this process started - see `sous-api node add`)", cn)
+	}
+	return nil
+}
+
 // Send delivers env to nodeID's live connection and blocks until the
 // correlated reply arrives, the connection tears down, or ctx is done -
 // whichever happens first. Returns an error immediately if nodeID has no
@@ -228,8 +358,10 @@ func (s *Server) Send(ctx context.Context, nodeID string, env *pb.Envelope) (*pb
 	nc.pending[env.StreamId] = waiter
 	nc.mu.Unlock()
 
+	// controlSend, NOT send: a command must not queue behind (or be refused
+	// because of) proxy body frames - see nodeConn.controlSend's doc.
 	select {
-	case nc.send <- env:
+	case nc.controlSend <- env:
 	case <-nc.done:
 		// Lost the race with teardown: the write loop that would have
 		// drained this envelope has already exited (or is exiting), so
@@ -241,10 +373,13 @@ func (s *Server) Send(ctx context.Context, nodeID string, env *pb.Envelope) (*pb
 		nc.mu.Unlock()
 		return nil, fmt.Errorf("node %q disconnected while sending", nodeID)
 	default:
+		// Still fail fast rather than wait, but now this means what it
+		// says: 32 control commands are genuinely outstanding to this one
+		// node, not "somebody is uploading a large audio file".
 		nc.mu.Lock()
 		delete(nc.pending, env.StreamId)
 		nc.mu.Unlock()
-		return nil, fmt.Errorf("node %q's send queue is full", nodeID)
+		return nil, fmt.Errorf("node %q's command queue is full", nodeID)
 	}
 
 	select {
