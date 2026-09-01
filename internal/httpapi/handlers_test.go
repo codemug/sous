@@ -132,7 +132,7 @@ func newTestServerWithReqLogDir(t *testing.T) (http.Handler, string) {
 
 func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string) {
 	t.Helper()
-	h, dir, _ := buildServerFull(t, hub, rt, guard, true)
+	h, dir, _, _ := buildServerFull(t, hub, rt, guard, true)
 	return h, dir
 }
 
@@ -143,8 +143,21 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 // standing up a real gRPC connection.
 func newTestServerWithNodes(t *testing.T) (http.Handler, *nodecatalog.Catalog) {
 	t.Helper()
-	h, _, nodes := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, true)
+	h, _, nodes, _ := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, true)
 	return h, nodes
+}
+
+// newTestServerWithGRPC hands back the real *grpcserver.Server backing the
+// node-scoped routes too, not just its *nodecatalog.Catalog -
+// newTestServerWithNodes cannot, since gsrv is unexported on Server and it
+// discards its own local copy. A caller needs this to drive a genuine
+// end-to-end round trip through the actual HTTP route with a real (faked)
+// souslet on the other end via dialFakeSousletRecording, rather than only
+// testing deployToNode/undeployFromNode/deleteWeightsFromNode directly.
+func newTestServerWithGRPC(t *testing.T) (http.Handler, *nodecatalog.Catalog, *grpcserver.Server) {
+	t.Helper()
+	h, _, nodes, gsrv := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, true)
+	return h, nodes, gsrv
 }
 
 // newTestServerNilGRPC mirrors exactly how cmd/sous - the single-node binary
@@ -155,7 +168,7 @@ func newTestServerWithNodes(t *testing.T) (http.Handler, *nodecatalog.Catalog) {
 // both start by locking an embedded sync.RWMutex field on their receiver).
 func newTestServerNilGRPC(t *testing.T) http.Handler {
 	t.Helper()
-	h, _, _ := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, false)
+	h, _, _, _ := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, false)
 	return h
 }
 
@@ -166,7 +179,7 @@ func newTestServerNilGRPC(t *testing.T) http.Handler {
 // suite exercises: true builds a real nodecatalog/grpcserver pair (the
 // eventual cmd/sous-api shape), false passes nil for both, matching
 // cmd/sous's actual call today.
-func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config, withGRPC bool) (http.Handler, string, *nodecatalog.Catalog) {
+func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config, withGRPC bool) (http.Handler, string, *nodecatalog.Catalog, *grpcserver.Server) {
 	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
@@ -222,7 +235,7 @@ func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, reqLogDir, nodes
+	return h, reqLogDir, nodes, gsrv
 }
 
 func TestListRecipesReturnsSeeds(t *testing.T) {

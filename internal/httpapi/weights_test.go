@@ -1,13 +1,17 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/nodecatalog"
 	pb "github.com/codemug/sous/internal/pb/souslet/v1"
+	"github.com/codemug/sous/internal/recipe"
+	"github.com/codemug/sous/internal/store"
 )
 
 // ---------- deleteWeightsFromNode (package-level function, real gRPC round
@@ -182,5 +186,142 @@ func TestModelsPageOmitsClearWeightsRowOnASingleNodeServer(t *testing.T) {
 	// opening tag only renders inside the {{if and $model $.Nodes}} block.
 	if strings.Contains(body, `class="node-weights"`) {
 		t.Fatal("did not expect a per-node weights row on a single-node server")
+	}
+}
+
+// ---------- POLICY guard: an archived recipe still protects its repo ----------
+//
+// See weights.go's package doc comment for why this lives at the httpapi
+// layer (sous-api has the recipe catalog; souslet does not) rather than in
+// grpcclient alongside the SAFETY guard.
+
+// archiveRecipeSharingModel creates a second recipe, archived, naming the
+// same model as an existing one - the exact shape internal/larder's own
+// StateProtected classification used to require (an archived recipe still
+// referencing a repo that is otherwise unreferenced).
+func archiveRecipeSharingModel(t *testing.T, h http.Handler, id, model string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"id":%q,"kind":"vllm","modality":"text","image":"x","model":%q,"archived":true}`, id, model)
+	rr := post(t, h, "/api/recipes", "application/json", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("seeding archived recipe %s: status = %d: %s", id, rr.Code, rr.Body)
+	}
+}
+
+// TestDeleteWeightsNodeRouteRefusesWithoutForceWhenAnArchivedRecipeStillReferencesTheRepo
+// proves the refusal happens BEFORE any node is contacted at all: no fake
+// souslet is dialed here, and the node is not even known to the catalog -
+// if this test passed only because deleteWeightsFromNode itself failed
+// (e.g. "not connected"), it would be a false positive for the wrong
+// reason, so the 409 (not 502) is what actually proves the POLICY guard
+// fired first.
+func TestDeleteWeightsNodeRouteRefusesWithoutForceWhenAnArchivedRecipeStillReferencesTheRepo(t *testing.T) {
+	h, _ := newTestServerWithNodes(t)
+	archiveRecipeSharingModel(t, h, "qwen38-old", "Inferact/Qwen3.8-27B-NVFP4") // qwen38's model
+
+	rr := post(t, h, "/api/weights/qwen38/asus-gx10/delete", "", "")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (refused by the archived-recipe POLICY guard, before ever contacting the node): %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), "qwen38-old") {
+		t.Fatalf("expected the refusal to name the protecting archived recipe, got: %s", rr.Body)
+	}
+}
+
+// TestDeleteWeightsNodeRouteSucceedsWithForceWhenAnArchivedRecipeStillReferencesTheRepo
+// proves force=true actually reaches the node: with a real (faked) souslet
+// connected and answering success, the SAME archived-recipe setup that
+// TestDeleteWeightsNodeRouteRefusesWithoutForceWhenAnArchivedRecipeStill...
+// above rejected outright now succeeds end to end, and the DeleteWeightsCommand
+// souslet receives carries Force: true - souslet's own separate SAFETY guard
+// (never delete something currently deployed) still stands as the final
+// backstop, unchanged by this test.
+func TestDeleteWeightsNodeRouteSucceedsWithForceWhenAnArchivedRecipeStillReferencesTheRepo(t *testing.T) {
+	h, nodes, gsrv := newTestServerWithGRPC(t)
+	archiveRecipeSharingModel(t, h, "qwen38-old", "Inferact/Qwen3.8-27B-NVFP4")
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
+
+	var gotForce bool
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if d := env.GetDeleteWeights(); d != nil {
+			gotForce = d.Force
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeleteWeightsResult{
+				DeleteWeightsResult: &pb.DeleteWeightsResult{Repo: d.Repo, BytesFreed: 24 << 30},
+			}}
+		}
+		return nil
+	})
+	defer stop()
+
+	rr := post(t, h, "/api/weights/qwen38/asus-gx10/delete?force=true", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with force=true: %s", rr.Code, rr.Body)
+	}
+	if !gotForce {
+		t.Fatal("souslet did not receive Force: true")
+	}
+}
+
+// TestDeleteWeightsNodeRouteDeletesCleanlyWithoutForceWhenNoArchivedRecipeReferencesTheRepo
+// is the negative case: force is only required when the archived-reference
+// condition actually holds, matching the old system's semantics - a repo
+// nothing archived references must delete without needing force at all.
+func TestDeleteWeightsNodeRouteDeletesCleanlyWithoutForceWhenNoArchivedRecipeReferencesTheRepo(t *testing.T) {
+	h, nodes, gsrv := newTestServerWithGRPC(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"})
+
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if d := env.GetDeleteWeights(); d != nil {
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeleteWeightsResult{
+				DeleteWeightsResult: &pb.DeleteWeightsResult{Repo: d.Repo, BytesFreed: 4096},
+			}}
+		}
+		return nil
+	})
+	defer stop()
+
+	rr := post(t, h, "/api/weights/qwen38/asus-gx10/delete", "", "") // no force
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 without force (nothing archived references this repo): %s", rr.Code, rr.Body)
+	}
+}
+
+// TestArchivedRecipesProtectingExcludesTheRequestingRecipeItself is a direct
+// unit test of the pure catalog-reading function, against a standalone
+// catalog (no HTTP server needed): an archived recipe does not protect its
+// OWN repo against a delete request made for itself (see
+// archivedRecipesProtecting's own doc comment for why excludeID is not
+// eligible to grant its own protection), but a DIFFERENT archived recipe
+// naming the same model does.
+func TestArchivedRecipesProtectingExcludesTheRequestingRecipeItself(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := catalog.New(st)
+	const model = "Inferact/Qwen3.8-27B-NVFP4"
+	for _, r := range []recipe.Recipe{
+		{ID: "qwen38", Kind: recipe.KindVLLM, Modality: recipe.ModalityText, Image: "x", Model: model},
+		{ID: "qwen38-rollback", Kind: recipe.KindVLLM, Modality: recipe.ModalityText, Image: "x", Model: model, Archived: true},
+	} {
+		if err := cat.Save(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	protecting, err := archivedRecipesProtecting(cat, "qwen38-rollback", model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(protecting) != 0 {
+		t.Fatalf("a recipe must not count itself as protection: %v", protecting)
+	}
+
+	protecting, err = archivedRecipesProtecting(cat, "qwen38", model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(protecting) != 1 || protecting[0] != "qwen38-rollback" {
+		t.Fatalf("expected qwen38-rollback to protect qwen38's repo, got %v", protecting)
 	}
 }
