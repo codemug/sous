@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/codemug/sous/internal/auth"
+	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 	"unicode/utf8"
 )
 
@@ -210,6 +212,124 @@ func TestNodePageDrawsSegmentsToScale(t *testing.T) {
 	}
 	if !strings.Contains(body, "is-starting") && !strings.Contains(body, "is-ready") {
 		t.Errorf("expected a starting or ready phase on the card")
+	}
+}
+
+// TestPageNodeRendersOneCardPerCatalogNode is Task 12's starting point: the
+// Node dashboard must grow a card per entry in nodecatalog.Catalog.All(), not
+// just describe the single box sous-api's own local deploy.Manager runs on.
+func TestPageNodeRendersOneCardPerCatalogNode(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
+		Deployments: []*pb.DeploymentState{
+			{RecipeId: "dflash2", Phase: "running", WeightsGib: 20, KvGib: 5},
+		},
+	})
+	nodes.ReplaceSnapshot("orin-nano", &pb.NodeSnapshot{
+		NodeId: "orin-nano", PoolGib: 62, ReserveGib: 12,
+	})
+
+	rr := send(t, h, http.MethodGet, "/", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"asus-gx10", "orin-nano"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("node page missing a card for %q", want)
+		}
+	}
+}
+
+// TestPageNodeCardMarginMatchesCapacityPlannerFormula guards the exact
+// arithmetic nodeCards() must use: PoolGiB - ReserveGiB - committed, the same
+// formula capacity.Planner.Plan and planOnNode use for this same node's
+// deploy/plan requests. A reimplementation that drifted from it would let the
+// dashboard's number disagree with what a real deploy against this node
+// would compute.
+func TestPageNodeCardMarginMatchesCapacityPlannerFormula(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
+		Deployments: []*pb.DeploymentState{
+			{RecipeId: "dflash2", WeightsGib: 20, KvGib: 5},
+		},
+	})
+	// margin = 121.6 - 24 - (20+5) = 72.6
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+	if !strings.Contains(body, "72.6") {
+		t.Errorf("expected the node card to report a 72.6 GiB margin; body:\n%s", body)
+	}
+}
+
+// TestPageNodeCardShowsDisconnectedNodeGreyedOutNotVanished guards the
+// property nodecatalog.Catalog.MarkDisconnected exists to preserve: a node
+// that drops its gRPC connection keeps its last-known snapshot rather than
+// disappearing, so "what was running here before it went quiet" stays
+// answerable from the dashboard, not just from the API.
+func TestPageNodeCardShowsDisconnectedNodeGreyedOutNotVanished(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "running"}},
+	})
+	nodes.MarkDisconnected("asus-gx10")
+
+	rr := send(t, h, http.MethodGet, "/", "", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "asus-gx10") {
+		t.Fatal("disconnected node vanished from the dashboard instead of rendering its last-known state")
+	}
+	if !strings.Contains(body, "is-idle") {
+		t.Error("disconnected node card missing the is-idle chip/border treatment")
+	}
+}
+
+// TestFleetCardSegmentDoesNotClaimReadyForAnUnhealthyContainer guards a code
+// review finding on this task: nodeCards() originally tagged every
+// committed fleet-card segment deploy.PhaseReady unconditionally.
+// deploy.PhaseReady is documented as "the only phase that means usable" -
+// the most specific "everything is fine" signal in the vocabulary, not a
+// neutral placeholder - so that was a GUARANTEED false-positive health
+// reading on every fleet segment, not an unlucky edge case: a crash-looping
+// or OOM-killed container rendered identically (green, "ready") to a
+// genuinely healthy one.
+//
+// d.Phase on a NodeSnapshot deployment is Docker's own raw status word (see
+// grpcclient.Handlers.Snapshot's own doc comment), and "restarting" is
+// exactly what a crash-looping container reports - proving the fix directly
+// rather than only by inspection: the segment for it must render the
+// neutral seg-unknown class, never seg-ready.
+func TestFleetCardSegmentDoesNotClaimReadyForAnUnhealthyContainer(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
+		Deployments: []*pb.DeploymentState{
+			{RecipeId: "crashloop", Phase: "restarting", WeightsGib: 20, KvGib: 5},
+		},
+	})
+	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
+
+	seg := regexp.MustCompile(`<div class="([^"]*)"[^>]*data-seg="crashloop"`).FindStringSubmatch(body)
+	if seg == nil {
+		t.Fatalf("no segment rendered for the crashloop deployment; body:\n%s", body)
+	}
+	class := seg[1]
+	if strings.Contains(class, "seg-ready") {
+		t.Errorf("crashloop (docker status %q) rendered class %q - claims ready for an unhealthy container", "restarting", class)
+	}
+	if !strings.Contains(class, "seg-unknown") {
+		t.Errorf("expected the neutral seg-unknown class for a fleet segment whose health cannot be read from Phase, got %q", class)
+	}
+	// The raw Docker status must stay visible (in the tooltip) rather than
+	// being hidden behind whichever color the segment ends up with - the
+	// coarseness should be disclosed, not disguised.
+	if !strings.Contains(body, "restarting") {
+		t.Error(`raw docker status "restarting" not surfaced anywhere on the page`)
 	}
 }
 

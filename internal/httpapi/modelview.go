@@ -145,6 +145,22 @@ type Segment struct {
 	Label   string
 	Reserve bool
 	Free    bool
+	// Unknown marks a segment whose health cannot actually be read from
+	// Phase - a fleet-card segment nodeCards() builds from a node's raw
+	// Docker status word (see that function's own doc comment), not the
+	// real deploy.Phase vocabulary the single-node dashboard's segments
+	// carry. deploy.Phase has no neutral value: PhaseReady is documented as
+	// "the only phase that means usable", so tagging an unknown-health
+	// segment with it - as an earlier version of this code did - is a
+	// guaranteed false "everything's fine" signal, not a placeholder.
+	// Unknown routes the segment to its own neutral seg-unknown/
+	// chip-unknown styling instead of any phase color.
+	Unknown bool
+	// RawStatus is the underlying signal behind an Unknown segment -
+	// Docker's own status word ("running", "restarting", "exited", ...) -
+	// shown verbatim in the tooltip so the coarseness is disclosed rather
+	// than hidden behind a color this data cannot actually support.
+	RawStatus string
 }
 
 // Residents is how many models are actually holding memory.

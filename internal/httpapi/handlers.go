@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/codemug/sous/internal/fetch"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,7 +11,7 @@ import (
 
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
-	"github.com/codemug/sous/internal/larder"
+	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/recipe"
 	"github.com/codemug/sous/internal/sources"
 )
@@ -24,9 +23,6 @@ type pageData struct {
 	DeployCount int
 	Recipes     []recipe.Recipe
 	Deployments []deploy.Record
-	Larder      []larder.Entry
-	LarderTotal string
-	Reclaimable string
 	Sources     []sources.Source
 	Resolved    []catalog.Resolved
 	Message     string
@@ -41,111 +37,41 @@ type pageData struct {
 	Plan        *PlanPage
 	Keys        *keysPage
 	Fetches     *fetchView
+	// Nodes is every node's last-known snapshot, nil on a single-node server
+	// (s.nodes == nil, e.g. cmd/sous - see Server.gsrv/nodes' own doc
+	// comment). models.html uses this for the per-node "clear weights"
+	// action (Task 11): CachedWeightRepos says which (recipe, node) pairs
+	// have something on disk to clear.
+	Nodes []nodecatalog.NodeView
+	// NodeCards is the multi-node dashboard grid node.html draws (Task 12):
+	// one card per node in Nodes above, pre-shaped with its own pool bar
+	// (see httpapi.NodeCardView's own doc comment). A separate field from
+	// Nodes rather than reusing it - Nodes is already
+	// []nodecatalog.NodeView for models.html's per-node weights actions,
+	// and node.html needs a different shape (its own PoolBar per card, not
+	// a raw snapshot) for the same underlying data. nil on a single-node
+	// server, exactly like Nodes.
+	NodeCards []NodeCardView
+	// WeightsProtection is keyed by recipe ID, present only for a recipe
+	// whose repo is still referenced by some OTHER recipe (see
+	// weights.go's classifyProtection) - models.html uses this to decide
+	// whether a card's "clear weights" action is a plain button, a
+	// force-only one, or hidden entirely (see that function's own doc
+	// comment for the two severity tiers). A missing entry means nothing
+	// else references the repo, so a plain delete is safe.
+	WeightsProtection map[string]weightsProtectionView
 	// BaseURL is this server as the BROWSER reached it, so a copyable example
 	// works when pasted. Building it from the listen address would print the
 	// bind host, which is frequently not the name anyone uses.
 	BaseURL string
 }
 
-// larderView gathers what the larder needs: the catalog to know what is
-// referenced, and the deployment list so a running model's weights can never
-// read as stale even mid-edit.
-func (s *Server) larderView() ([]larder.Entry, error) {
-	recipes, err := s.cat.List()
-	if err != nil {
-		return nil, err
-	}
-	deployed := []string{}
-	if ds, err := s.mgr.List(); err == nil {
-		for _, d := range ds {
-			deployed = append(deployed, d.RecipeID)
-		}
-	}
-	return larder.Scan(s.hubDir, recipes, deployed)
-}
-
-// humanBytes renders at GiB, which is the unit every measurement in this
-// project is quoted in.
-func humanBytes(n int64) string {
-	const gib = 1024 * 1024 * 1024
-	if n >= gib {
-		return strconv.FormatFloat(float64(n)/gib, 'f', 2, 64) + " GiB"
-	}
-	return strconv.FormatFloat(float64(n)/(1024*1024), 'f', 1, 64) + " MiB"
-}
-
-func (s *Server) listLarder(w http.ResponseWriter, _ *http.Request) {
-	entries, err := s.larderView()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"entries":           entries,
-		"total_bytes":       larder.Total(entries),
-		"reclaimable_bytes": larder.Reclaimable(entries),
-	})
-}
-
-func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
-	// FormValue, not URL.Query alone: URL.Query() reads only the query
-	// string, and the browser drawer posts repo as a body field with no
-	// query string at all - action="/api/larder/delete", nothing after it.
-	// That meant every browser delete read repo="" and hit larder.Delete's
-	// own "unsafe repo id" guard. It went unnoticed because confirmed() used
-	// to compare the typed text against this same empty want - "" can never
-	// equal a non-empty typed string, so the request was refused at the
-	// confirmation step, before ever reaching the empty-repo bug underneath
-	// it. Replacing typed confirmation with a fixed sentinel removed that
-	// accidental cover and let the real bug through.
-	repo := r.FormValue("repo")
-	force := r.URL.Query().Get("force") == "true"
-
-	entries, err := s.larderView()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// CONFIRMED, because this throws away tens of gigabytes that take twenty
-	// minutes to fetch again - and unlike a stopped model, nothing brings it
-	// back but the network. The repo id names the exact thing going in the
-	// drawer text, even though it is a click rather than a typed match now.
-	if wantsHTML(r) && !s.requireConfirm(w, r, repo, "/larder") {
-		return
-	}
-	freed, err := larder.Delete(s.hubDir, repo, entries, force)
-	if err != nil {
-		var ge *larder.GuardError
-		if errors.As(err, &ge) {
-			if wantsHTML(r) {
-				s.redirect(w, r, "/larder", ge.Error(), true)
-				return
-			}
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error": ge.Error(), "repo": ge.Repo, "reason": ge.Reason,
-			})
-			return
-		}
-		if wantsHTML(r) {
-			s.redirect(w, r, "/larder", err.Error(), true)
-			return
-		}
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if wantsHTML(r) {
-		s.redirect(w, r, "/larder", "freed "+humanBytes(freed), false)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"freed_bytes": freed})
-}
-
 // fetchLogs answers GET /api/fetch/logs?repo=…
 //
-// Its own endpoint rather than a field on the listing: a log tail is kilobytes,
-// the listing is polled every few seconds by an open Larder page, and putting
-// one inside the other would put a container log on the wire on every tick.
+// Its own endpoint rather than a field on the listing: a log tail is
+// kilobytes, the listing is polled every few seconds by anything watching an
+// in-flight download, and putting one inside the other would put a
+// container log on the wire on every tick.
 func (s *Server) fetchLogs(w http.ResponseWriter, r *http.Request) {
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
 	if repo == "" {
@@ -159,30 +85,6 @@ func (s *Server) fetchLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "lines": lines})
-}
-
-func (s *Server) pageLarder(w http.ResponseWriter, r *http.Request) {
-	s.page(w, r, "larder", "Larder", func(d *pageData) error {
-		entries, err := s.larderView()
-		if err != nil {
-			return err
-		}
-		d.HF = s.hfView()
-		d.Larder = entries
-		d.LarderTotal = humanBytes(larder.Total(entries))
-		d.Reclaimable = humanBytes(larder.Reclaimable(entries))
-
-		jobs := s.fetch.List(r.Context())
-		fv := &fetchView{Jobs: jobs}
-		for _, j := range jobs {
-			if j.Phase == fetch.PhaseDownloading {
-				fv.Active = true
-				break
-			}
-		}
-		d.Fetches = fv
-		return nil
-	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -256,6 +158,22 @@ func (s *Server) plan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	if nodeID := r.PathValue("nodeID"); nodeID != "" {
+		rec, err := s.cat.Get(v)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		res, err := planOnNode(s.nodes, v, nodeID, rec.Declared.TotalGiB())
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
 	res, err := s.mgr.Plan(v)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
@@ -283,6 +201,11 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		port = n
+	}
+
+	if nodeID := r.PathValue("nodeID"); nodeID != "" {
+		s.deployNode(w, v, nodeID, port, force)
+		return
 	}
 
 	rec, err := s.mgr.Deploy(r.Context(), v, port, force)
@@ -318,11 +241,87 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec)
 }
 
+// deployNode is the node-scoped half of deploy: the recipe travels to nodeID
+// over gRPC instead of running against this process's own local
+// deploy.Manager. Always answers JSON - the node-scoped routes are new, have
+// no existing form-posting UI, and Task 13's drag-and-drop deploy calls this
+// with fetch(), which never sends the form Content-Type wantsHTML checks for.
+func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, force bool) {
+	rec, err := s.cat.Get(v)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// recipe.Recipe.Archived's own doc comment is explicit: "Archived means
+	// CANNOT RUN HERE", and the UI hiding the deploy control was this
+	// codebase's ONLY enforcement of that until now - there was never a
+	// guard here. That was fine while every deploy click-path already
+	// hid itself for an archived recipe (models.html's "Deploy…" link,
+	// gated the same way this check is), but Task 13's drag-and-drop is a
+	// second, independent click-path onto this exact handler, and a UI gate
+	// on the card is not something this handler can trust the caller to
+	// have honoured - force never overrides this, the same way it never
+	// overrides the separate live-deployment guard in weights.go's
+	// classifyProtection: force is for a capacity trade-off an operator
+	// can knowingly accept, not for un-deleting the "impossible on this
+	// hardware" fact Archived records.
+	if rec.Archived {
+		writeErr(w, http.StatusConflict, fmt.Sprintf(
+			"recipe %s is archived and cannot be deployed", v))
+		return
+	}
+
+	// Capacity checking here reads margin from the nodecatalog snapshot
+	// rather than issuing a live call - see planOnNode's doc comment for why.
+	plan, err := planOnNode(s.nodes, v, nodeID, rec.Declared.TotalGiB())
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if !plan.Fits && !force {
+		// Same shape as the legacy path's JSON capacity refusal
+		// (writeJSON(w, http.StatusConflict, ce.Result)): a script gets the
+		// margin and MustFree list either way.
+		writeJSON(w, http.StatusConflict, plan)
+		return
+	}
+
+	recipeYAML, err := recipeToYAML(rec)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	res, err := deployToNode(s.gsrv, s.nodes, nodeID, recipeYAML, port, force)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) undeploy(w http.ResponseWriter, r *http.Request) {
 	v, ok := id(r, w)
 	if !ok {
 		return
 	}
+
+	// Node-scoped: synchronous, unlike the legacy path below. undeployFromNode
+	// blocks on the node's own reply (matching deployToNode's shape), so this
+	// inherits the same hanging-POST-during-a-slow-stop tradeoff the legacy
+	// path's own comment warns about - carried forward from the brief as a
+	// known gap rather than solved here, since souslet's stop and this
+	// route's request/reply framing are both outside this task's scope.
+	if nodeID := r.PathValue("nodeID"); nodeID != "" {
+		res, err := undeployFromNode(s.gsrv, nodeID, v)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
 	// ASYNCHRONOUS ON PURPOSE. Docker's stop carries a 60 second grace period
 	// and a 61 GiB model spends most of it releasing the pool. Doing that here
 	// left the browser on a hanging POST for a minute with nothing to show for
@@ -559,6 +558,30 @@ func (s *Server) pageModels(w http.ResponseWriter, r *http.Request) {
 		vs, err := s.models(r)
 		if err != nil {
 			return err
+		}
+		if s.nodes != nil {
+			d.Nodes = s.nodes.All()
+			// WeightsProtection: one classification per recipe card, not per
+			// (recipe, node) pair - see weights.go's classifyProtection doc
+			// comment, this is a property of the repo across the whole
+			// catalog, independent of which node holds a cached copy.
+			// Computed here (rather than reusing deleteWeightsOnNode's own
+			// repoProtection) because a fresh s.cat.List() is already cheap
+			// and this keeps the read local to the page that needs it.
+			if recipes, err := s.cat.List(); err == nil {
+				d.WeightsProtection = make(map[string]weightsProtectionView, len(recipes))
+				for _, rec := range recipes {
+					activeBy, archivedBy := classifyProtection(recipes, rec.ID, rec.Model)
+					if len(activeBy) == 0 && len(archivedBy) == 0 {
+						continue
+					}
+					d.WeightsProtection[rec.ID] = weightsProtectionView{
+						ActiveBy: activeBy, ArchivedBy: archivedBy,
+						ActiveByText:   strings.Join(activeBy, ", "),
+						ArchivedByText: strings.Join(archivedBy, ", "),
+					}
+				}
+			}
 		}
 		want := r.URL.Query().Get("filter")
 		match := modelFilters[0].Match

@@ -23,6 +23,10 @@ textarea{
 }
 textarea:focus-visible{border-color:var(--accent)}
 @media (max-width:640px){.cat-acts{margin-left:0}}
+/* One chip (+ an inline "clear weights" drawer) per node that has this
+   recipe's weights cached - see the per-node resident row below. */
+.node-weights{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-xs);margin:var(--space-xs) 0}
+.node-weights .danger-drawer{display:inline-block}
 </style>
 
 <div class="cat-head">
@@ -77,7 +81,25 @@ args:
 
 <div class="cards wide">
   {{range .Models}}
-    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}">
+    {{/* DRAG SOURCE (Task 13): draggable plus a stable id dragdrop.js reads
+         off the card at dragstart and posts straight to
+         /api/deploy/{recipeID}/{nodeID} on drop - no JS framework, just the
+         DOM attribute this card already had every other field of.
+
+         draggable is WITHHELD on an archived recipe, mirroring the exact
+         (not .Recipe.Archived) gate the "Deploy…" button below already
+         uses. recipe.Recipe.Archived's own doc comment is explicit that
+         this UI omission - not a server-side check - IS this codebase's
+         enforcement of "archived means cannot run here": there is no
+         Archived guard anywhere in the deploy path (deployNode/deployToNode
+         check only capacity and force). Before this gate, an archived
+         card - still visible and identifiable via its "archived" chip
+         under the archived filter - was draggable with no click-path
+         equivalent, a brand-new two-second gesture reaching an action the
+         UI had never exposed a route to before. Explicit "false", not just
+         omitting the attribute, so a reader of the rendered HTML sees the
+         decision was deliberate. */}}
+    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}" draggable="{{if .Recipe.Archived}}false{{else}}true{{end}}" data-recipe-id="{{.Recipe.ID}}">
       <div class="card-head">
         <span class="card-title"><a href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a></span>
         {{if .Deployed}}
@@ -99,6 +121,53 @@ args:
       <span class="names">
         {{range $i,$n := .}}{{if $i}}<span class="names-sep">·</span>{{end}}<span class="mono">{{$n}}</span>{{end}}
       </span>
+      {{end}}
+
+      {{/* PER-NODE RESIDENT CHIPS. $.Nodes is nil on a single-node server
+           (no gRPC fleet configured - see pageData.Nodes' own doc comment),
+           so this whole row disappears there rather than showing an empty
+           one. A chip only appears for a node whose last-known snapshot
+           actually lists this recipe's model in CachedWeightRepos - "clear
+           weights" only makes sense where there is something to clear.
+
+           THREE STATES, matching larder.html's own precedent for the same
+           question ("a button that exists to say no" is worse than no
+           button): $prot.ActiveBy means an ACTIVE recipe elsewhere still
+           names this repo - the guard refuses this unconditionally, so no
+           button is offered at all, only a chip explaining why. $prot.ArchivedBy
+           (and no active reference) means only an ARCHIVED recipe still
+           names it - rollback insurance the guard lets force override, so a
+           force-only button is offered, with the Cost text naming exactly
+           what redeploying that archived recipe would cost without it.
+           Neither means nothing else references the repo, so the plain
+           button is offered. */}}
+      {{$model := .Recipe.Model}}
+      {{if and $model $.Nodes}}
+      {{$recipeID := .Recipe.ID}}
+      {{$prot := index $.WeightsProtection $recipeID}}
+      <div class="node-weights">
+        {{range $.Nodes}}
+          {{if index .CachedWeightRepos $model}}
+            <span class="chip is-ready">{{.NodeID}}: weights cached</span>
+            {{if $prot.ActiveBy}}
+              <span class="chip is-arch" title="active recipe(s) {{$prot.ActiveByText}} still reference this repo">in use elsewhere — cannot clear</span>
+            {{else if $prot.ArchivedBy}}
+              <span class="chip is-starting" title="archived recipe(s) {{$prot.ArchivedByText}} still reference this repo">rollback for {{$prot.ArchivedByText}}</span>
+              {{template "confirm-button" dict
+                  "Action" (printf "/api/weights/%s/%s/delete?force=true" $recipeID .NodeID)
+                  "Label" "Force clear weights"
+                  "Cost" (printf "Overrides rollback protection: archived recipe(s) %s still name %s as their fallback. Clearing it turns their next redeploy into a full re-download instead of an instant one. This does not override the separate check that refuses to touch weights a live deployment on %s is actually using." $prot.ArchivedByText $model .NodeID)
+                  "Wrap" "card-danger"}}
+            {{else}}
+              {{template "confirm-button" dict
+                  "Action" (printf "/api/weights/%s/%s/delete" $recipeID .NodeID)
+                  "Label" "Clear weights"
+                  "Cost" (printf "Removes %s's cached weights from %s's disk. If nothing else on that node has this repo cached, redeploying it there means downloading it again." $model .NodeID)
+                  "Wrap" "card-danger"}}
+            {{end}}
+          {{end}}
+        {{end}}
+      </div>
       {{end}}
 
       <div class="card-foot">

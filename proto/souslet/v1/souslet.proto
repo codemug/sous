@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package souslet.v1;
+
+option go_package = "github.com/codemug/sous/internal/pb/souslet/v1;pb";
+
+service Souslet {
+  // souslet dials this once and keeps it open for the process lifetime.
+  // Every deploy/fetch/proxy operation sous-api needs this node to do is
+  // an Envelope on this stream; souslet executes it locally and streams
+  // results back on the same stream, correlated by stream_id.
+  rpc Connect(stream Envelope) returns (stream Envelope);
+}
+
+message Envelope {
+  // Correlates a request with its response(s). sous-api generates one per
+  // command or proxied HTTP request; souslet echoes it back on every
+  // reply so concurrent operations resolve independently of arrival order.
+  string stream_id = 1;
+
+  oneof payload {
+    // souslet -> API, sent once immediately after Connect and again after
+    // every reconnect. Full state, not a diff.
+    NodeSnapshot snapshot = 10;
+
+    // API -> souslet
+    DeployCommand deploy = 20;
+    UndeployCommand undeploy = 21;
+    PlanCommand plan = 22;
+    FetchCommand fetch = 23;
+    DeleteWeightsCommand delete_weights = 24;
+    HTTPRequestHead http_req_head = 25;
+    HTTPRequestChunk http_req_chunk = 26;
+
+    // souslet -> API
+    DeployResult deploy_result = 30;
+    UndeployResult undeploy_result = 31;
+    PlanResult plan_result = 32;
+    FetchProgress fetch_progress = 33;
+    DeleteWeightsResult delete_weights_result = 34;
+    HTTPResponseHead http_resp_head = 35;
+    HTTPResponseChunk http_resp_chunk = 36;
+
+    // either direction
+    Heartbeat heartbeat = 40;
+    Error error = 41;
+  }
+}
+
+message NodeSnapshot {
+  string node_id = 1;
+  double pool_gib = 2;
+  double reserve_gib = 3;
+  repeated DeploymentState deployments = 4;
+  repeated string cached_weight_repos = 5;
+}
+
+message DeploymentState {
+  string recipe_id = 1;
+  int32 host_port = 2;
+  string phase = 3;
+  double weights_gib = 4;
+  double kv_gib = 5;
+}
+
+message DeployCommand {
+  string recipe_id = 1;
+  string recipe_yaml = 2;  // full recipe, so souslet needs no catalog of its own
+  int32 want_port = 3;
+  bool force = 4;
+}
+
+message DeployResult {
+  string recipe_id = 1;
+  int32 host_port = 2;
+  string container_id = 3;
+  string error = 4;  // empty on success
+}
+
+message UndeployCommand {
+  string recipe_id = 1;
+}
+
+message UndeployResult {
+  string recipe_id = 1;
+  string error = 2;
+}
+
+message PlanCommand {
+  string recipe_id = 1;
+  double incoming_gib = 2;
+}
+
+message PlanResult {
+  bool fits = 1;
+  double committed_gib = 2;
+  double margin_gib = 3;
+  repeated string must_free = 4;
+}
+
+message FetchCommand {
+  string repo = 1;
+}
+
+message FetchProgress {
+  string repo = 1;
+  string phase = 2;  // downloading|done|failed|absent
+  int64 bytes = 3;
+  int64 total = 4;
+}
+
+message DeleteWeightsCommand {
+  string repo = 1;
+  bool force = 2;
+}
+
+message DeleteWeightsResult {
+  string repo = 1;
+  int64 bytes_freed = 2;
+  string error = 3;
+}
+
+message HTTPRequestHead {
+  string method = 1;
+  string path = 2;
+  map<string, string> headers = 3;
+}
+
+message HTTPRequestChunk {
+  bytes data = 1;
+  bool eof = 2;
+}
+
+message HTTPResponseHead {
+  int32 status = 1;
+  map<string, string> headers = 2;
+}
+
+message HTTPResponseChunk {
+  bytes data = 1;
+  bool eof = 2;
+}
+
+message Heartbeat {
+  int64 unix_seconds = 1;
+}
+
+message Error {
+  string message = 1;
+}

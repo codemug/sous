@@ -21,6 +21,8 @@ import (
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
+	"github.com/codemug/sous/internal/grpcserver"
+	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/ports"
 	"github.com/codemug/sous/internal/store"
 )
@@ -130,6 +132,55 @@ func newTestServerWithReqLogDir(t *testing.T) (http.Handler, string) {
 
 func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config) (http.Handler, string) {
 	t.Helper()
+	h, dir, _, _ := buildServerFull(t, hub, rt, guard, true)
+	return h, dir
+}
+
+// newTestServerWithNodes hands back the nodecatalog powering the new
+// node-scoped deploy/undeploy/plan routes as well, so a test can seed it
+// directly via ReplaceSnapshot - the same catalog grpcserver would fill from
+// a connected souslet's NodeSnapshot, but reachable synchronously without
+// standing up a real gRPC connection.
+func newTestServerWithNodes(t *testing.T) (http.Handler, *nodecatalog.Catalog) {
+	t.Helper()
+	h, _, nodes, _ := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, true)
+	return h, nodes
+}
+
+// newTestServerWithGRPC hands back the real *grpcserver.Server backing the
+// node-scoped routes too, not just its *nodecatalog.Catalog -
+// newTestServerWithNodes cannot, since gsrv is unexported on Server and it
+// discards its own local copy. A caller needs this to drive a genuine
+// end-to-end round trip through the actual HTTP route with a real (faked)
+// souslet on the other end via dialFakeSousletRecording, rather than only
+// testing deployToNode/undeployFromNode/deleteWeightsFromNode directly.
+func newTestServerWithGRPC(t *testing.T) (http.Handler, *nodecatalog.Catalog, *grpcserver.Server) {
+	t.Helper()
+	h, _, nodes, gsrv := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, true)
+	return h, nodes, gsrv
+}
+
+// newTestServerNilGRPC mirrors exactly how cmd/sous - the single-node binary
+// actually deployed today - constructs a Server: New(..., nil, nil), with no
+// grpcserver.Server or nodecatalog.Catalog at all. It exists to prove hitting
+// one of the node-scoped routes on that real configuration cannot reach code
+// that would nil-panic (grpcserver.Server.Send and nodecatalog.Catalog.Node
+// both start by locking an embedded sync.RWMutex field on their receiver).
+func newTestServerNilGRPC(t *testing.T) http.Handler {
+	t.Helper()
+	h, _, _, _ := buildServerFull(t, t.TempDir(), &fakeRuntime{running: map[string]bool{}}, auth.Config{Disabled: true}, false)
+	return h
+}
+
+// buildServerFull is buildServerWith's real implementation, broken out so
+// node-scoped tests can also get at the *nodecatalog.Catalog backing the new
+// routes; every other existing helper wraps this and discards it. withGRPC
+// selects which of the two ways New can legitimately be called this test
+// suite exercises: true builds a real nodecatalog/grpcserver pair (the
+// eventual cmd/sous-api shape), false passes nil for both, matching
+// cmd/sous's actual call today.
+func buildServerFull(t *testing.T, hub string, rt *fakeRuntime, guard auth.Config, withGRPC bool) (http.Handler, string, *nodecatalog.Catalog, *grpcserver.Server) {
+	t.Helper()
 	s, err := store.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -168,11 +219,23 @@ func buildServerWith(t *testing.T, hub string, rt *fakeRuntime, guard auth.Confi
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard)
+	// withGRPC picks between the two real ways New is actually called: a
+	// nodecatalog + grpcserver pair (node-scoped route tests need somewhere
+	// to seed a node snapshot via ReplaceSnapshot, and this server is never
+	// asked to actually connect to a souslet, so an empty pair costs the
+	// existing single-node tests nothing) versus nil, nil, exactly what
+	// cmd/sous passes today.
+	var nodes *nodecatalog.Catalog
+	var gsrv *grpcserver.Server
+	if withGRPC {
+		nodes = nodecatalog.New()
+		gsrv = grpcserver.New(nodes, nil)
+	}
+	h, err := New(m, c, keys, fx, hfs, reqLogW, reqLogR, 121.6, hub, t.TempDir(), guard, gsrv, nodes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, reqLogDir
+	return h, reqLogDir, nodes, gsrv
 }
 
 func TestListRecipesReturnsSeeds(t *testing.T) {
@@ -332,84 +395,6 @@ func TestHealthz(t *testing.T) {
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d", rr.Code)
-	}
-}
-
-// ---------- larder ----------
-
-func TestLarderAPIListsEntriesAndReclaimable(t *testing.T) {
-	h := newTestServerWithHub(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/larder", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rr.Code, rr.Body)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got["entries"] == nil || got["reclaimable_bytes"] == nil || got["total_bytes"] == nil {
-		t.Fatalf("larder response missing fields: %v", got)
-	}
-	// Only the unreferenced repo is reclaimable, so it must be less than total.
-	if got["reclaimable_bytes"].(float64) >= got["total_bytes"].(float64) {
-		t.Fatalf("referenced weights counted as reclaimable: %v", got)
-	}
-}
-
-// The weights qwen38 uses must not be deletable while a recipe names them.
-func TestLarderDeleteRefusesReferencedOverAPI(t *testing.T) {
-	h := newTestServerWithHub(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
-		"/api/larder/delete?repo=Inferact%2FQwen3.8-27B-NVFP4", nil))
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("want 409 for a referenced repo, got %d: %s", rr.Code, rr.Body)
-	}
-	var got map[string]string
-	json.Unmarshal(rr.Body.Bytes(), &got)
-	if got["reason"] == "" {
-		t.Fatal("a guard must say why over the API too")
-	}
-}
-
-func TestLarderDeleteStaleSucceeds(t *testing.T) {
-	h := newTestServerWithHub(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
-		"/api/larder/delete?repo=Kwaipilot%2FKAT-Coder-V2.5-Dev", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("stale weights should delete: %d %s", rr.Code, rr.Body)
-	}
-	var got map[string]any
-	json.Unmarshal(rr.Body.Bytes(), &got)
-	if got["freed_bytes"] == nil {
-		t.Fatal("must report bytes freed")
-	}
-}
-
-func TestLarderDeleteRejectsTraversal(t *testing.T) {
-	h := newTestServerWithHub(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
-		"/api/larder/delete?repo=..%2F..%2Fetc&force=true", nil))
-	if rr.Code < 400 {
-		t.Fatalf("accepted a traversal repo id: %d", rr.Code)
-	}
-}
-
-func TestLarderPageRenders(t *testing.T) {
-	h := newTestServerWithHub(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/larder", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", rr.Code, rr.Body)
-	}
-	body := rr.Body.String()
-	for _, want := range []string{"reclaimable", "KAT-Coder", "stale", "in use"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("larder page missing %q", want)
-		}
 	}
 }
 

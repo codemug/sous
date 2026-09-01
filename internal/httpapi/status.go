@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/observe"
+	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 )
 
 // phaseDetail turns a phase into the sentence an operator needs next. A red
@@ -244,8 +246,114 @@ func (s *Server) pageNode(w http.ResponseWriter, r *http.Request) {
 		d.Models = vs
 		pb := poolBar(vs, s.pool, s.mgr.Planner.ReserveGiB)
 		d.Pool = &pb
+
+		// NodeCards is the multi-node fleet grid (Task 12): one card per
+		// node nodecatalog.Catalog currently knows about, alongside - not
+		// replacing - the section above, which describes the single box
+		// sous-api's own local deploy.Manager runs on. That local path is
+		// the "migration period" leftover server.go's own doc comment
+		// describes (removed for good in Task 14); until then both
+		// sections coexist, same as models.html's per-node weights actions
+		// sit alongside its own single-node cards.
+		//
+		// nil on a single-node server (s.nodes == nil, e.g. cmd/sous) - the
+		// same guard pageModels already applies before its own
+		// s.nodes.All() call.
+		if s.nodes != nil {
+			d.NodeCards = s.nodeCards()
+		}
 		return nil
 	})
+}
+
+// NodeCardView is one node's dashboard card, built from
+// nodecatalog.Catalog.All() rather than from this process's own local
+// deploy.Manager - see the "gsrv and nodes" doc comment on Server for why
+// the two are different things during the multi-node migration.
+//
+// A disconnected node still gets a card: nodecatalog.Catalog.MarkDisconnected
+// keeps a node's last-known PoolGiB/ReserveGiB/Deployments and only flips
+// Connected to false (see nodecatalog.go's own doc comment), so "what was
+// running here before it went quiet" stays answerable from the dashboard
+// rather than the card simply vanishing.
+type NodeCardView struct {
+	NodeID      string
+	PoolGiB     float64
+	ReserveGiB  float64
+	MarginGiB   float64
+	Connected   bool
+	Deployments []*pb.DeploymentState
+
+	// Bar is what {{template "pool-bar" .Bar}} draws: this card's OWN
+	// reserve/committed/free segments, sized to scale exactly like the
+	// single-node dashboard's bar above it - reusing poolbar.html's
+	// existing partial unmodified, rather than a second bar
+	// implementation that could draw differently.
+	Bar PoolBar
+}
+
+// nodeCards builds one dashboard card per node the catalog currently knows
+// about, sorted by NodeID for a stable page (nodecatalog.Catalog.All()
+// itself makes no ordering promise - it ranges a map).
+//
+// MarginGiB uses the EXACT formula capacity.Planner.Plan does - usable
+// (PoolGiB-ReserveGiB) minus committed - which is also what planOnNode
+// (deploy_grpc.go) computes for this same node's own deploy/plan requests.
+// It is reimplemented here rather than shared only because capacity.Planner
+// takes a []capacity.Entry, not a []*pb.DeploymentState; the arithmetic
+// itself must not drift from it.
+func (s *Server) nodeCards() []NodeCardView {
+	views := s.nodes.All()
+	cards := make([]NodeCardView, 0, len(views))
+	for _, v := range views {
+		bar := PoolBar{PoolGiB: v.PoolGiB, ReserveGiB: v.ReserveGiB, Counts: map[string]int{}}
+		var committed float64
+		for _, d := range v.Deployments {
+			g := d.WeightsGib + d.KvGib
+			committed += g
+			// d.Phase is Docker's RAW status word here ("running",
+			// "exited", "restarting", ...), not deploy.Phase's
+			// starting/ready/failed/stopping/gone vocabulary - see
+			// grpcclient.Handlers.Snapshot's own doc comment for exactly
+			// why. deploy.Phase has no neutral value to fall back on
+			// either: PhaseReady is documented as "the only phase that
+			// means usable", so tagging every committed segment with it
+			// would be a guaranteed false "everything's fine" signal, not
+			// a placeholder - a crash-looping or OOM-killed container
+			// would render identically, green and "ready", to a healthy
+			// one. Segment.Unknown routes this to its own neutral
+			// seg-unknown style instead, with the real Docker word kept
+			// visible in the tooltip via RawStatus rather than hidden
+			// behind a color this data cannot support.
+			bar.Segments = append(bar.Segments, Segment{
+				ID: d.RecipeId, Pct: pct(g, v.PoolGiB), GiB: g,
+				Label:   labelIf(d.RecipeId, pct(g, v.PoolGiB) > 11),
+				Unknown: true, RawStatus: d.Phase,
+			})
+		}
+		margin := v.PoolGiB - v.ReserveGiB - committed
+		bar.MarginGiB = margin
+		bar.Segments = append(bar.Segments, Segment{
+			Pct: pct(v.ReserveGiB, v.PoolGiB), GiB: v.ReserveGiB, Reserve: true, Label: "reserved",
+		})
+		if margin > 0 {
+			bar.Segments = append(bar.Segments, Segment{
+				Pct: pct(margin, v.PoolGiB), GiB: margin, Free: true,
+				Label: labelIf(gib(margin)+" free", pct(margin, v.PoolGiB) > 11),
+			})
+		}
+		for i := 0; i <= 4; i++ {
+			bar.Ticks = append(bar.Ticks, v.PoolGiB*float64(i)/4)
+		}
+
+		cards = append(cards, NodeCardView{
+			NodeID: v.NodeID, PoolGiB: v.PoolGiB, ReserveGiB: v.ReserveGiB,
+			MarginGiB: margin, Connected: v.Connected, Deployments: v.Deployments,
+			Bar: bar,
+		})
+	}
+	sort.Slice(cards, func(i, j int) bool { return cards[i].NodeID < cards[j].NodeID })
+	return cards
 }
 
 // logs returns a container's recent output.

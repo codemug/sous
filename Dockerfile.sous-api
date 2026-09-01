@@ -1,0 +1,50 @@
+# sous-api is the control plane: recipe catalog, node catalog, UI, and the
+# mTLS gRPC server every souslet dials into. One static binary plus embedded
+# templates, so the runtime layer needs almost nothing. Built on the target
+# arch via buildx; CI publishes linux/amd64 and linux/arm64 since this
+# fleet's nodes are a mix of both.
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+
+# Dependencies first: they change far less often than the source, so this
+# layer survives most rebuilds.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# CGO off so the result is genuinely static and runs on a distroless-style
+# base. -trimpath keeps build paths out of the binary; -s -w drops the
+# symbol table and DWARF, which is a meaningful size cut for something with
+# no debugger attached in production.
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o /out/sous-api ./cmd/sous-api
+
+# ---------------------------------------------------------------------------
+
+FROM alpine:3.21
+
+# ca-certificates: sous-api fetches model metadata from HuggingFace over TLS.
+# git: recipe sources are git mirrors, and sous-api shells out to git for
+# them (souslet, by contrast, receives recipes as YAML over gRPC and has no
+# source-mirroring feature of its own - see Dockerfile.souslet).
+# tzdata: deployment timestamps are rendered in local time.
+RUN apk add --no-cache ca-certificates git tzdata
+
+COPY --from=build /out/sous-api /usr/local/bin/sous-api
+
+# sous-api stores everything on disk deliberately - a broken install must be
+# repairable with an editor - so this is a mount point, not a place to write
+# into the image. It also persists the node CA here by default
+# (-ca-state), which souslet certs are signed against.
+VOLUME ["/var/lib/sous-api"]
+
+# No EXPOSE: both the HTTP (-listen) and gRPC (-grpc-listen) listen
+# addresses are required configuration with no default, because binding
+# either on a component that can start and stop models - or accept mTLS
+# connections that can drive that same machinery remotely - would remove the
+# only mitigation either one has.
+
+ENTRYPOINT ["/usr/local/bin/sous-api"]

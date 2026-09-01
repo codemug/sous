@@ -6,19 +6,6 @@ import (
 	"testing"
 )
 
-// The larder page is where "put something on disk" now lives. Before this it
-// could only answer what was already there and what could go.
-func TestLarderPageOffersADownload(t *testing.T) {
-	h := newTestServer(t)
-	body := browserGet(t, h, "/larder").Body.String()
-	if !strings.Contains(body, "Download a model") {
-		t.Errorf("no download form on the larder page")
-	}
-	if !strings.Contains(body, `name="repo"`) {
-		t.Errorf("no repo field")
-	}
-}
-
 func TestFetchAPIStartsAndRefusesJunk(t *testing.T) {
 	h := newTestServer(t)
 

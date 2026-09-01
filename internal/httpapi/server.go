@@ -10,7 +10,9 @@ import (
 	"github.com/codemug/sous/internal/apikey"
 	"github.com/codemug/sous/internal/fetch"
 	"github.com/codemug/sous/internal/gateway"
+	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/hf"
+	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/reqlog"
 	"html/template"
 	"net/http"
@@ -33,10 +35,27 @@ type Server struct {
 	reqLogR *reqlog.RetentionStore
 	tpl     *template.Template
 
+	// gsrv and nodes are the multi-node deploy path added alongside mgr
+	// during the migration described in docs/superpowers/specs/2026-09-01-
+	// sous-multinode-design.md: deploy/undeploy/plan requests that carry a
+	// node ID route through gsrv to a specific connected souslet instead of
+	// mgr's local deploy.Manager. Both fields are optional (nil is valid):
+	// New only registers the node-scoped routes that dereference them when
+	// both are non-nil (see New's route registration below), so a caller
+	// that passes nil here (no test in this package currently does, but
+	// nothing requires them to be set) never has a request reach code that
+	// would nil-panic on them - the routes simply don't exist. cmd/sous-api,
+	// the only production caller of New today, always passes both non-nil.
+	gsrv  *grpcserver.Server
+	nodes *nodecatalog.Catalog
+
 	pool float64
-	// hubDir is the HuggingFace cache under the model directory. The larder
-	// scans it per request: the disk is the source of truth, and caching it
-	// would drift from reality the first time anything is deleted by hand.
+	// hubDir is the HuggingFace cache under the model directory, as it was
+	// scanned per-request by the retired internal/larder page (removed in
+	// Task 14 of the multi-node plan). Kept as a field/constructor parameter
+	// rather than removed outright, since nothing currently reads it but
+	// removing it would mean changing New's signature (and every test call
+	// site) for no functional gain.
 	hubDir string
 
 	// src mirrors recipe repositories. Fetch is always explicit: nothing is
@@ -50,15 +69,19 @@ type Server struct {
 	guard auth.Config
 }
 
+// gsrv and nodes are the multi-node deploy path (see the Server.gsrv/nodes
+// doc comment): pass nil for both from a caller with no souslet fleet to
+// talk to, since only the new node-scoped routes ever dereference them.
 func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.Manager,
 	hfs *hf.Store, rl *reqlog.Writer, rs *reqlog.RetentionStore,
-	poolGiB float64, hubDir, sourcesDir string, guard auth.Config) (http.Handler, error) {
+	poolGiB float64, hubDir, sourcesDir string, guard auth.Config,
+	gsrv *grpcserver.Server, nodes *nodecatalog.Catalog) (http.Handler, error) {
 	tpl, err := ui.Templates()
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{mgr: m, cat: c, keys: keys, fetch: fx, hf: hfs, reqLogW: rl, reqLogR: rs, tpl: tpl,
-		pool: poolGiB, hubDir: hubDir, guard: guard,
+		pool: poolGiB, hubDir: hubDir, guard: guard, gsrv: gsrv, nodes: nodes,
 		src: &sources.Manager{Root: sourcesDir}, mux: http.NewServeMux()}
 
 	// The OpenAI-compatible surface. Every deployed model behind one endpoint,
@@ -70,7 +93,16 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// node's naming should not travel with it.
 	al := &alias.Manager{Store: m.Store, Cat: c}
 	s.alias = al
-	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, ReqLog: reqLog(rl), Host: m.BindHost}
+	// Nodes/GRPC are what make the OpenAI surface work for a model running on
+	// another machine: without them set, gateway.Proxy's multi-node branch is
+	// unreachable in the shipped binary and every inference request for a
+	// model on a connected node falls through to the local deploy.Manager and
+	// 404s. They are the same instances the node-scoped deploy routes below
+	// use. Passing them through unconditionally is safe: nil in means nil on
+	// the Gateway, which is exactly the single-node configuration the
+	// local-forward path already expects.
+	gw := &gateway.Gateway{Res: m, Cat: c, Alias: al, ReqLog: reqLog(rl), Host: m.BindHost,
+		Nodes: nodes, GRPC: gsrv}
 	s.mux.HandleFunc("GET /v1/models", gw.ListModels)
 	for _, p := range []string{
 		"POST /v1/chat/completions",
@@ -97,6 +129,13 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// The panel's one static asset (Task 13): dragdrop.js, served straight
+	// from the embedded FS rather than through html/template - it is
+	// unchanging JS, not a page. Registered unconditionally (not gated
+	// behind gsrv/nodes != nil like the node-scoped routes below) because
+	// the script itself is harmless to load on a single-node server too -
+	// it just never finds a [data-node-id] drop target to attach to there.
+	s.mux.Handle("GET /static/dragdrop.js", http.FileServerFS(ui.StaticFS()))
 	s.mux.HandleFunc("GET /api/recipes", s.listRecipes)
 	s.mux.HandleFunc("POST /api/recipes/sync", s.syncRecipes)
 	s.mux.HandleFunc("POST /api/recipes", s.createRecipe)
@@ -113,6 +152,12 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	s.mux.HandleFunc("GET /api/fetch", s.listFetches)
 	s.mux.HandleFunc("GET /api/fetch/logs", s.fetchLogs)
 	s.mux.HandleFunc("POST /api/fetch/forget", s.forgetFetch)
+	// 0.17.0 compatibility redirects, not tied to the retired larder page or
+	// package (internal/larder) at all - these map straight to the fetch/
+	// hf-token handlers by URL prefix, same as the two /larder/hf-token
+	// routes below. Left in place because something bookmarked or scripted
+	// against them keeps working rather than 404ing, which is the same
+	// reasoning that kept them when the Larder page itself was still live.
 	s.mux.HandleFunc("POST /larder/fetch", s.startFetch)
 	// The HuggingFace token. Gated repos tie licence acceptance to an
 	// ACCOUNT, so accepting an agreement in a browser does not make an
@@ -153,10 +198,52 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	s.mux.HandleFunc("GET /events", s.events)
 	s.mux.HandleFunc("GET /api/logs/{id}", s.logs)
 	s.mux.HandleFunc("GET /api/plan/{id}", s.plan)
+	// POST /api/deploy/{id} (no node dimension) is NOT retired here, despite
+	// Task 14's brief calling for its removal "now that nothing calls it" -
+	// see the Task 14 report for the full reasoning. In short: the brief's
+	// premise held for the UI (Task 13's drag-and-drop and Task 12's
+	// dashboard both already call the node-scoped route below instead), but
+	// this route is still the ONLY way to drive s.mgr's legacy
+	// deploy.Manager path at all, in production (the model-page form,
+	// POST /model/{id}/deploy, falls through to the exact same branch of
+	// s.deploy) and in this package's own test suite (dozens of tests across
+	// handlers_test.go/status_test.go/screens_test.go/plan_test.go/
+	// port_test.go/render_test.go/events_test.go/reqlog_test.go/recipes_test.go
+	// use it to set up a deployed fixture - removing it turned 31 passing
+	// tests into 405s, not zero). deploy.Manager itself could not be removed
+	// in this pass either (again, see the report), so removing its sole
+	// entry point while keeping it live behind the scenes would leave the
+	// module in a worse state than before, not a cleaner one.
 	s.mux.HandleFunc("POST /api/deploy/{id}", s.deploy)
 	s.mux.HandleFunc("POST /api/undeploy/{id}", s.undeploy)
-	s.mux.HandleFunc("GET /api/larder", s.listLarder)
-	s.mux.HandleFunc("POST /api/larder/delete", s.deleteWeights)
+	// Node-scoped routes for the multi-node rollout, alongside the
+	// single-node routes above rather than replacing them. {id}/{nodeID} is
+	// unambiguous against {id} alone - different segment counts, so the
+	// mux never has to choose between them.
+	//
+	// Registered ONLY when gsrv and nodes are both non-nil - see the
+	// Server.gsrv/nodes doc comment above. grpcserver.Server.Send and
+	// nodecatalog.Catalog.Node both start by locking an embedded
+	// sync.RWMutex field, which nil-panics on a nil receiver. So these
+	// routes must not exist at all on a server built without a souslet
+	// fleet to talk to, rather than exist and crash the process on the
+	// first request that reaches one: net/http's ServeMux answers an
+	// unregistered path with a normal 404 or 405 instead (see
+	// deploy_grpc_test.go's
+	// TestNodeScopedRoutesReturnCleanErrorsWhenGRPCIsNotConfigured for
+	// exactly which, and why - it depends on this package's own "GET /"
+	// catch-all), never a panic.
+	if gsrv != nil && nodes != nil {
+		s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
+		s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
+		s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
+		// The recipe-card cleanup action (Task 11 of the multi-node plan):
+		// clear a (recipe, node) pair's cached weights from that node's
+		// disk. Same nil-guard reasoning as the three routes above -
+		// deleteWeightsOnNode dereferences s.gsrv, so it must not exist at
+		// all on a server built with nil gsrv/nodes.
+		s.mux.HandleFunc("POST /api/weights/{recipeID}/{nodeID}/delete", s.deleteWeightsOnNode)
+	}
 	s.mux.HandleFunc("GET /api/sources", s.listSources)
 	s.mux.HandleFunc("POST /api/sources", s.addSource)
 	s.mux.HandleFunc("POST /api/sources/fetch", s.fetchSources)
@@ -166,7 +253,6 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// pool bar and the cards came to disagree in the first place.
 	s.mux.HandleFunc("GET /deployments", redirectTo("/"))
 	s.mux.HandleFunc("GET /admin", s.pageAdmin)
-	s.mux.HandleFunc("GET /larder", s.pageLarder)
 	// The Node dashboard is the landing page: the first question on opening
 	// this panel is "what is running and is it healthy", not "what could I
 	// run next".
