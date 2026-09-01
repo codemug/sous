@@ -375,6 +375,25 @@ func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, f
 		return
 	}
 
+	// recipe.Recipe.Archived's own doc comment is explicit: "Archived means
+	// CANNOT RUN HERE", and the UI hiding the deploy control was this
+	// codebase's ONLY enforcement of that until now - there was never a
+	// guard here. That was fine while every deploy click-path already
+	// hid itself for an archived recipe (models.html's "Deploy…" link,
+	// gated the same way this check is), but Task 13's drag-and-drop is a
+	// second, independent click-path onto this exact handler, and a UI gate
+	// on the card is not something this handler can trust the caller to
+	// have honoured - force never overrides this, the same way it never
+	// overrides the separate live-deployment guard in weights.go's
+	// classifyProtection: force is for a capacity trade-off an operator
+	// can knowingly accept, not for un-deleting the "impossible on this
+	// hardware" fact Archived records.
+	if rec.Archived {
+		writeErr(w, http.StatusConflict, fmt.Sprintf(
+			"recipe %s is archived and cannot be deployed", v))
+		return
+	}
+
 	// Capacity checking here reads margin from the nodecatalog snapshot
 	// rather than issuing a live call - see planOnNode's doc comment for why.
 	plan, err := planOnNode(s.nodes, v, nodeID, rec.Declared.TotalGiB())

@@ -113,3 +113,53 @@ func TestStaticDragDropJSIsServed(t *testing.T) {
 		t.Errorf("Content-Type = %q, expected a javascript type", ct)
 	}
 }
+
+// ---------- review finding: archived recipes must not be draggable ----------
+//
+// recipe.Recipe.Archived's own doc comment says the UI hiding the deploy
+// control IS this codebase's enforcement of "archived means cannot run
+// here" - there is no server-side guard backing it up (or wasn't, until the
+// deployNode check added alongside these two tests). draggable="true" on an
+// archived card, with no equivalent gate to the "Deploy…" link's
+// (not .Recipe.Archived) condition, was a brand-new two-second gesture
+// reaching an action the UI had never exposed a click-path to before.
+
+// TestModelsPageWithholdsDraggableFromArchivedRecipes guards the UI gate:
+// an archived recipe's card must render draggable="false", not "true" -
+// mirroring the exact condition models.html's own "Deploy…" link already
+// uses at the card foot.
+func TestModelsPageWithholdsDraggableFromArchivedRecipes(t *testing.T) {
+	h := newTestServer(t)
+	archiveRecipeSharingModel(t, h, "myarchived", "Some/Archived-Model")
+
+	body := send(t, h, http.MethodGet, "/models", "", "").Body.String()
+	if !strings.Contains(body, `draggable="false" data-recipe-id="myarchived"`) {
+		t.Errorf("expected myarchived's card to render draggable=\"false\"; body:\n%s", body)
+	}
+	if strings.Contains(body, `draggable="true" data-recipe-id="myarchived"`) {
+		t.Error("myarchived's card is draggable=\"true\" - an archived recipe must not be a drag source")
+	}
+}
+
+// TestDeployNodeRouteRefusesArchivedRecipeEvenWithForce guards the
+// server-side backstop: deployNode must refuse an archived recipe outright,
+// matching Archived's "CANNOT RUN HERE" semantics directly rather than
+// relying solely on the UI gate above (the same trap the recipe.go doc
+// comment warns about). force is for a capacity trade-off an operator can
+// knowingly accept, not for un-deleting the "impossible on this hardware"
+// fact Archived records, so force=true must not override this either -
+// same non-overridable posture as the live-deployment guard in
+// classifyProtection.
+func TestDeployNodeRouteRefusesArchivedRecipeEvenWithForce(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24})
+	archiveRecipeSharingModel(t, h, "myarchived", "Some/Archived-Model")
+
+	rr := post(t, h, "/api/deploy/myarchived/asus-gx10?force=true", "", "")
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (archived recipes must be refused, even with force); body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "archived") {
+		t.Errorf("expected the refusal to say the recipe is archived; body: %s", rr.Body.String())
+	}
+}

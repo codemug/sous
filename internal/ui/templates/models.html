@@ -84,8 +84,22 @@ args:
     {{/* DRAG SOURCE (Task 13): draggable plus a stable id dragdrop.js reads
          off the card at dragstart and posts straight to
          /api/deploy/{recipeID}/{nodeID} on drop - no JS framework, just the
-         DOM attribute this card already had every other field of. */}}
-    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}" draggable="true" data-recipe-id="{{.Recipe.ID}}">
+         DOM attribute this card already had every other field of.
+
+         draggable is WITHHELD on an archived recipe, mirroring the exact
+         (not .Recipe.Archived) gate the "Deploy…" button below already
+         uses. recipe.Recipe.Archived's own doc comment is explicit that
+         this UI omission - not a server-side check - IS this codebase's
+         enforcement of "archived means cannot run here": there is no
+         Archived guard anywhere in the deploy path (deployNode/deployToNode
+         check only capacity and force). Before this gate, an archived
+         card - still visible and identifiable via its "archived" chip
+         under the archived filter - was draggable with no click-path
+         equivalent, a brand-new two-second gesture reaching an action the
+         UI had never exposed a route to before. Explicit "false", not just
+         omitting the attribute, so a reader of the rendered HTML sees the
+         decision was deliberate. */}}
+    <article class="card is-{{if .Deployed}}{{.Phase}}{{else}}idle{{end}}{{if .Recipe.Archived}} is-arch{{end}}" draggable="{{if .Recipe.Archived}}false{{else}}true{{end}}" data-recipe-id="{{.Recipe.ID}}">
       <div class="card-head">
         <span class="card-title"><a href="/model/{{.Recipe.ID}}">{{.Recipe.ID}}</a></span>
         {{if .Deployed}}
