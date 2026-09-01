@@ -371,7 +371,7 @@ func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, f
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	res, err := deployToNode(s.gsrv, nodeID, recipeYAML, port, force)
+	res, err := deployToNode(s.gsrv, s.nodes, nodeID, recipeYAML, port, force)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

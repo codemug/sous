@@ -53,6 +53,35 @@ func New(cat *nodecatalog.Catalog) *Server {
 	return &Server{cat: cat, conns: make(map[string]*nodeConn)}
 }
 
+// Catalog returns the nodecatalog.Catalog this Server feeds NodeSnapshot
+// updates into - the same instance the caller passed to New. It exists for
+// callers (and test helpers) that need to read a node's last-known state
+// (e.g. CachedWeightRepos) alongside sending it a command, without having to
+// separately thread the same *nodecatalog.Catalog pointer through on their
+// own.
+func (s *Server) Catalog() *nodecatalog.Catalog {
+	return s.cat
+}
+
+// Connected reports whether nodeID currently has a live connection
+// registered - i.e. whether Send(ctx, nodeID, ...) would proceed past its
+// initial "not connected" check right now, rather than fail immediately.
+//
+// This is a narrower and more precise question than the catalog's own
+// Connected flag: Connect's handshake updates the catalog via
+// s.cat.ReplaceSnapshot a few instructions BEFORE this connection's entry is
+// added to s.conns (see Connect's body), so a caller polling
+// Catalog().Node(nodeID).Connected alone can observe a false positive during
+// that narrow window and then hit a spurious "not connected" from Send
+// immediately after. Callers that need to wait for a fake/real node to be
+// actually ready for Send (test helpers, mainly) should poll this instead.
+func (s *Server) Connected(nodeID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.conns[nodeID]
+	return ok
+}
+
 // Connect is the Souslet service's one RPC. It blocks for the life of the
 // connection: read loop demuxes incoming Envelopes (snapshots update the
 // catalog directly; everything else is routed to whichever Send call is
@@ -164,10 +193,18 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 }
 
 // Send delivers env to nodeID's live connection and blocks until the
-// correlated reply arrives. Returns an error immediately if nodeID has no
+// correlated reply arrives, the connection tears down, or ctx is done -
+// whichever happens first. Returns an error immediately if nodeID has no
 // live connection - callers must not queue against a disconnected node
 // (the design's explicit "fail fast, don't buffer" reconciliation choice).
-func (s *Server) Send(nodeID string, env *pb.Envelope) (*pb.Envelope, error) {
+//
+// ctx is the caller's to size: a plain deploy/undeploy/plan round trip is a
+// simple in-memory dispatch-and-reply exchange and should use a short
+// timeout, while a FetchCommand blocks on souslet actually downloading a
+// model's weights and needs a long one. Send itself has no opinion on the
+// value - see internal/httpapi/deploy_grpc.go's sendTimeout/fetchTimeout for
+// the two bounds this codebase actually uses.
+func (s *Server) Send(ctx context.Context, nodeID string, env *pb.Envelope) (*pb.Envelope, error) {
 	s.mu.RLock()
 	nc, ok := s.conns[nodeID]
 	s.mu.RUnlock()
@@ -214,8 +251,8 @@ func (s *Server) Send(nodeID string, env *pb.Envelope) (*pb.Envelope, error) {
 		delete(nc.pending, env.StreamId)
 		nc.mu.Unlock()
 		return nil, fmt.Errorf("node %q disconnected while waiting for reply", nodeID)
-	case <-context.Background().Done():
-		return nil, context.Canceled
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 

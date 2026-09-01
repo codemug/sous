@@ -1,15 +1,112 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/nodecatalog"
 	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 	"github.com/codemug/sous/internal/recipe"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
+
+// dialFakeSousletRecording drives the client side of grpcserver.Server's
+// Connect RPC over bufconn, standing in for a real souslet binary so these
+// tests need no Docker. Every envelope the server sends to this fake node is
+// handed to respond; whatever respond returns (nil for "don't answer this
+// one") is sent straight back, correlated by the same stream_id - letting a
+// test script exactly the Fetch/Deploy exchange deployToNode is expected to
+// drive.
+//
+// The handshake NodeSnapshot Connect requires as the very first message on a
+// new connection re-sends whatever the catalog already knows about nodeID
+// (CachedWeightRepos included) rather than a bare NodeSnapshot{NodeId:
+// nodeID}: ReplaceSnapshot is a full replace, not a merge (see its own doc
+// comment in nodecatalog.go), so a bare handshake would silently wipe out
+// CachedWeightRepos a test configured on the catalog before dialing.
+func dialFakeSousletRecording(t *testing.T, gsrv *grpcserver.Server, nodeID string, respond func(*pb.Envelope) *pb.Envelope) func() {
+	t.Helper()
+	lis := bufconn.Listen(1024 * 1024)
+	s := grpc.NewServer()
+	pb.RegisterSousletServer(s, gsrv)
+	go func() { _ = s.Serve(lis) }()
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	client := pb.NewSousletClient(conn)
+	stream, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	handshake := &pb.NodeSnapshot{NodeId: nodeID}
+	if view, ok := gsrv.Catalog().Node(nodeID); ok {
+		handshake.PoolGib = view.PoolGiB
+		handshake.ReserveGib = view.ReserveGiB
+		handshake.Deployments = view.Deployments
+		for repo := range view.CachedWeightRepos {
+			handshake.CachedWeightRepos = append(handshake.CachedWeightRepos, repo)
+		}
+	}
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: handshake}}); err != nil {
+		t.Fatalf("send initial snapshot: %v", err)
+	}
+
+	go func() {
+		for {
+			env, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			if reply := respond(env); reply != nil {
+				reply.StreamId = env.StreamId
+				_ = stream.Send(reply)
+			}
+		}
+	}()
+
+	// gsrv.Send fails fast if nodeID isn't registered in its connection map
+	// yet - the client-side Send above only hands the handshake to the
+	// local transport, it does not wait for the server's Connect goroutine
+	// to finish registering the connection. Poll gsrv.Connected, not the
+	// catalog's own Connected flag: the catalog updates a few instructions
+	// before the connection's entry is added to gsrv's internal map (see
+	// Connect's body / Connected's doc comment), so polling the catalog
+	// here would leave a narrow window where a caller's very next gsrv.Send
+	// races that registration and spuriously fails with "not connected" -
+	// exactly what an earlier version of this helper hit intermittently
+	// when both fetch-orchestration tests ran in the same process.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if gsrv.Connected(nodeID) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node %q never showed as connected", nodeID)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return func() {
+		_ = stream.CloseSend()
+		_ = conn.Close()
+		s.Stop()
+	}
+}
 
 // recipeYAMLFixture is a minimal, valid recipe rendered to YAML the way
 // deployToNode ships it to a node - the whole recipe, not just its ID.
@@ -25,7 +122,7 @@ func recipeYAMLFixture(t *testing.T) string {
 
 func TestDeployToNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
 	gsrv := grpcserver.New(nodecatalog.New())
-	_, err := deployToNode(gsrv, "asus-gx10", recipeYAMLFixture(t), 18000, false)
+	_, err := deployToNode(gsrv, nodecatalog.New(), "asus-gx10", recipeYAMLFixture(t), 18000, false)
 	if err == nil {
 		t.Fatal("expected an error deploying to a node with no live connection")
 	}
@@ -36,6 +133,72 @@ func TestUndeployFromNodeReturnsErrorWhenNodeIsNotConnected(t *testing.T) {
 	_, err := undeployFromNode(gsrv, "asus-gx10", "dflash2")
 	if err == nil {
 		t.Fatal("expected an error undeploying from a node with no live connection")
+	}
+}
+
+// TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode is the fetch-
+// triggers-on-cache-miss case: a node whose last-known snapshot carries no
+// CachedWeightRepos for this recipe's model must see a FetchCommand, and its
+// FetchProgress must report phase "done", before deployToNode ever sends the
+// DeployCommand.
+func TestDeployTriggersAFetchFirstWhenWeightsAreNotYetOnTheNode(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{NodeId: "asus-gx10"}) // no cached_weight_repos
+	gsrv := grpcserver.New(nodes)
+	var sawFetch, sawDeploy bool
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if f := env.GetFetch(); f != nil {
+			sawFetch = true
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{FetchProgress: &pb.FetchProgress{Repo: f.Repo, Phase: "done"}}}
+		}
+		if d := env.GetDeploy(); d != nil {
+			sawDeploy = true
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeployResult{DeployResult: &pb.DeployResult{RecipeId: "dflash2"}}}
+		}
+		return nil
+	})
+	defer stop()
+
+	_, err := deployToNode(gsrv, nodes, "asus-gx10", "id: dflash2\nmodel: Inferact/Qwen3.8-27B-NVFP4\n", 18000, false)
+	if err != nil {
+		t.Fatalf("deployToNode: %v", err)
+	}
+	if !sawFetch {
+		t.Fatal("expected a FetchCommand before the DeployCommand")
+	}
+	if !sawDeploy {
+		t.Fatal("expected a DeployCommand after the fetch completed")
+	}
+}
+
+// TestDeploySkipsFetchWhenWeightsAreAlreadyCached is the fetch-skipped-on-
+// cache-hit case: a node whose last-known snapshot already lists this
+// recipe's model in CachedWeightRepos must go straight to the DeployCommand,
+// with no FetchCommand sent at all.
+func TestDeploySkipsFetchWhenWeightsAreAlreadyCached(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", CachedWeightRepos: []string{"Inferact/Qwen3.8-27B-NVFP4"},
+	})
+	gsrv := grpcserver.New(nodes)
+	var sawFetch bool
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if env.GetFetch() != nil {
+			sawFetch = true
+		}
+		if d := env.GetDeploy(); d != nil {
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeployResult{DeployResult: &pb.DeployResult{RecipeId: "dflash2"}}}
+		}
+		return nil
+	})
+	defer stop()
+
+	_, err := deployToNode(gsrv, nodes, "asus-gx10", "id: dflash2\nmodel: Inferact/Qwen3.8-27B-NVFP4\n", 18000, false)
+	if err != nil {
+		t.Fatalf("deployToNode: %v", err)
+	}
+	if sawFetch {
+		t.Fatal("did not expect a FetchCommand when weights are already cached on this node")
 	}
 }
 

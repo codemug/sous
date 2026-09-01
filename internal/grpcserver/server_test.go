@@ -99,7 +99,7 @@ func TestSendCorrelatesRequestAndReplyByStreamID(t *testing.T) {
 	var err error
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		reply, err = srv.Send("asus-gx10", &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: "dflash2"}}})
+		reply, err = srv.Send(context.Background(), "asus-gx10", &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: "dflash2"}}})
 		if err == nil {
 			break
 		}
@@ -147,7 +147,7 @@ func TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		reply, err := srv.Send(nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: "never-answered"}}})
+		reply, err := srv.Send(context.Background(), nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: "never-answered"}}})
 		resCh <- result{reply, err}
 	}()
 
@@ -279,14 +279,14 @@ func TestConnectDoesNotLeakGoroutinesOnDisconnect(t *testing.T) {
 // the wrong fix (closing nc.send directly) would panic here with "send on
 // closed channel." Every Send must either return normally (success or a
 // clean error) or, if it loses the race and its envelope never gets
-// delivered/replied to, simply block - Send has no cancellation of its own
-// yet (it blocks on a bare context.Background(), unrelated to this fix and
-// already tracked as future work in Task 10's ctx-plumbing change), so a
-// goroutine hanging here is expected and not what this test checks. What
-// it checks is panics: a panic in any of the spawned goroutines fails the
-// test via recover() instead of silently crashing the whole test binary,
-// so a regression in the fix is visible as a normal, readable test
-// failure rather than a process crash.
+// delivered/replied to, simply block - this test deliberately passes a bare
+// context.Background() (no deadline) rather than the short/long timeouts
+// Task 10's real callers use, so a goroutine hanging here on nc.done never
+// firing is expected and not what this test checks. What it checks is
+// panics: a panic in any of the spawned goroutines fails the test via
+// recover() instead of silently crashing the whole test binary, so a
+// regression in the fix is visible as a normal, readable test failure
+// rather than a process crash.
 func TestSendDoesNotPanicWhenRacingDisconnect(t *testing.T) {
 	cat := nodecatalog.New()
 	srv := New(cat)
@@ -330,7 +330,7 @@ func TestSendDoesNotPanicWhenRacingDisconnect(t *testing.T) {
 					t.Errorf("Send panicked (goroutine %d): %v", i, r)
 				}
 			}()
-			_, _ = srv.Send(nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: fmt.Sprintf("recipe-%d", i)}}})
+			_, _ = srv.Send(context.Background(), nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: fmt.Sprintf("recipe-%d", i)}}})
 		}(i)
 	}
 
