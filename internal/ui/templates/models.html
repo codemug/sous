@@ -23,6 +23,10 @@ textarea{
 }
 textarea:focus-visible{border-color:var(--accent)}
 @media (max-width:640px){.cat-acts{margin-left:0}}
+/* One chip (+ an inline "clear weights" drawer) per node that has this
+   recipe's weights cached - see the per-node resident row below. */
+.node-weights{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-xs);margin:var(--space-xs) 0}
+.node-weights .danger-drawer{display:inline-block}
 </style>
 
 <div class="cat-head">
@@ -99,6 +103,29 @@ args:
       <span class="names">
         {{range $i,$n := .}}{{if $i}}<span class="names-sep">·</span>{{end}}<span class="mono">{{$n}}</span>{{end}}
       </span>
+      {{end}}
+
+      {{/* PER-NODE RESIDENT CHIPS. $.Nodes is nil on a single-node server
+           (no gRPC fleet configured - see pageData.Nodes' own doc comment),
+           so this whole row disappears there rather than showing an empty
+           one. A chip only appears for a node whose last-known snapshot
+           actually lists this recipe's model in CachedWeightRepos - "clear
+           weights" only makes sense where there is something to clear. */}}
+      {{$model := .Recipe.Model}}
+      {{if and $model $.Nodes}}
+      <div class="node-weights">
+        {{$recipeID := .Recipe.ID}}
+        {{range $.Nodes}}
+          {{if index .CachedWeightRepos $model}}
+            <span class="chip is-ready">{{.NodeID}}: weights cached</span>
+            {{template "confirm-button" dict
+                "Action" (printf "/api/weights/%s/%s/delete" $recipeID .NodeID)
+                "Label" "Clear weights"
+                "Cost" (printf "Removes %s's cached weights from %s's disk. If nothing else on that node has this repo cached, redeploying it there means downloading it again." $model .NodeID)
+                "Wrap" "card-danger"}}
+          {{end}}
+        {{end}}
+      </div>
       {{end}}
 
       <div class="card-foot">

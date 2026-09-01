@@ -13,6 +13,7 @@ import (
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/larder"
+	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/recipe"
 	"github.com/codemug/sous/internal/sources"
 )
@@ -41,6 +42,12 @@ type pageData struct {
 	Plan        *PlanPage
 	Keys        *keysPage
 	Fetches     *fetchView
+	// Nodes is every node's last-known snapshot, nil on a single-node server
+	// (s.nodes == nil, e.g. cmd/sous - see Server.gsrv/nodes' own doc
+	// comment). models.html uses this for the per-node "clear weights"
+	// action (Task 11): CachedWeightRepos says which (recipe, node) pairs
+	// have something on disk to clear.
+	Nodes []nodecatalog.NodeView
 	// BaseURL is this server as the BROWSER reached it, so a copyable example
 	// works when pasted. Building it from the listen address would print the
 	// bind host, which is frequently not the name anyone uses.
@@ -637,6 +644,9 @@ func (s *Server) pageModels(w http.ResponseWriter, r *http.Request) {
 		vs, err := s.models(r)
 		if err != nil {
 			return err
+		}
+		if s.nodes != nil {
+			d.Nodes = s.nodes.All()
 		}
 		want := r.URL.Query().Get("filter")
 		match := modelFilters[0].Match

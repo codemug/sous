@@ -196,6 +196,12 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 		s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
 		s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
 		s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
+		// The recipe-card cleanup action (Task 11 of the multi-node plan):
+		// clear a (recipe, node) pair's cached weights from that node's
+		// disk. Same nil-guard reasoning as the three routes above -
+		// deleteWeightsOnNode dereferences s.gsrv, so it must not exist at
+		// all on a server built with nil gsrv/nodes (cmd/sous).
+		s.mux.HandleFunc("POST /api/weights/{recipeID}/{nodeID}/delete", s.deleteWeightsOnNode)
 	}
 	s.mux.HandleFunc("GET /api/larder", s.listLarder)
 	s.mux.HandleFunc("POST /api/larder/delete", s.deleteWeights)

@@ -7,7 +7,6 @@ package grpcclient
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -45,6 +44,19 @@ type Handlers struct {
 	// figures are an honest, if less precise, substitute - not a
 	// regression this task is expected to fix.
 	footprints map[string]recipe.Footprint
+
+	// currentlyDeployed remembers each currently-deployed recipe's model
+	// repo (recipe.Recipe.Model, HuggingFace's "org/Name" form), keyed by
+	// recipe ID. This is the one piece of catalog-shaped knowledge the
+	// weight-delete guard (weights.go) needs and souslet can answer
+	// honestly without a catalog of its own: DeployCommand always carries a
+	// recipe's full YAML - "so souslet needs no catalog of its own", per
+	// that message's own proto comment - so HandleDeploy already has
+	// rec.Model in hand the moment a deploy happens; remembering it here
+	// costs nothing extra and needs no round trip. Same lifecycle, same
+	// lock as footprints and ports: populated by a successful HandleDeploy,
+	// cleared by HandleUndeploy.
+	currentlyDeployed map[string]string
 
 	// ports remembers each currently-deployed recipe's local host port,
 	// keyed by recipe ID - the "which local port is which recipe currently
@@ -84,6 +96,26 @@ func (h *Handlers) forgetFootprint(recipeID string) {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
 	delete(h.footprints, recipeID)
+}
+
+// rememberModel records a successfully deployed recipe's model repo under
+// its recipe ID, mirroring rememberFootprint exactly - see currentlyDeployed's
+// doc comment for why the weight-delete guard needs this.
+func (h *Handlers) rememberModel(recipeID, model string) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	if h.currentlyDeployed == nil {
+		h.currentlyDeployed = make(map[string]string)
+	}
+	h.currentlyDeployed[recipeID] = model
+}
+
+// forgetModel drops a recipe's remembered model once it is no longer
+// deployed - mirrors forgetFootprint exactly, same lifecycle, same reason.
+func (h *Handlers) forgetModel(recipeID string) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	delete(h.currentlyDeployed, recipeID)
 }
 
 // rememberPort records a successfully deployed recipe's local host port
@@ -145,6 +177,7 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 	}
 	h.rememberFootprint(cmd.RecipeId, rec.Declared)
 	h.rememberPort(cmd.RecipeId, int(cmd.WantPort))
+	h.rememberModel(cmd.RecipeId, rec.Model)
 	return &pb.DeployResult{RecipeId: cmd.RecipeId, ContainerId: containerID, HostPort: cmd.WantPort}
 }
 
@@ -159,6 +192,7 @@ func (h *Handlers) HandleUndeploy(ctx context.Context, cmd *pb.UndeployCommand) 
 	}
 	h.forgetFootprint(cmd.RecipeId)
 	h.forgetPort(cmd.RecipeId)
+	h.forgetModel(cmd.RecipeId)
 	return &pb.UndeployResult{RecipeId: cmd.RecipeId}
 }
 
@@ -202,27 +236,11 @@ func (h *Handlers) HandleFetch(ctx context.Context, cmd *pb.FetchCommand) *pb.Fe
 	return &pb.FetchProgress{Repo: cmd.Repo, Phase: string(job.Phase)}
 }
 
-// deleteWeights is a PLACEHOLDER, not the real implementation.
-//
-// The real guard logic (never delete a StateReferenced repo, require Force
-// for StateProtected) lives in internal/larder/delete.go's Delete function
-// today. Task 11 of the multi-node plan relocates that logic to this
-// package and replaces this stub with the real call - do not build out the
-// guard rules here, and do not extend this stub; replace it wholesale.
-func deleteWeights(modelDir, repo string, force bool) (int64, error) {
-	return 0, fmt.Errorf("not yet implemented")
-}
-
-// HandleDeleteWeights is a thin wrapper around deleteWeights (see its
-// placeholder comment above) - this handler is dispatch only, never a
-// reimplementation of the delete guard rules.
-func (h *Handlers) HandleDeleteWeights(ctx context.Context, cmd *pb.DeleteWeightsCommand) *pb.DeleteWeightsResult {
-	freed, err := deleteWeights(h.ModelDir, cmd.Repo, cmd.Force)
-	if err != nil {
-		return &pb.DeleteWeightsResult{Repo: cmd.Repo, Error: err.Error()}
-	}
-	return &pb.DeleteWeightsResult{Repo: cmd.Repo, BytesFreed: freed}
-}
+// deleteWeights and HandleDeleteWeights (the real, guarded implementation)
+// live in weights.go - relocated there from internal/larder/delete.go, see
+// that file's package doc comment for the guard behavior carried over and
+// the one piece that could not be (StateProtected, which needs a recipe
+// catalog souslet does not keep).
 
 // containerNamePrefix mirrors engine's own unexported namePrefix
 // ("sous-"), which engine.ContainerName applies and does not offer an
@@ -254,6 +272,17 @@ const containerNamePrefix = "sous-"
 //
 // HostPort is left at its zero value: that data lives in store.Record,
 // which this handler has no access to.
+//
+// CachedWeightRepos comes from scanning ModelDir/hub directly (see
+// weights.go's scanWeightRepos, relocated from internal/larder/larder.go's
+// Scan) - the same "the disk is the source of truth" philosophy the old
+// single-node larder page was built on, now reported centrally so sous-api's
+// nodecatalog can answer "is repo already on this node" (deployToNode's
+// fetch-before-deploy check) and the recipe-card UI can show what is safe to
+// clear. A scan failure is swallowed to an empty list rather than failing
+// the whole snapshot, matching this function's existing tolerance of a
+// States() error above - a disk read glitch should not take a node's entire
+// heartbeat down.
 func (h *Handlers) Snapshot(ctx context.Context, nodeID string, poolGiB, reserveGiB float64) *pb.NodeSnapshot {
 	states, _ := h.Runtime.States(ctx)
 	deployments := make([]*pb.DeploymentState, 0, len(states))
@@ -267,8 +296,10 @@ func (h *Handlers) Snapshot(ctx context.Context, nodeID string, poolGiB, reserve
 			KvGib:      footprint.KVGiB,
 		})
 	}
+	cached, _ := h.scanWeightRepos()
 	return &pb.NodeSnapshot{
 		NodeId: nodeID, PoolGib: poolGiB, ReserveGib: reserveGiB,
-		Deployments: deployments,
+		Deployments:       deployments,
+		CachedWeightRepos: cached,
 	}
 }
