@@ -48,6 +48,14 @@ type pageData struct {
 	// action (Task 11): CachedWeightRepos says which (recipe, node) pairs
 	// have something on disk to clear.
 	Nodes []nodecatalog.NodeView
+	// WeightsProtection is keyed by recipe ID, present only for a recipe
+	// whose repo is still referenced by some OTHER recipe (see
+	// weights.go's classifyProtection) - models.html uses this to decide
+	// whether a card's "clear weights" action is a plain button, a
+	// force-only one, or hidden entirely (see that function's own doc
+	// comment for the two severity tiers). A missing entry means nothing
+	// else references the repo, so a plain delete is safe.
+	WeightsProtection map[string]weightsProtectionView
 	// BaseURL is this server as the BROWSER reached it, so a copyable example
 	// works when pasted. Building it from the listen address would print the
 	// bind host, which is frequently not the name anyone uses.
@@ -647,6 +655,27 @@ func (s *Server) pageModels(w http.ResponseWriter, r *http.Request) {
 		}
 		if s.nodes != nil {
 			d.Nodes = s.nodes.All()
+			// WeightsProtection: one classification per recipe card, not per
+			// (recipe, node) pair - see weights.go's classifyProtection doc
+			// comment, this is a property of the repo across the whole
+			// catalog, independent of which node holds a cached copy.
+			// Computed here (rather than reusing deleteWeightsOnNode's own
+			// repoProtection) because a fresh s.cat.List() is already cheap
+			// and this keeps the read local to the page that needs it.
+			if recipes, err := s.cat.List(); err == nil {
+				d.WeightsProtection = make(map[string]weightsProtectionView, len(recipes))
+				for _, rec := range recipes {
+					activeBy, archivedBy := classifyProtection(recipes, rec.ID, rec.Model)
+					if len(activeBy) == 0 && len(archivedBy) == 0 {
+						continue
+					}
+					d.WeightsProtection[rec.ID] = weightsProtectionView{
+						ActiveBy: activeBy, ArchivedBy: archivedBy,
+						ActiveByText:   strings.Join(activeBy, ", "),
+						ArchivedByText: strings.Join(archivedBy, ", "),
+					}
+				}
+			}
 		}
 		want := r.URL.Query().Get("filter")
 		match := modelFilters[0].Match
