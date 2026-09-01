@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -339,5 +340,154 @@ func TestStaleDispatchGoroutineDoesNotPanicOrHangWhenItsStreamHasAlreadyDied(t *
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run() did not return after ctx cancellation - possible goroutine deadlock")
+	}
+}
+
+// Lines splits the captured output into whole log lines, for tests that need
+// to inspect a specific occurrence of a repeated message (e.g. the Nth
+// "connection lost" line) rather than merely whether a substring ever
+// appeared anywhere in the buffer.
+func (w *syncWriter) Lines() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.buf.String()
+	if s == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(s, "\n"), "\n")
+}
+
+// waitForLogLines waits until at least n lines containing substr have been
+// captured, then returns all of them in order. Used instead of a single
+// Contains check so a test can assert on the content of a specific
+// occurrence (e.g. "the 3rd retry log, not just any retry log").
+func waitForLogLines(t *testing.T, w *syncWriter, substr string, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		var matches []string
+		for _, line := range w.Lines() {
+			if strings.Contains(line, substr) {
+				matches = append(matches, line)
+			}
+		}
+		if len(matches) >= n {
+			return matches
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d log lines containing %q; got %d: %v", n, substr, len(matches), matches)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// stableThenDropServer completes the handshake (reads the initial snapshot)
+// and then holds the stream open - closing stable the moment it does - until
+// the test closes dropStable, at which point it ends the RPC with an error.
+// Used to simulate a connection that became genuinely healthy after an
+// earlier failure streak, and later disconnects again.
+type stableThenDropServer struct {
+	pb.UnimplementedSousletServer
+	stable     chan struct{}
+	dropStable chan struct{}
+}
+
+func (f *stableThenDropServer) Connect(stream pb.Souslet_ConnectServer) error {
+	if _, err := stream.Recv(); err != nil { // the initial snapshot
+		return err
+	}
+	close(f.stable)
+	select {
+	case <-f.dropStable:
+		return errors.New("simulated later failure")
+	case <-stream.Context().Done():
+		return nil
+	}
+}
+
+// TestRunResetsBackoffAfterAConnectionBecomesHealthyAgain is the regression
+// test for the dead-code bug in the brief's own Run: connectOnce blocks
+// inside its receive loop for as long as the stream is healthy and only
+// ever returns on error, so "backoff = time.Second" on connectOnce's
+// (unreachable) success path never ran - every subsequent disconnect's
+// first retry inherited whatever backoff level the last failure streak had
+// reached, even after the connection had been perfectly stable in between.
+//
+// This forces two dial failures first (ratcheting backoff 1s -> 2s -> 4s
+// with no chance for a handshake to occur, let alone succeed), then a third
+// connection that completes its handshake and stays open for a while, then
+// drops. Without the fix, that final drop's retry log reports "4s" - the
+// stale ratchet, never reset by the intervening healthy period. With the
+// fix, it reports "1s".
+func TestRunResetsBackoffAfterAConnectionBecomesHealthyAgain(t *testing.T) {
+	lis := bufconn.Listen(1024 * 1024)
+	fs := &stableThenDropServer{stable: make(chan struct{}), dropStable: make(chan struct{})}
+	s := grpc.NewServer()
+	pb.RegisterSousletServer(s, fs)
+	go func() { _ = s.Serve(lis) }()
+	t.Cleanup(s.Stop)
+
+	// The first two dial attempts fail outright, before any gRPC stream (and
+	// so before any handshake) is even attempted - a decisive way to
+	// guarantee resetBackoff cannot fire for these two cycles, regardless of
+	// any timing race between a client-side Send succeeding and a
+	// server-side handler returning.
+	var dialAttempts int32
+	dial := func(ctx context.Context, _ string) (net.Conn, error) {
+		if atomic.AddInt32(&dialAttempts, 1) <= 2 {
+			return nil, errors.New("simulated dial failure")
+		}
+		return lis.DialContext(ctx)
+	}
+
+	logW := &syncWriter{}
+	prev := log.Writer()
+	log.SetOutput(logW)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	c := &Client{
+		Addr: "passthrough:///bufnet-flappy",
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(dial),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+		NodeID:   "asus-gx10",
+		Handlers: &Handlers{Runtime: &fakeRuntime{}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+
+	// Matched on this client's own Addr, for the same cross-test-pollution
+	// reason as the stale-goroutine test above.
+	const marker = "connection to passthrough:///bufnet-flappy lost"
+
+	// Cycles 1 and 2: both dial failures, so backoff ratchets 1s -> 2s
+	// without ever being reset.
+	lines := waitForLogLines(t, logW, marker, 2)
+	if !strings.Contains(lines[0], "retrying in 1s") {
+		t.Fatalf("1st retry log = %q, want it to mention retrying in 1s", lines[0])
+	}
+	if !strings.Contains(lines[1], "retrying in 2s") {
+		t.Fatalf("2nd retry log = %q, want it to mention retrying in 2s", lines[1])
+	}
+
+	// Cycle 3 connects and completes the handshake: this is the moment
+	// resetBackoff fires inside connectOnce, well before connectOnce itself
+	// returns (it won't return until the connection is later dropped below).
+	select {
+	case <-fs.stable:
+	case <-ctx.Done():
+		t.Fatal("the 3rd connection attempt never completed its handshake")
+	}
+
+	// Drop the now-stable connection and inspect what backoff its retry log
+	// reports. Without the fix this is "4s" (the ratchet left over from
+	// cycles 1-2, carried through the healthy period untouched); with the
+	// fix, "1s" (reset the moment cycle 3's handshake succeeded).
+	close(fs.dropStable)
+	lines = waitForLogLines(t, logW, marker, 3)
+	if !strings.Contains(lines[2], "retrying in 1s") {
+		t.Fatalf("retry log after a stable connection dropped = %q, want it to mention retrying in 1s (backoff should have reset)", lines[2])
 	}
 }

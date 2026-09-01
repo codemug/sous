@@ -31,23 +31,33 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := c.connectOnce(ctx); err != nil {
-			log.Printf("souslet: connection to %s lost: %v (retrying in %s)", c.Addr, err, backoff)
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if backoff < maxBackoff {
-				backoff *= 2
-			}
-			continue
+		// connectOnce blocks inside its receive loop for as long as the
+		// stream stays healthy and only ever returns on error - a
+		// connection that ran cleanly for days and then dropped must still
+		// retry from the base backoff, not from wherever a much earlier
+		// failure streak had ratcheted it to. That reset can't wait for
+		// connectOnce to return (it never returns "successfully"), so it's
+		// threaded in as a callback connectOnce invokes the moment the
+		// connection is actually confirmed healthy - see its own comment.
+		err := c.connectOnce(ctx, func() { backoff = time.Second })
+		log.Printf("souslet: connection to %s lost: %v (retrying in %s)", c.Addr, err, backoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		backoff = time.Second
+		// Double, but clamp to maxBackoff rather than merely gating the
+		// doubling on the pre-multiply value: backoff < maxBackoff is true
+		// at 16s (16 < 30), so an unclamped `backoff *= 2` there lands on
+		// 32s - a cap that's effectively ~32s, not the intended 30s.
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 
-func (c *Client) connectOnce(ctx context.Context) error {
+func (c *Client) connectOnce(ctx context.Context, resetBackoff func()) error {
 	conn, err := grpc.NewClient(c.Addr, c.DialOptions...)
 	if err != nil {
 		return err
@@ -75,6 +85,17 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	sendMu.Unlock()
 	if err != nil {
 		return err
+	}
+
+	// The initial snapshot went through: this connection generation is live
+	// and the handshake with sous-api succeeded, independent of how long
+	// the receive loop below ends up running before it eventually errors
+	// out. This - not "connectOnce returned nil", which never happens - is
+	// what Run treats as "the connection recovered", so it can reset its
+	// backoff here rather than carrying a stale, ratcheted-up value into
+	// this connection's eventual failure.
+	if resetBackoff != nil {
+		resetBackoff()
 	}
 
 	for {
