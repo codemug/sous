@@ -1,0 +1,52 @@
+# souslet is the per-node worker: it holds no UI, no HTTP server, and no
+# persistent store of its own - only a Docker engine wrapper, a weight-fetch
+# manager, and a gRPC client that dials sous-api and stays connected for the
+# process lifetime. One static binary plus embedded templates would be
+# overkill; this has none, but the build shape matches sous-api's for the
+# same reason: buildx on the target arch, since this fleet's nodes are a mix
+# of amd64 (aorus-ubuntu, uae-homenode) and arm64 (asus-gx10).
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+
+# Dependencies first: they change far less often than the source, so this
+# layer survives most rebuilds.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# CGO off so the result is genuinely static and runs on a distroless-style
+# base. -trimpath keeps build paths out of the binary; -s -w drops the
+# symbol table and DWARF, which is a meaningful size cut for something with
+# no debugger attached in production.
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o /out/souslet ./cmd/souslet
+
+# ---------------------------------------------------------------------------
+
+FROM alpine:3.21
+
+# ca-certificates: souslet's gRPC dial to sous-api is mTLS against a custom
+# CA supplied via -ca, but the container it spawns to fetch weights
+# (huggingface_hub) still makes its own outbound HTTPS calls that expect a
+# normal system trust store.
+# tzdata: deployment timestamps souslet reports are rendered in local time.
+# Deliberately NOT git: unlike sous-api, souslet has no recipe-source-mirror
+# feature of its own - recipes arrive as YAML over gRPC (DeployCommand
+# carries the whole recipe precisely so souslet needs no catalog, and by
+# extension no source mirror, of its own).
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=build /out/souslet /usr/local/bin/souslet
+
+# souslet is stateless by design (see the package doc comment: "if it and
+# its whole host reboot, the only source of truth it needs is what Docker is
+# actually running right now") - no VOLUME, because there is nothing on this
+# node's own disk it is responsible for persisting.
+
+# No EXPOSE: souslet dials OUT to sous-api (-api-addr) and never listens for
+# inbound connections at all.
+
+ENTRYPOINT ["/usr/local/bin/souslet"]

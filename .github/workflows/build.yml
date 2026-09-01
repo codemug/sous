@@ -38,6 +38,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # TWO IMAGES, one per binary: sous-api (the control plane) and souslet
+    # (the per-node worker), each with its own Dockerfile building its own
+    # cmd/ entrypoint. Matrixed rather than duplicated as two jobs, since
+    # every step past "which Dockerfile/image name" is identical.
+    strategy:
+      matrix:
+        include:
+          - binary: sous-api
+            dockerfile: Dockerfile.sous-api
+            image: ghcr.io/codemug/sous-api
+          - binary: souslet
+            dockerfile: Dockerfile.souslet
+            image: ghcr.io/codemug/sous-souslet
     steps:
       - uses: actions/checkout@v4
 
@@ -53,7 +66,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ matrix.image }}
           # WHAT A DEPLOYMENT SHOULD PIN: a semver tag (0.1.0). It is
           # immutable, it maps to a GitHub release you can read, and it makes
           # "what is running" answerable from the compose file alone.
@@ -71,12 +84,13 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.binary }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.binary }}
 
   # A tag should produce something a human can read, not just a moving image.
   # Deployments pin a version; this is where you find out what that version
@@ -107,10 +121,11 @@ jobs:
           fi
 
           {
-            echo "## Container image"
+            echo "## Container images"
             echo
             echo '```'
-            echo "ghcr.io/${GITHUB_REPOSITORY}:${TAG#v}"
+            echo "ghcr.io/codemug/sous-api:${TAG#v}"
+            echo "ghcr.io/codemug/sous-souslet:${TAG#v}"
             echo '```'
             echo
             echo "linux/amd64 and linux/arm64."

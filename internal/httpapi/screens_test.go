@@ -17,7 +17,7 @@ func TestEveryScreenRendersWhole(t *testing.T) {
 	post(t, h, "/api/deploy/qwen38", "", "")
 	post(t, h, "/api/keys", "application/json", `{"name":"probe"}`)
 
-	for _, path := range []string{"/", "/models", "/larder", "/keys", "/sources", "/model/qwen38", "/model/qwen36/plan"} {
+	for _, path := range []string{"/", "/models", "/keys", "/sources", "/model/qwen38", "/model/qwen36/plan"} {
 		body := send(t, h, http.MethodGet, path, "", "").Body.String()
 		if !strings.Contains(body, "</html>") {
 			t.Errorf("%s truncated: …%s", path, tailOf(body, 120))
@@ -43,23 +43,6 @@ func TestListScreensUseCards(t *testing.T) {
 	}
 }
 
-// The larder is the one screen where a botched edit hid: a regex matched the
-// DOWNLOADS table inside {{with .Fetches}} and replaced that, so the cards only
-// appeared while a download was in flight and the old table stayed below.
-func TestLarderShowsCardsWithNoDownloadInFlight(t *testing.T) {
-	h := newTestServerWithHub(t)
-	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
-	if !strings.Contains(body, `class="cards"`) {
-		t.Error("no card grid on the larder with nothing downloading")
-	}
-	if strings.Contains(body, "<table") && strings.Contains(body, "Referenced by") {
-		t.Error("the old larder table is still rendered alongside the cards")
-	}
-	if !strings.Contains(body, "</html>") {
-		t.Error("larder truncated")
-	}
-}
-
 // A card is a flex column, and a flex item's default min-width is auto - so any
 // child wider than the card pushes past its border instead of shrinking. The
 // nested .panel was the visible case: a box with its own border, background and
@@ -68,7 +51,7 @@ func TestCardsDoNotNestPanels(t *testing.T) {
 	h := newTestServerWithHub(t)
 	post(t, h, "/api/keys", "application/json", `{"name":"probe"}`)
 
-	for _, path := range []string{"/keys", "/larder"} {
+	for _, path := range []string{"/keys"} {
 		body := send(t, h, http.MethodGet, path, "", "")
 		b := body.Body.String()
 		// A .panel inside a .card is the overflow: panels are sized for the
@@ -79,20 +62,6 @@ func TestCardsDoNotNestPanels(t *testing.T) {
 		if !strings.Contains(b, "card-danger") && strings.Contains(b, "Delete weights") {
 			t.Errorf("%s uses something other than the card-sized danger block", path)
 		}
-	}
-}
-
-// A 476 KiB download rendered as "0.0 GiB" reads as nothing at all - wrong
-// twice over, because it is both present on disk and deletable.
-func TestSmallEntriesGetAUsefulUnit(t *testing.T) {
-	h := newTestServerWithHub(t)
-	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
-	if strings.Contains(body, "0.0 GiB") {
-		t.Error(`a small entry still renders as "0.0 GiB"`)
-	}
-	// The hub fixture writes 4 KiB files, so something must be in KiB.
-	if !strings.Contains(body, "KiB") && !strings.Contains(body, "MiB") && !strings.Contains(body, "B<") {
-		t.Errorf("no sub-gigabyte unit anywhere on the larder")
 	}
 }
 
@@ -206,7 +175,7 @@ func TestEveryDestructivePathUsesTheSharedConfirmation(t *testing.T) {
 		t.Fatalf("could not create a key: %d %s", rr.Code, rr.Body.String())
 	}
 	installToken(t, h)
-	for _, path := range []string{"/model/qwen38", "/keys", "/larder", "/admin"} {
+	for _, path := range []string{"/model/qwen38", "/keys", "/admin"} {
 		body := send(t, h, http.MethodGet, path, "", "").Body.String()
 		if !strings.Contains(body, `name="confirm" value="yes"`) {
 			t.Errorf("%s has no shared confirmation button", path)
@@ -341,7 +310,7 @@ func TestHFTokenNeverAppearsInAnythingPublishable(t *testing.T) {
 		"/api/recipes",  // the machine-readable catalog
 		"/models",       // the page listing them
 		"/model/qwen38", // the drill-down, which renders the YAML
-		"/larder",       // the page the token is configured on
+		"/admin",        // the page the token is configured on
 		"/api/status",   // what a monitor scrapes
 		"/api/hf-token", // the token's own endpoint
 	} {
@@ -418,34 +387,6 @@ func TestAdminIsInTheNav(t *testing.T) {
 	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
 	if !strings.Contains(body, `href="/admin"`) {
 		t.Error("no Admin entry in the nav")
-	}
-}
-
-// A GATED 401 IS DISCOVERED ON THE LARDER, so that page must not be a dead end
-// just because the setting moved. It says what is missing and where to fix it.
-func TestLarderPointsAtAdminWhenNoTokenIsSet(t *testing.T) {
-	h := newTestServerWithHub(t)
-	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
-	if !strings.Contains(body, "401") {
-		t.Error("the larder does not warn that gated repos will fail")
-	}
-	if !strings.Contains(body, `href="/admin"`) {
-		t.Error("the larder warns about the token but does not say where to set it")
-	}
-	// The form itself belongs on Admin, not here.
-	if strings.Contains(body, `name="token"`) {
-		t.Error("the token form is still on the larder page")
-	}
-}
-
-// The warning is about a MISSING token, so it must go away once one is set -
-// otherwise it is noise that trains people to ignore warnings.
-func TestLarderWarningDisappearsOnceTheTokenIsSet(t *testing.T) {
-	h := newTestServerWithHub(t)
-	installToken(t, h)
-	body := send(t, h, http.MethodGet, "/larder", "", "").Body.String()
-	if strings.Contains(body, "No HuggingFace token") {
-		t.Error("the larder still warns about a token that is installed")
 	}
 }
 
@@ -612,35 +553,3 @@ func TestFetchLogsNeedARepo(t *testing.T) {
 	}
 }
 
-// THE BROWSER PATH, NOT THE API PATH. Every existing larder-delete test posts
-// repo as a URL query parameter with no Content-Type set, which is the
-// UNCONFIRMED API caller path (wantsHTML is false, confirmation is skipped
-// entirely) - none of them exercised what the actual drawer in larder.html
-// sends: repo and confirm as FORM BODY fields, with no query string at all.
-//
-// deleteWeights read repo via r.URL.Query().Get("repo") alone, which only
-// ever sees the query string - so this exact request always saw repo="" and
-// hit larder.Delete's "unsafe repo id" guard. It was invisible before the
-// confirm-button change because confirmed() used to require the typed text
-// to equal that same empty want, which no keystroke can produce - the
-// request was refused at the confirmation step, before ever reaching the
-// empty-repo bug underneath it.
-func TestLarderDeleteReadsTheRepoFromTheFormBody(t *testing.T) {
-	h := newTestServerWithHub(t)
-	// wantsHTML(r) is true for a form post, so a successful browser delete
-	// redirects rather than returning 200 - matching what larder.html's own
-	// form actually triggers.
-	rr := post(t, h, "/api/larder/delete", form, "repo=Kwaipilot%2FKAT-Coder-V2.5-Dev&confirm=yes")
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("browser-style delete: %d %s", rr.Code, rr.Body.String())
-	}
-	loc := rr.Header().Get("Location")
-	if strings.Contains(loc, "err=1") || strings.Contains(loc, "unsafe+repo") {
-		t.Errorf("delete redirected with an error: %s", loc)
-	}
-	// The weights are actually gone, not just a clean-looking redirect.
-	body := send(t, h, http.MethodGet, "/api/larder", "", "").Body.String()
-	if strings.Contains(body, "KAT-Coder-V2.5-Dev") {
-		t.Error("the repo is still listed after a confirmed browser delete")
-	}
-}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/codemug/sous/internal/fetch"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/codemug/sous/internal/catalog"
 	"github.com/codemug/sous/internal/deploy"
-	"github.com/codemug/sous/internal/larder"
 	"github.com/codemug/sous/internal/nodecatalog"
 	"github.com/codemug/sous/internal/recipe"
 	"github.com/codemug/sous/internal/sources"
@@ -25,9 +23,6 @@ type pageData struct {
 	DeployCount int
 	Recipes     []recipe.Recipe
 	Deployments []deploy.Record
-	Larder      []larder.Entry
-	LarderTotal string
-	Reclaimable string
 	Sources     []sources.Source
 	Resolved    []catalog.Resolved
 	Message     string
@@ -71,105 +66,12 @@ type pageData struct {
 	BaseURL string
 }
 
-// larderView gathers what the larder needs: the catalog to know what is
-// referenced, and the deployment list so a running model's weights can never
-// read as stale even mid-edit.
-func (s *Server) larderView() ([]larder.Entry, error) {
-	recipes, err := s.cat.List()
-	if err != nil {
-		return nil, err
-	}
-	deployed := []string{}
-	if ds, err := s.mgr.List(); err == nil {
-		for _, d := range ds {
-			deployed = append(deployed, d.RecipeID)
-		}
-	}
-	return larder.Scan(s.hubDir, recipes, deployed)
-}
-
-// humanBytes renders at GiB, which is the unit every measurement in this
-// project is quoted in.
-func humanBytes(n int64) string {
-	const gib = 1024 * 1024 * 1024
-	if n >= gib {
-		return strconv.FormatFloat(float64(n)/gib, 'f', 2, 64) + " GiB"
-	}
-	return strconv.FormatFloat(float64(n)/(1024*1024), 'f', 1, 64) + " MiB"
-}
-
-func (s *Server) listLarder(w http.ResponseWriter, _ *http.Request) {
-	entries, err := s.larderView()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"entries":           entries,
-		"total_bytes":       larder.Total(entries),
-		"reclaimable_bytes": larder.Reclaimable(entries),
-	})
-}
-
-func (s *Server) deleteWeights(w http.ResponseWriter, r *http.Request) {
-	// FormValue, not URL.Query alone: URL.Query() reads only the query
-	// string, and the browser drawer posts repo as a body field with no
-	// query string at all - action="/api/larder/delete", nothing after it.
-	// That meant every browser delete read repo="" and hit larder.Delete's
-	// own "unsafe repo id" guard. It went unnoticed because confirmed() used
-	// to compare the typed text against this same empty want - "" can never
-	// equal a non-empty typed string, so the request was refused at the
-	// confirmation step, before ever reaching the empty-repo bug underneath
-	// it. Replacing typed confirmation with a fixed sentinel removed that
-	// accidental cover and let the real bug through.
-	repo := r.FormValue("repo")
-	force := r.URL.Query().Get("force") == "true"
-
-	entries, err := s.larderView()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// CONFIRMED, because this throws away tens of gigabytes that take twenty
-	// minutes to fetch again - and unlike a stopped model, nothing brings it
-	// back but the network. The repo id names the exact thing going in the
-	// drawer text, even though it is a click rather than a typed match now.
-	if wantsHTML(r) && !s.requireConfirm(w, r, repo, "/larder") {
-		return
-	}
-	freed, err := larder.Delete(s.hubDir, repo, entries, force)
-	if err != nil {
-		var ge *larder.GuardError
-		if errors.As(err, &ge) {
-			if wantsHTML(r) {
-				s.redirect(w, r, "/larder", ge.Error(), true)
-				return
-			}
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error": ge.Error(), "repo": ge.Repo, "reason": ge.Reason,
-			})
-			return
-		}
-		if wantsHTML(r) {
-			s.redirect(w, r, "/larder", err.Error(), true)
-			return
-		}
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if wantsHTML(r) {
-		s.redirect(w, r, "/larder", "freed "+humanBytes(freed), false)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"freed_bytes": freed})
-}
-
 // fetchLogs answers GET /api/fetch/logs?repo=…
 //
-// Its own endpoint rather than a field on the listing: a log tail is kilobytes,
-// the listing is polled every few seconds by an open Larder page, and putting
-// one inside the other would put a container log on the wire on every tick.
+// Its own endpoint rather than a field on the listing: a log tail is
+// kilobytes, the listing is polled every few seconds by anything watching an
+// in-flight download, and putting one inside the other would put a
+// container log on the wire on every tick.
 func (s *Server) fetchLogs(w http.ResponseWriter, r *http.Request) {
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
 	if repo == "" {
@@ -183,30 +85,6 @@ func (s *Server) fetchLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "lines": lines})
-}
-
-func (s *Server) pageLarder(w http.ResponseWriter, r *http.Request) {
-	s.page(w, r, "larder", "Larder", func(d *pageData) error {
-		entries, err := s.larderView()
-		if err != nil {
-			return err
-		}
-		d.HF = s.hfView()
-		d.Larder = entries
-		d.LarderTotal = humanBytes(larder.Total(entries))
-		d.Reclaimable = humanBytes(larder.Reclaimable(entries))
-
-		jobs := s.fetch.List(r.Context())
-		fv := &fetchView{Jobs: jobs}
-		for _, j := range jobs {
-			if j.Phase == fetch.PhaseDownloading {
-				fv.Active = true
-				break
-			}
-		}
-		d.Fetches = fv
-		return nil
-	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

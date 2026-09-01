@@ -6,8 +6,24 @@
 // Rollout" section: the existing single-node deploy path (a local
 // deploy.Manager talking straight to Docker on this box) is landed here
 // unchanged, alongside the new node-scoped path that routes to a connected
-// souslet over gRPC. Both live side by side until the migration's final
-// cutover step deletes the local path from this binary for good.
+// souslet over gRPC. Both live side by side today.
+//
+// NOT YET DONE: the design's step 6 ("delete internal/larder, internal/
+// httpapi's single-node deploy path, and cmd/sous/main.go") only partly
+// landed as of the multi-node plan's Task 14. internal/larder and cmd/sous
+// are gone. internal/deploy (this binary's local deploy.Manager) is NOT -
+// it turned out to still be the only implementation behind several pages
+// and endpoints with no node-scoped equivalent built in Tasks 1-13 (the
+// Node dashboard's single-box section, /models, /model/{id} including its
+// log viewer, /model/{id}/plan, the /events SSE stream, /api/status, /api/
+// logs/{id}, and this Gateway's /v1/models listing - deploy.Runtime.Logs in
+// particular has no gRPC equivalent in the wire protocol at all). Deleting
+// internal/deploy now would mean inventing that node-scoped surface from
+// scratch or deleting those features outright, neither of which Task 14
+// was scoped to decide unilaterally - see the Task 14 report
+// (.superpowers/sdd/2026-09-01-sous-multinode-implementation/task-14-report.md)
+// for the full breakdown. Both paths live side by side until a follow-up
+// task resolves this.
 package main
 
 import (
@@ -46,6 +62,17 @@ import (
 )
 
 func main() {
+	// "sous-api node add <node-id>" is the admin surface, not the server -
+	// dispatched before fromFlags touches os.Args at all, since it parses
+	// its own, unrelated flag set (see runNodeCmd in node.go) and must never
+	// reach the "-listen is required" fatal below.
+	if len(os.Args) > 1 && os.Args[1] == "node" {
+		if err := runNodeCmd(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	cfg, grpcListen, caStatePath := fromFlags(os.Args[1:])
 
 	st, err := store.New(cfg.DataDir)

@@ -3,9 +3,8 @@
 // same shape deploy_grpc.go's deployToNode/undeployFromNode already
 // established for the other node-scoped commands. This is the "recipe-card
 // cleanup" the multi-node plan's Task 11 describes, replacing the per-node
-// browsing the old single-node larder page did (internal/larder, still
-// reachable at /larder during the migration - see that package's own
-// removal note in the multi-node plan's Task 14).
+// browsing the old single-node larder page did (internal/larder and its
+// /larder page - deleted in the multi-node plan's Task 14).
 //
 // The guard is split across two layers, each enforcing the half it actually
 // has the information for:
@@ -20,10 +19,10 @@
 //     carries a recipe's full YAML precisely "so souslet needs no catalog of
 //     its own"). This does not round-trip to the node: everything it needs
 //     is already in s.cat. Deliberately not built on internal/larder's own
-//     classification, even though it is the closest precedent, since that
-//     whole package is deleted once the multi-node plan's Task 14 lands -
-//     anything layered on top of it here would need re-deriving anyway.
-//     This reads internal/catalog directly instead.
+//     classification, even though it was the closest precedent, since that
+//     whole package is gone now (Task 14) - anything layered on top of it
+//     here would have needed re-deriving anyway. This reads internal/catalog
+//     directly instead.
 //
 // POLICY itself has two severity tiers, mirroring the original larder's own
 // StateReferenced/StateProtected split exactly (see classifyProtection):
@@ -158,16 +157,16 @@ func (s *Server) weightsRefused(w http.ResponseWriter, r *http.Request, code int
 // comment on the same point), enforce the two-tier POLICY guard locally
 // (see this file's package doc comment), then dispatch to nodeID over gsrv.
 //
-// force follows the same query-parameter convention the legacy
-// /api/larder/delete route already used (s.deleteWeights in handlers.go:
-// r.URL.Query().Get("force") == "true") - it survives on a POSTed form
-// because it lives in the URL (models.html's force-clear button bakes
-// ?force=true into the confirm-button's Action), not the body.
+// force follows the same query-parameter convention the retired
+// /api/larder/delete route used (r.URL.Query().Get("force") == "true") - it
+// survives on a POSTed form because it lives in the URL (models.html's
+// force-clear button bakes ?force=true into the confirm-button's Action),
+// not the body.
 //
 // Both surfaces this route can be reached from are handled, exactly like
 // every other confirm-button-backed destructive route in this codebase
-// (s.deleteWeights/legacy larder, s.deploy's capacity refusal path,
-// s.requireConfirm itself - see internal/httpapi/handlers.go and confirm.go):
+// (s.deploy's capacity refusal path, s.requireConfirm itself - see
+// internal/httpapi/handlers.go and confirm.go):
 //   - a real browser submitting the confirm-button's form
 //     (Content-Type: application/x-www-form-urlencoded, wantsHTML(r) true) -
 //     every outcome redirects back to /models with a ?msg=...&err=1 banner
