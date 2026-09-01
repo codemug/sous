@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -111,6 +112,77 @@ func TestSendCorrelatesRequestAndReplyByStreamID(t *testing.T) {
 	if res == nil || res.ContainerId != "abc123" {
 		t.Fatalf("got %+v, want DeployResult{ContainerId: abc123}", reply)
 	}
+}
+
+// TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait guards against the
+// second half of the reply-wait leak: a Send call that has already handed
+// its envelope off (so it's sitting in the second select, blocked on
+// <-waiter) when the node disconnects. Before the fix this select only had
+// <-waiter and a dead context.Background().Done() branch, so it would
+// block forever - leaking both the calling goroutine and, via the stale
+// nc.pending[stream_id] entry, the whole nodeConn (its maps, channels,
+// buffered envelopes) it was blocked against. This is not a rare edge
+// case: it's a command legitimately in flight when the node it was sent
+// to drops, in a system whose whole premise is nodes reconnecting.
+func TestSendUnblocksWithErrorWhenNodeDisconnectsMidWait(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "mid-wait-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	// Deliberately do not drive a reply loop for the fake souslet: nothing
+	// is ever going to answer the DeployCommand below, so srv.Send is
+	// genuinely stuck on <-waiter, not racing an incoming reply.
+	type result struct {
+		reply *pb.Envelope
+		err   error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		reply, err := srv.Send(nodeID, &pb.Envelope{Payload: &pb.Envelope_Deploy{Deploy: &pb.DeployCommand{RecipeId: "never-answered"}}})
+		resCh <- result{reply, err}
+	}()
+
+	// Give Send time to clear the enqueue select and reach the reply-wait
+	// select before disconnecting - both steps are local channel/mutex
+	// operations with no I/O, so this settles in microseconds; 100ms is
+	// generous headroom, not a tight race.
+	time.Sleep(100 * time.Millisecond)
+
+	// Disconnect: half-close from the client, which drives the server's
+	// read loop to observe io.EOF and tear the connection down - the exact
+	// path that used to leave this Send call blocked forever.
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+
+	select {
+	case res := <-resCh:
+		if res.err == nil {
+			t.Fatalf("Send returned no error after the node disconnected mid-wait; got reply %+v", res.reply)
+		}
+		if !strings.Contains(res.err.Error(), "disconnected while waiting for reply") {
+			t.Fatalf("Send returned an error, but not the expected one: %v", res.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send did not unblock within 2s of the node disconnecting while its reply was pending - this is the leak this test guards against")
+	}
+
+	// The node should also settle into the catalog as disconnected -
+	// confirms this really was the normal teardown path, not some other
+	// error shortcut.
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && !view.Connected
+	}, fmt.Sprintf("node %q never showed as disconnected", nodeID))
 }
 
 // TestConnectDoesNotLeakGoroutinesOnDisconnect guards against the write-loop

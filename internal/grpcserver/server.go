@@ -162,6 +162,18 @@ func (s *Server) Send(nodeID string, env *pb.Envelope) (*pb.Envelope, error) {
 	select {
 	case reply := <-waiter:
 		return reply, nil
+	case <-nc.done:
+		// The connection tore down while this call was waiting for its
+		// reply - nothing will ever fulfill waiter now (the read loop
+		// that would deliver it has stopped). Clean up the registration
+		// so nc.pending doesn't hold a stale entry (and the waiter
+		// channel) forever; without this, a node dropping mid-command
+		// would leak both the calling goroutine and everything it
+		// reaches through nc.
+		nc.mu.Lock()
+		delete(nc.pending, env.StreamId)
+		nc.mu.Unlock()
+		return nil, fmt.Errorf("node %q disconnected while waiting for reply", nodeID)
 	case <-context.Background().Done():
 		return nil, context.Canceled
 	}
