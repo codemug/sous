@@ -18,17 +18,25 @@ import (
 type Docker struct {
 	cli      *client.Client
 	bindHost string
+	// gpuDriver selects how a GPU Spec requests a device - "cdi" (the zero
+	// value, and the only thing this package supported before this field
+	// existed) or "nvidia". Not every node exposes the GPU the same way:
+	// GB10 (asus-gx10) has no nvidia runtime at all, only CDI, while a
+	// standard NVIDIA Container Toolkit install (aorus-ubuntu) uses the
+	// nvidia runtime and has no CDI spec registered. Neither request style
+	// works on the other node.
+	gpuDriver string
 }
 
-func New(bindHost string) (*Docker, error) {
+func New(bindHost, gpuDriver string) (*Docker, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, err
 	}
-	return &Docker{cli: cli, bindHost: bindHost}, nil
+	return &Docker{cli: cli, bindHost: bindHost, gpuDriver: gpuDriver}, nil
 }
 
-func toDockerConfig(s Spec, bindHost string) (*container.Config, *container.HostConfig) {
+func toDockerConfig(s Spec, bindHost, gpuDriver string) (*container.Config, *container.HostConfig) {
 	cp := nat.Port(fmt.Sprintf("%d/tcp", s.ContainerPort))
 
 	cfg := &container.Config{
@@ -54,14 +62,28 @@ func toDockerConfig(s Spec, bindHost string) (*container.Config, *container.Host
 	}
 
 	if s.GPU {
-		// CDI, not the nvidia runtime. `docker info` on this box lists only
-		// runc, so every --gpus recipe fails here. capabilities is required
-		// alongside the driver or the request is rejected.
-		host.DeviceRequests = []container.DeviceRequest{{
-			Driver:       "cdi",
-			DeviceIDs:    []string{"nvidia.com/gpu=all"},
-			Capabilities: [][]string{{"gpu"}},
-		}}
+		if gpuDriver == "nvidia" {
+			// The standard NVIDIA Container Toolkit path - exactly what
+			// `docker run --gpus all` itself translates to against the
+			// Engine API (empty DeviceIDs, Count -1 meaning "all").
+			host.DeviceRequests = []container.DeviceRequest{{
+				Driver:       "nvidia",
+				Count:        -1,
+				Capabilities: [][]string{{"gpu"}},
+			}}
+		} else {
+			// CDI, not the nvidia runtime. `docker info` on GB10 lists only
+			// runc, so every --gpus recipe fails there. capabilities is
+			// required alongside the driver or the request is rejected.
+			// This is also the default (gpuDriver == "") for backward
+			// compatibility with every node running this before the field
+			// existed.
+			host.DeviceRequests = []container.DeviceRequest{{
+				Driver:       "cdi",
+				DeviceIDs:    []string{"nvidia.com/gpu=all"},
+				Capabilities: [][]string{{"gpu"}},
+			}}
+		}
 		// vLLM leans on shared memory for worker IPC and the default 64 MB is
 		// not enough; the failure is an opaque worker crash.
 		host.IpcMode = container.IPCModeHost
@@ -70,7 +92,7 @@ func toDockerConfig(s Spec, bindHost string) (*container.Config, *container.Host
 }
 
 func (d *Docker) Start(ctx context.Context, s Spec) (string, error) {
-	cfg, host := toDockerConfig(s, d.bindHost)
+	cfg, host := toDockerConfig(s, d.bindHost, d.gpuDriver)
 	created, err := d.cli.ContainerCreate(ctx, cfg, host, nil, nil, s.Name)
 	if err != nil {
 		return "", err

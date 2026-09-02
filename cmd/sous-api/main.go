@@ -165,7 +165,10 @@ func main() {
 			"earliest signal of over-commitment on this box", mem.SwapUsedGiB)
 	}
 
-	rt, err := engine.New(cfg.Host())
+	// "cdi", matching this path's only prior behavior - the legacy local
+	// deploy path has no per-node GPU-driver selection of its own, since it
+	// never runs anywhere but asus-gx10 (CDI-only) today.
+	rt, err := engine.New(cfg.Host(), "cdi")
 	if err != nil {
 		log.Fatalf("docker: %v", err)
 	}
