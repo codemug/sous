@@ -63,9 +63,15 @@ func toDockerConfig(s Spec, bindHost, gpuDriver string) (*container.Config, *con
 
 	if s.GPU {
 		if gpuDriver == "nvidia" {
-			// The standard NVIDIA Container Toolkit path - exactly what
-			// `docker run --gpus all` itself translates to against the
-			// Engine API (empty DeviceIDs, Count -1 meaning "all").
+			// The standard NVIDIA Container Toolkit path. `docker run
+			// --gpus all` itself leaves Driver empty and lets the daemon
+			// resolve it by capability; naming "nvidia" explicitly here
+			// resolves to the exact same registered driver on any host
+			// where the toolkit is installed (moby registers it under
+			// that literal name - see daemon/devices_nvidia_linux.go),
+			// just without relying on there being only one GPU driver
+			// registered to default to. Count -1 and the gpu capability
+			// match the CLI's own translation exactly either way.
 			host.DeviceRequests = []container.DeviceRequest{{
 				Driver:       "nvidia",
 				Count:        -1,
