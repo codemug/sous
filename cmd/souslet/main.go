@@ -47,7 +47,12 @@ func main() {
 	portLow := flag.Int("port-low", 18000, "low end of this node's deploy port range")
 	portHigh := flag.Int("port-high", 18100, "high end of this node's deploy port range")
 	bindHost := flag.String("bind-host", "127.0.0.1", "host deployed models are published on, and the host port availability is probed against")
+	gpuDriver := flag.String("gpu-driver", "cdi", "how a GPU deployment requests its device: \"cdi\" (GB10/asus-gx10, no nvidia runtime available) or \"nvidia\" (standard NVIDIA Container Toolkit install, e.g. aorus-ubuntu)")
 	flag.Parse()
+
+	if *gpuDriver != "cdi" && *gpuDriver != "nvidia" {
+		log.Fatalf("-gpu-driver must be \"cdi\" or \"nvidia\", got %q", *gpuDriver)
+	}
 
 	for name, v := range map[string]string{"-api-addr": *apiAddr, "-node-id": *nodeID, "-model-dir": *modelDir, "-ca": *caPath, "-cert": *certPath, "-key": *keyPath} {
 		if v == "" {
@@ -83,7 +88,7 @@ func main() {
 		log.Fatalf("build TLS config: %v", err)
 	}
 
-	dockerEngine, err := engine.New("")
+	dockerEngine, err := engine.New("", *gpuDriver)
 	if err != nil {
 		log.Fatalf("connect to local Docker: %v", err)
 	}
