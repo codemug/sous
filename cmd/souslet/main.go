@@ -48,6 +48,18 @@ func main() {
 	portHigh := flag.Int("port-high", 18100, "high end of this node's deploy port range")
 	bindHost := flag.String("bind-host", "127.0.0.1", "host deployed models are published on, and the host port availability is probed against")
 	gpuDriver := flag.String("gpu-driver", "cdi", "how a GPU deployment requests its device: \"cdi\" (GB10/asus-gx10, no nvidia runtime available) or \"nvidia\" (standard NVIDIA Container Toolkit install, e.g. aorus-ubuntu)")
+	// The MANIFEST-LIST digest (not a single platform's own digest, like
+	// cmd/sous-api's -fetch-image default is) - this fleet is multi-arch
+	// (asus-gx10 is arm64, aorus-ubuntu is amd64) and a souslet binary is
+	// the same one flag value across every node's compose file, so the
+	// default has to resolve to the RIGHT platform per host rather than
+	// pinning one. Verified via `docker buildx imagetools inspect
+	// vllm/vllm-openai:v0.28.0` that this digest is the manifest list
+	// covering both linux/arm64 and linux/amd64 - still a real digest pin,
+	// not a floating tag, just at the list level instead of one platform's.
+	fetchImage := flag.String("fetch-image",
+		"vllm/vllm-openai@sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14",
+		"image used to download model weights; must carry huggingface_hub")
 	flag.Parse()
 
 	if *gpuDriver != "cdi" && *gpuDriver != "nvidia" {
@@ -92,7 +104,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect to local Docker: %v", err)
 	}
-	fetchMgr := &fetch.Manager{Runtime: dockerEngine, ModelDir: *modelDir}
+	fetchMgr := &fetch.Manager{Runtime: dockerEngine, ModelDir: *modelDir, Image: *fetchImage}
 
 	client := &grpcclient.Client{
 		Addr:        *apiAddr,
