@@ -10,6 +10,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 
 	"github.com/codemug/sous/internal/engine"
@@ -20,6 +21,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
+
+// dropCaches mirrors cmd/sous-api/main.go's own function of the same name
+// exactly (see grpcclient.Handlers.DropCaches's doc comment for why this
+// needs to exist on souslet too, not just the legacy local-deploy path).
+func dropCaches() error {
+	_ = exec.Command("sync").Run()
+	return os.WriteFile("/proc/sys/vm/drop_caches", []byte("3\n"), 0o200)
+}
 
 func main() {
 	apiAddr := flag.String("api-addr", "", "sous-api's gRPC address, host:port")
@@ -88,8 +97,9 @@ func main() {
 		ReserveGiB:  *reserveGiB,
 		Handlers: &grpcclient.Handlers{
 			Runtime: dockerEngine, Fetch: fetchMgr, ModelDir: *modelDir,
-			Ports:    ports.Allocator{Low: *portLow, High: *portHigh},
-			BindHost: *bindHost,
+			Ports:      ports.Allocator{Low: *portLow, High: *portHigh},
+			BindHost:   *bindHost,
+			DropCaches: dropCaches,
 		},
 	}
 

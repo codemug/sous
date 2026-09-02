@@ -158,6 +158,72 @@ func TestHandleDeployStartsTheContainerFromTheEmbeddedRecipeYAML(t *testing.T) {
 	}
 }
 
+func TestHandleDeployRunsDropCachesBeforeStartingTheContainer(t *testing.T) {
+	rt := &fakeRuntime{}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+	called := false
+	h.DropCaches = func() error {
+		if len(rt.started) != 0 {
+			t.Error("DropCaches ran after the container had already started")
+		}
+		called = true
+		return nil
+	}
+
+	result := h.HandleDeploy(context.Background(), &pb.DeployCommand{
+		RecipeId:   "dflash2",
+		RecipeYaml: validRecipeYAML(t, "dflash2"),
+		WantPort:   int32(freePort(t)),
+	})
+
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if !called {
+		t.Fatal("DropCaches was not called")
+	}
+}
+
+func TestHandleDeploySurfacesDropCachesError(t *testing.T) {
+	rt := &fakeRuntime{}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+	h.DropCaches = func() error { return errors.New("permission denied") }
+
+	result := h.HandleDeploy(context.Background(), &pb.DeployCommand{
+		RecipeId:   "dflash2",
+		RecipeYaml: validRecipeYAML(t, "dflash2"),
+		WantPort:   int32(freePort(t)),
+	})
+
+	if result.Error == "" {
+		t.Fatal("expected an error, got none")
+	}
+	if len(rt.started) != 0 {
+		t.Fatal("container was started despite DropCaches failing")
+	}
+}
+
+func TestHandleDeployWithNoDropCachesStillDeploys(t *testing.T) {
+	// DropCaches is optional (nil is a no-op) so a Handlers built without
+	// one - every existing test before this one, plus any environment that
+	// cannot write /proc/sys - still deploys successfully.
+	rt := &fakeRuntime{}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+
+	result := h.HandleDeploy(context.Background(), &pb.DeployCommand{
+		RecipeId:   "dflash2",
+		RecipeYaml: validRecipeYAML(t, "dflash2"),
+		WantPort:   int32(freePort(t)),
+	})
+
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if len(rt.started) != 1 {
+		t.Fatalf("Start called %d times, want 1", len(rt.started))
+	}
+}
+
 func TestHandleDeployReportsInvalidRecipeYAML(t *testing.T) {
 	rt := &fakeRuntime{}
 	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}

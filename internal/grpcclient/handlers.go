@@ -58,6 +58,18 @@ type Handlers struct {
 	// deploy.Manager.
 	BindHost string
 
+	// DropCaches mirrors deploy.Manager.DropCaches (internal/deploy/deploy.go)
+	// exactly - injectable so tests do not need root, optional so a
+	// Handlers built without one still deploys (nil is a no-op, not an
+	// error). Legacy single-node Sous calls this before every container
+	// start because vLLM sizes its KV cache against memory the kernel is
+	// holding as page cache, and this fleet has OOM'd a model on asus-gx10
+	// for exactly that reason (see stacks/sous/docker-compose.yml's own
+	// account of it). That risk is identical on a souslet-managed node -
+	// nothing about who dispatches the deploy changes what vLLM reads from
+	// /proc - so this needs the same call, not a lesser one.
+	DropCaches func() error
+
 	// footprintsMu guards footprints, which HandleDeploy writes and
 	// Snapshot reads - both reachable concurrently from the dispatch loop.
 	footprintsMu sync.Mutex
@@ -249,6 +261,11 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 	spec, err := engine.BuildSpec(rec, port, h.ModelDir)
 	if err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
+	}
+	if h.DropCaches != nil {
+		if err := h.DropCaches(); err != nil {
+			return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: "dropping page cache: " + err.Error()}
+		}
 	}
 	containerID, err := h.Runtime.Start(ctx, spec)
 	if err != nil {
