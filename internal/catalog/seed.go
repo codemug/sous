@@ -224,7 +224,7 @@ func Seeds() []recipe.Recipe {
 		{
 			ID: "qwen38-dflash2", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
 			Model: "Inferact/Qwen3.8-27B-NVFP4", Image: pinnedVLLMDFlash2,
-			ServedAs: []string{"dflash2"},
+			ServedAs: []string{"dflash2", "qwen3.8"},
 			// Target 24.87 (qwen38's own measured NVFP4 figure) PLUS drafter
 			// 3.58: the drafter is resident too, and a footprint that ignored
 			// it would under-plan by 3.58 GiB.
