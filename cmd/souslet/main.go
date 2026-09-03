@@ -100,7 +100,19 @@ func main() {
 		log.Fatalf("build TLS config: %v", err)
 	}
 
-	dockerEngine, err := engine.New("", *gpuDriver)
+	// *bindHost, NOT "". engine.Docker's own bindHost is what actually
+	// controls a deployed container's PortBindings HostIP - an empty
+	// string there makes Docker bind 0.0.0.0 (every interface), not
+	// "unset, so default to loopback". Handlers.BindHost (below) only
+	// controls the PORT ALLOCATION PROBE, a separate concern from what a
+	// container actually publishes on - passing "" here left every
+	// souslet-deployed model reachable directly on the node's tailnet IP,
+	// bypassing the mTLS-gRPC-tunnel-only design entirely (see stacks/
+	// souslet/docker-compose.yml in the fleet repo's own account of why
+	// that boundary matters). cmd/sous-api/main.go's equivalent call
+	// already does this correctly (engine.New(cfg.Host(), "cdi")) - this
+	// was souslet-specific.
+	dockerEngine, err := engine.New(*bindHost, *gpuDriver)
 	if err != nil {
 		log.Fatalf("connect to local Docker: %v", err)
 	}
