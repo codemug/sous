@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
@@ -98,6 +100,9 @@ func toDockerConfig(s Spec, bindHost, gpuDriver string) (*container.Config, *con
 }
 
 func (d *Docker) Start(ctx context.Context, s Spec) (string, error) {
+	if err := d.ensureImage(ctx, s.Image); err != nil {
+		return "", err
+	}
 	cfg, host := toDockerConfig(s, d.bindHost, d.gpuDriver)
 	created, err := d.cli.ContainerCreate(ctx, cfg, host, nil, nil, s.Name)
 	if err != nil {
@@ -107,6 +112,66 @@ func (d *Docker) Start(ctx context.Context, s Spec) (string, error) {
 		return "", err
 	}
 	return created.ID, nil
+}
+
+// ensureImage pulls ref if it is not already present locally. The Engine
+// API's ContainerCreate, unlike `docker run`, never pulls a missing image
+// itself - it fails outright with "No such image". This went unnoticed
+// through every deploy this project has ever made, because every node
+// Sous had run on already had its images cached (from the single-node
+// Sous era, or from this fleet's own precedent of pre-pulling vLLM images
+// by hand). It surfaced for real on aorus-ubuntu's first-ever deployment:
+// a genuinely cold Docker install, with nothing cached at all.
+//
+// Checks local presence FIRST rather than pulling unconditionally on
+// every call - matching `docker run`'s own default ("pull if missing",
+// not "pull always") and avoiding a needless registry round-trip on the
+// overwhelmingly common case where the image core recipes (which pin
+// digests, not floating tags) already have cached.
+func (d *Docker) ensureImage(ctx context.Context, ref string) error {
+	if _, err := d.cli.ImageInspect(ctx, ref); err == nil {
+		return nil
+	} else if !client.IsErrNotFound(err) {
+		return fmt.Errorf("engine: inspect image %s: %w", ref, err)
+	}
+
+	rc, err := d.cli.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("engine: pull image %s: %w", ref, err)
+	}
+	defer rc.Close()
+
+	if err := drainPullStream(rc); err != nil {
+		return fmt.Errorf("engine: pull image %s: %w", ref, err)
+	}
+	return nil
+}
+
+// drainPullStream reads an ImagePull response to completion, which is
+// required for the pull to actually finish (it is not synchronous until
+// the stream is read) - and, unlike a plain io.Copy(io.Discard, r), also
+// catches a registry-side failure (auth, missing manifest, ...), which
+// Docker reports as an "error" field INSIDE this JSON stream rather than
+// as a Go error from ImagePull itself. Split out from ensureImage so the
+// decode/error-detection logic - the actual subtle part - is testable
+// against a crafted byte stream, with no real Docker daemon or network
+// access required.
+func drainPullStream(r io.Reader) error {
+	dec := json.NewDecoder(r)
+	for {
+		var msg struct {
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("reading progress: %w", err)
+		}
+		if msg.Error != "" {
+			return fmt.Errorf("%s", msg.Error)
+		}
+	}
 }
 
 // Stop stops and removes. Leaving a stopped container behind would make the

@@ -53,6 +53,9 @@ type JobSpec struct {
 // minutes; holding a request open for that is the same mistake undeploy used to
 // make. Progress is read afterwards from the container's own state and logs.
 func (d *Docker) StartJob(ctx context.Context, s JobSpec) (string, error) {
+	if err := d.ensureImage(ctx, s.Image); err != nil {
+		return "", err
+	}
 	cfg := &container.Config{
 		Image:  s.Image,
 		Cmd:    s.Cmd,
