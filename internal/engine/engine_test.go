@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/docker/go-connections/nat"
@@ -113,6 +115,80 @@ func TestNoEntrypointLeavesImageDefault(t *testing.T) {
 	cfg, _ := toDockerConfig(Spec{Name: "n", Image: "i", ContainerPort: 8000}, "127.0.0.1", "cdi")
 	if len(cfg.Entrypoint) != 0 {
 		t.Fatalf("must not invent an entrypoint: %v", cfg.Entrypoint)
+	}
+}
+
+// A real docker pull's progress stream, one JSON object per line, no
+// embedded error - captured in shape from an actual `docker pull` (status,
+// progressDetail, id fields), not invented.
+const realPullStreamNoError = `{"status":"Pulling from library/alpine","id":"3.21"}
+{"status":"Pulling fs layer","progressDetail":{},"id":"9b18e9b68314"}
+{"status":"Downloading","progressDetail":{"current":1024,"total":3072},"progress":"[====>   ]  1024B/3072B","id":"9b18e9b68314"}
+{"status":"Download complete","progressDetail":{},"id":"9b18e9b68314"}
+{"status":"Pull complete","progressDetail":{},"id":"9b18e9b68314"}
+{"status":"Digest: sha256:abc123"}
+{"status":"Status: Downloaded newer image for alpine:3.21"}
+`
+
+func TestDrainPullStreamSucceedsOnARealNoErrorStream(t *testing.T) {
+	if err := drainPullStream(strings.NewReader(realPullStreamNoError)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDrainPullStreamCatchesAnErrorEmbeddedMidStream(t *testing.T) {
+	// The exact bug ensureImage exists to avoid: a registry-side failure
+	// (bad ref, auth, ...) arrives as an "error" field INSIDE the JSON
+	// stream, after several genuine progress lines - not as a Go error
+	// from ImagePull itself. A plain io.Copy(io.Discard, r) would drain
+	// this to EOF and report success.
+	stream := `{"status":"Pulling from library/alpine","id":"3.21"}
+{"status":"Pulling fs layer","progressDetail":{},"id":"9b18e9b68314"}
+{"errorDetail":{"message":"manifest unknown: manifest unknown"},"error":"manifest unknown: manifest unknown"}
+`
+	err := drainPullStream(strings.NewReader(stream))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "manifest unknown") {
+		t.Fatalf("error should surface the registry's own message, got: %v", err)
+	}
+}
+
+func TestDrainPullStreamHandlesAnEmptyStream(t *testing.T) {
+	if err := drainPullStream(strings.NewReader("")); err != nil {
+		t.Fatalf("unexpected error on an empty stream: %v", err)
+	}
+}
+
+func TestDrainPullStreamSurfacesMalformedJSON(t *testing.T) {
+	err := drainPullStream(strings.NewReader("{not json"))
+	if err == nil {
+		t.Fatal("expected an error for malformed JSON, got nil")
+	}
+}
+
+// TestEnsureImageSkipsAnAlreadyCachedImage is a real integration test
+// against an actual Docker daemon, not a fake - ensureImage's whole
+// premise (check ImageInspect before ever calling ImagePull) isn't
+// meaningfully testable through drainPullStream alone, since that
+// covers only what happens once a pull stream exists. Skips cleanly if
+// no daemon is reachable or the fixture image isn't cached, rather than
+// failing a CI environment without Docker access - matching this
+// project's existing pattern of degrading gracefully for environment
+// limits (e.g. -race being unavailable in sandboxes without a C
+// toolchain) rather than papering over the gap with a fake.
+func TestEnsureImageSkipsAnAlreadyCachedImage(t *testing.T) {
+	d, err := New("", "cdi")
+	if err != nil {
+		t.Skipf("no local Docker daemon reachable: %v", err)
+	}
+	const fixtureImage = "alpine:3.21"
+	if _, err := d.cli.ImageInspect(context.Background(), fixtureImage); err != nil {
+		t.Skipf("fixture image %s not already cached locally: %v", fixtureImage, err)
+	}
+	if err := d.ensureImage(context.Background(), fixtureImage); err != nil {
+		t.Fatalf("ensureImage on an already-cached image should not error: %v", err)
 	}
 }
 
