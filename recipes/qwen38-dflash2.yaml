@@ -5,6 +5,7 @@ model: Inferact/Qwen3.8-27B-NVFP4
 image: vllm/vllm-openai@sha256:2a7cde230b59f3ce6cab33dd245ba6bee41aa87b38c9fe84f966ff24016813ce
 served_as:
     - dflash2
+    - qwen3.8
 declared:
     weights_gib: 28.45
     kv_gib: 34
