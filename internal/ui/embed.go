@@ -17,14 +17,12 @@ import (
 //go:embed templates/*.html
 var files embed.FS
 
-// staticFS is the panel's client-side JS (Task 13, drag-and-drop deploy):
-// the first static asset this project has ever served - everything before
-// it was templates rendered server-side with zero client-side script. Kept
-// as its own embed.FS rather than folded into files above so a future
-// second static asset doesn't have to be told apart from *.html by a
-// pattern match.
+// staticFS holds the panel's client-side assets - the board's stylesheet
+// and scripts. `static/*` (not a single named file) so a new .css/.js
+// under static/ ships automatically; the httpapi side serves the whole
+// directory under one GET /static/ route rather than one route per file.
 //
-//go:embed static/dragdrop.js
+//go:embed static/*
 var staticFS embed.FS
 
 // StaticFS exposes the embedded static assets for httpapi to serve (see

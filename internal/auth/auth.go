@@ -122,8 +122,13 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		// The login page itself must stay reachable, or the redirect below
-		// bounces forever.
-		if r.URL.Path == LoginPath {
+		// bounces forever - and the stylesheet/scripts it links must load
+		// before anyone has signed in, so the whole static/ tree is exempt
+		// too. These are non-secret assets (CSS, board JS); the tailnet is
+		// the boundary, and no API key or session can reach anything else
+		// through this exemption because /static/ is a literal prefix, not
+		// a redirect target.
+		if r.URL.Path == LoginPath || strings.HasPrefix(r.URL.Path, "/static/") {
 			next.ServeHTTP(w, r)
 			return
 		}

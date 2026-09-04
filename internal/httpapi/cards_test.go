@@ -7,7 +7,7 @@ import (
 )
 
 func TestNodeUsesTheCardGrid(t *testing.T) {
-	h := newTestServer(t)
+	h := newTestServerNilGRPC(t)
 	post(t, h, "/api/deploy/qwen38", "", "")
 	b := send(t, h, http.MethodGet, "/", "", "").Body.String()
 	for _, want := range []string{`class="cards"`, `class="card is-`, "card-head", "card-foot", "mlabel"} {

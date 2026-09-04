@@ -35,7 +35,7 @@ func TestListScreensUseCards(t *testing.T) {
 	post(t, h, "/api/deploy/qwen38", "", "")
 	post(t, h, "/api/keys", "application/json", `{"name":"probe"}`)
 
-	for _, path := range []string{"/", "/models", "/keys"} {
+	for _, path := range []string{"/models", "/keys"} {
 		body := send(t, h, http.MethodGet, path, "", "").Body.String()
 		if !strings.Contains(body, `class="cards`) {
 			t.Errorf("%s is not on the card grid", path)
@@ -69,7 +69,7 @@ func TestCardsDoNotNestPanels(t *testing.T) {
 // them. .panel and .wrap both grew a border and never grew the padding, so
 // every heading, form and paragraph sat flush against the line.
 func TestBoxesCarryTheirPadding(t *testing.T) {
-	h := newTestServer(t)
+	h := newTestServerNilGRPC(t)
 	css := send(t, h, http.MethodGet, "/", "", "").Body.String()
 
 	for _, sel := range []string{".panel{", ".wrap{"} {
@@ -237,7 +237,7 @@ func TestRecipeCreationLandsOnModelsWithItsMessage(t *testing.T) {
 // gone wrong. Orphans hold no memory, so Residents is zero - but the pool is
 // not what the operator is looking at.
 func TestEmptyStateDoesNotClaimAFreePoolBesideOrphans(t *testing.T) {
-	h, rt := newTestServerWithRuntime(t)
+	h, rt := newTestServerNilGRPCWithRuntime(t)
 	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
 		t.Fatalf("deploy failed: %d", rr.Code)
 	}
@@ -509,7 +509,10 @@ func TestCardsShowEveryCallableName(t *testing.T) {
 	if rr := setAlias(t, h, "qwen38", `["cardalias"]`); rr.Code != http.StatusOK {
 		t.Fatalf("set: %d %s", rr.Code, rr.Body.String())
 	}
-	for _, path := range []string{"/models", "/"} {
+	// The board shelf keys a model by its recipe id (a stable handle a drag
+	// carries), not its every alias; aliases are shown where they are
+	// managed, on /models and the model page. So this asserts on /models.
+	for _, path := range []string{"/models"} {
 		body := send(t, h, http.MethodGet, path, "", "").Body.String()
 		if !strings.Contains(body, "cardalias") {
 			t.Errorf("%s does not show the alias on the card", path)

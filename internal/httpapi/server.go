@@ -129,13 +129,15 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	// The panel's one static asset (Task 13): dragdrop.js, served straight
-	// from the embedded FS rather than through html/template - it is
-	// unchanging JS, not a page. Registered unconditionally (not gated
-	// behind gsrv/nodes != nil like the node-scoped routes below) because
-	// the script itself is harmless to load on a single-node server too -
-	// it just never finds a [data-node-id] drop target to attach to there.
-	s.mux.Handle("GET /static/dragdrop.js", http.FileServerFS(ui.StaticFS()))
+	// The panel's static assets (stylesheet, board script), served straight
+	// from the embedded FS rather than through html/template - unchanging
+	// files, not pages. One prefix route for the whole static/ directory
+	// (embedded paths keep their "static/" prefix, which is what
+	// FileServerFS resolves "/static/x" to). Registered unconditionally
+	// (not gated behind gsrv/nodes) and exempt from auth in the middleware,
+	// so the /login page can share the same stylesheet before anyone signs
+	// in. The files are non-secret; the tailnet is the boundary.
+	s.mux.Handle("GET /static/", http.FileServerFS(ui.StaticFS()))
 	s.mux.HandleFunc("GET /api/recipes", s.listRecipes)
 	s.mux.HandleFunc("POST /api/recipes/sync", s.syncRecipes)
 	s.mux.HandleFunc("POST /api/recipes", s.createRecipe)
@@ -234,6 +236,10 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// exactly which, and why - it depends on this package's own "GET /"
 	// catch-all), never a panic.
 	if gsrv != nil && nodes != nil {
+		// The board's live fleet state, JSON. Same nil-guard reasoning as
+		// the node-scoped routes below: apiNodes reads s.nodes, so it must
+		// not exist at all on a server built without a fleet to talk to.
+		s.mux.HandleFunc("GET /api/nodes", s.apiNodes)
 		s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
 		s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
 		s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
@@ -256,7 +262,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// The Node dashboard is the landing page: the first question on opening
 	// this panel is "what is running and is it healthy", not "what could I
 	// run next".
-	s.mux.HandleFunc("GET /", s.pageNode)
+	s.mux.HandleFunc("GET /", s.pageBoard)
 	// MODELS, not Catalog. One list of recipes carrying phase, because a recipe
 	// and a deployment are the same object in two states and splitting them
 	// across two pages made an operator hold that distinction themselves.

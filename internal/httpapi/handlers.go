@@ -204,7 +204,7 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if nodeID := r.PathValue("nodeID"); nodeID != "" {
-		s.deployNode(w, v, nodeID, port, force)
+		s.deployNode(w, r, v, nodeID, port, force)
 		return
 	}
 
@@ -246,10 +246,23 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 // deploy.Manager. Always answers JSON - the node-scoped routes are new, have
 // no existing form-posting UI, and Task 13's drag-and-drop deploy calls this
 // with fetch(), which never sends the form Content-Type wantsHTML checks for.
-func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, force bool) {
+func (s *Server) deployNode(w http.ResponseWriter, r *http.Request, v, nodeID string, port int, force bool) {
+	// The board's drag-and-drop calls this with fetch() (JSON); its no-JS
+	// "Deploy to…" menu posts a real form (wantsHTML). Both hit the same
+	// route - the difference is only how the result is delivered: a browser
+	// form gets a redirect back to the board with a banner, a script gets
+	// JSON. htmlErr centralises that so every exit honours it.
+	htmlErr := func(code int, msg string) {
+		if wantsHTML(r) {
+			s.redirect(w, r, "/", msg, true)
+			return
+		}
+		writeErr(w, code, msg)
+	}
+
 	rec, err := s.cat.Get(v)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		htmlErr(http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -267,7 +280,7 @@ func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, f
 	// can knowingly accept, not for un-deleting the "impossible on this
 	// hardware" fact Archived records.
 	if rec.Archived {
-		writeErr(w, http.StatusConflict, fmt.Sprintf(
+		htmlErr(http.StatusConflict, fmt.Sprintf(
 			"recipe %s is archived and cannot be deployed", v))
 		return
 	}
@@ -276,25 +289,32 @@ func (s *Server) deployNode(w http.ResponseWriter, v, nodeID string, port int, f
 	// rather than issuing a live call - see planOnNode's doc comment for why.
 	plan, err := planOnNode(s.nodes, v, nodeID, rec.Declared.TotalGiB())
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		htmlErr(http.StatusNotFound, err.Error())
 		return
 	}
 	if !plan.Fits && !force {
-		// Same shape as the legacy path's JSON capacity refusal
-		// (writeJSON(w, http.StatusConflict, ce.Result)): a script gets the
-		// margin and MustFree list either way.
+		if wantsHTML(r) {
+			s.redirect(w, r, "/", fmt.Sprintf("%s does not fit on %s. Free memory first, or force a deploy from the model page.", v, nodeID), true)
+			return
+		}
+		// Same shape as the legacy path's JSON capacity refusal: a script
+		// gets the margin and MustFree list to act on.
 		writeJSON(w, http.StatusConflict, plan)
 		return
 	}
 
 	recipeYAML, err := recipeToYAML(rec)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		htmlErr(http.StatusInternalServerError, err.Error())
 		return
 	}
 	res, err := deployToNode(s.gsrv, s.nodes, nodeID, recipeYAML, port, force)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		htmlErr(http.StatusBadGateway, err.Error())
+		return
+	}
+	if wantsHTML(r) {
+		s.redirect(w, r, "/", fmt.Sprintf("Deploying %s to %s — it will take a few minutes to load.", v, nodeID), false)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -315,7 +335,15 @@ func (s *Server) undeploy(w http.ResponseWriter, r *http.Request) {
 	if nodeID := r.PathValue("nodeID"); nodeID != "" {
 		res, err := undeployFromNode(s.gsrv, nodeID, v)
 		if err != nil {
+			if wantsHTML(r) {
+				s.redirect(w, r, "/", err.Error(), true)
+				return
+			}
 			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if wantsHTML(r) {
+			s.redirect(w, r, "/", fmt.Sprintf("Stopped %s on %s.", v, nodeID), false)
 			return
 		}
 		writeJSON(w, http.StatusOK, res)

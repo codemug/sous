@@ -114,12 +114,22 @@ func TestPlanPageShipsThePoolBarStyles(t *testing.T) {
 
 // The same partial on the other page that uses it, so a future move that fixes
 // one and breaks the other cannot pass.
-func TestNodePageShipsThePoolBarStyles(t *testing.T) {
+func TestBoardShipsItsStylesheet(t *testing.T) {
 	h := newTestServer(t)
-	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
-	for _, want := range []string{".pool-bar{", ".seg{", ".seg-reserve"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("node page does not ship %q", want)
+	page := send(t, h, http.MethodGet, "/", "", "").Body.String()
+	// The board links a real stylesheet rather than inlining it, so the
+	// asset caches and the page stays small; the link must be present or the
+	// board renders unstyled.
+	if !strings.Contains(page, `href="/static/board.css"`) {
+		t.Fatalf("board page does not link /static/board.css")
+	}
+	css := send(t, h, http.MethodGet, "/static/board.css", "", "").Body.String()
+	// The load-bearing board rules: the pool bar, its segments, and the
+	// reserve treatment. If these are gone the "memory is a length" diagram
+	// is not drawn.
+	for _, want := range []string{".bar ", ".seg ", ".seg.reserve", ".bay "} {
+		if !strings.Contains(css, want) {
+			t.Errorf("board.css does not define %q", want)
 		}
 	}
 }

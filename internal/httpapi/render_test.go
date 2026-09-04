@@ -10,7 +10,7 @@ import (
 // own: a template that fails part way through leaves a half-written page with a
 // 200 status, which reads as success everywhere except the browser.
 func TestStage1PagesRenderWhole(t *testing.T) {
-	h := newTestServer(t)
+	h := newTestServerNilGRPC(t)
 	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
 		t.Fatalf("deploy: %d", rr.Code)
 	}
@@ -52,7 +52,7 @@ func tailOf(s string, n int) string {
 // The stepper must actually reach the page while a model is starting - that is
 // the whole point of deriving it.
 func TestStartingModelRendersTheStepper(t *testing.T) {
-	h := newTestServer(t)
+	h := newTestServerNilGRPC(t)
 	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
 		t.Fatalf("deploy: %d", rr.Code)
 	}
