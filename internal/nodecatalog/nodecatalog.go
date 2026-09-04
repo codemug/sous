@@ -8,6 +8,7 @@ package nodecatalog
 
 import (
 	"sync"
+	"time"
 
 	pb "github.com/codemug/sous/internal/pb/souslet/v1"
 )
@@ -19,6 +20,13 @@ type NodeView struct {
 	Connected         bool
 	Deployments       []*pb.DeploymentState
 	CachedWeightRepos map[string]bool
+	// LastSnapshot is when this node's most recent NodeSnapshot landed.
+	// The UI reads it as freshness ("snapshot 6s old") - a node can be
+	// Connected yet stale if snapshots stop arriving, which is a distinct
+	// and important state from disconnected. MarkDisconnected does NOT
+	// advance it, so a greyed-out node's age keeps counting up from its
+	// real last snapshot.
+	LastSnapshot time.Time
 }
 
 type Catalog struct {
@@ -48,6 +56,7 @@ func (c *Catalog) ReplaceSnapshot(nodeID string, snap *pb.NodeSnapshot) {
 		Connected:         true,
 		Deployments:       snap.Deployments,
 		CachedWeightRepos: cached,
+		LastSnapshot:      time.Now(),
 	}
 }
 

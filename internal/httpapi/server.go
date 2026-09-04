@@ -234,6 +234,10 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// exactly which, and why - it depends on this package's own "GET /"
 	// catch-all), never a panic.
 	if gsrv != nil && nodes != nil {
+		// The board's live fleet state, JSON. Same nil-guard reasoning as
+		// the node-scoped routes below: apiNodes reads s.nodes, so it must
+		// not exist at all on a server built without a fleet to talk to.
+		s.mux.HandleFunc("GET /api/nodes", s.apiNodes)
 		s.mux.HandleFunc("GET /api/plan/{id}/{nodeID}", s.plan)
 		s.mux.HandleFunc("POST /api/deploy/{id}/{nodeID}", s.deploy)
 		s.mux.HandleFunc("POST /api/undeploy/{id}/{nodeID}", s.undeploy)
