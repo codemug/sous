@@ -262,7 +262,7 @@ func New(m *deploy.Manager, c *catalog.Catalog, keys *apikey.Manager, fx *fetch.
 	// The Node dashboard is the landing page: the first question on opening
 	// this panel is "what is running and is it healthy", not "what could I
 	// run next".
-	s.mux.HandleFunc("GET /", s.pageNode)
+	s.mux.HandleFunc("GET /", s.pageBoard)
 	// MODELS, not Catalog. One list of recipes carrying phase, because a recipe
 	// and a deployment are the same object in two states and splitting them
 	// across two pages made an operator hold that distinction themselves.

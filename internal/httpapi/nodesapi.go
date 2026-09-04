@@ -44,9 +44,23 @@ type deploymentJSON struct {
 	KvGiB        float64 `json:"kv_gib"`
 }
 
+// TotalGiB is the deployment's committed memory - what the board draws its
+// segment to. A method so the board template can size the bar without an
+// "add" helper in the funcmap.
+func (d deploymentJSON) TotalGiB() float64 { return d.WeightsGiB + d.KvGiB }
+
 // apiNodes serves GET /api/nodes. Registered only when gsrv&&nodes are wired
 // (see server.go's gate) so it never touches a nil catalog.
 func (s *Server) apiNodes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.fleetView())
+}
+
+// fleetView is the single source of the fleet's live state: the JSON API
+// (GET /api/nodes) and the server-rendered board (pageBoard) both read it,
+// so they cannot disagree about margins or what is deployed where. The
+// committed/margin arithmetic here is identical to planOnNode and
+// capacity.Planner, so a fit the board shows is a fit the deploy accepts.
+func (s *Server) fleetView() []nodeJSON {
 	now := time.Now()
 	views := s.nodes.All()
 	out := make([]nodeJSON, 0, len(views))
@@ -91,5 +105,5 @@ func (s *Server) apiNodes(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
-	writeJSON(w, http.StatusOK, out)
+	return out
 }

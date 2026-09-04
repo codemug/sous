@@ -1,0 +1,131 @@
+{{define "board"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="/static/board.css">
+<script src="/static/board.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">Sous</span>
+  <nav>
+    <a href="/" aria-current="page">Fleet</a>
+    <a href="/models">Models</a>
+    <a href="/keys">API keys</a>
+    <a href="/sources">Sources</a>
+    <a href="/admin">Admin</a>
+  </nav>
+  <span class="spacer"></span>
+  <form method="post" action="/logout" style="margin:0"><button class="btn" type="submit">Sign out</button></form>
+</header>
+
+<p id="flash" class="flash{{if .IsError}} err{{end}}"{{if not .Message}} hidden{{end}}>{{.Message}}</p>
+
+<main id="board" style="--gib: calc((min(100vw, 1160px) - 40px) / {{printf "%.1f" .MaxScaleGiB}})">
+  <h1>Fleet</h1>
+  <p class="lede">Every node is drawn to the width of its memory pool and every model to its footprint,
+  on one shared scale — so what fits is a length you can see. Drag a model onto a node to deploy it,
+  or use its “Deploy to…” menu.</p>
+
+  <div class="ruler" id="ruler"></div>
+
+  {{/* Server-rendered bays: the no-JS board. board.js replaces #bays with a
+       live version polled from /api/nodes, but this is fully functional on
+       its own. */}}
+  <div id="bays">
+    {{range .Nodes}}
+    {{$node := .}}
+    <section class="bay{{if not .Connected}} offline{{end}}" data-node-id="{{.NodeID}}">
+      <div class="bay-head">
+        <span class="id">{{.NodeID}}</span>
+        <span class="free{{if lt .MarginGiB 0.0}} over{{end}}">{{printf "%.1f" .MarginGiB}} GiB free of {{printf "%.1f" .PoolGiB}}</span>
+        <div class="freshness{{if not .Connected}} gone{{end}}">
+          {{if .Connected}}connected · snapshot {{printf "%.0f" .SnapshotAgeS}}s old{{else}}disconnected — showing the last snapshot{{end}}
+        </div>
+      </div>
+      <div class="bar" style="width: calc(var(--gib) * {{printf "%.2f" .PoolGiB}})">
+        {{range .Deployments}}
+        <div class="seg weights" style="width: calc(var(--gib) * {{printf "%.2f" .TotalGiB}})" title="{{.RecipeID}} — {{.DockerStatus}}{{if .HostPort}} :{{.HostPort}}{{end}}">
+          <span class="lab">{{.RecipeID}}</span>
+        </div>
+        {{end}}
+        {{if gt .MarginGiB 0.0}}<div class="seg free" style="width: calc(var(--gib) * {{printf "%.2f" .MarginGiB}})"></div>{{end}}
+        <div class="seg reserve" style="width: calc(var(--gib) * {{printf "%.2f" .ReserveGiB}})"><span class="lab">reserve</span></div>
+      </div>
+      {{range .Deployments}}
+      <div class="dep">
+        <span class="dot unknown"></span>
+        <span class="name">{{.RecipeID}}</span>
+        <span class="state">{{.DockerStatus}}{{if .HostPort}} · :{{.HostPort}}{{end}}</span>
+        {{if $node.Connected}}
+        <form method="post" action="/api/undeploy/{{.RecipeID}}/{{$node.NodeID}}" style="margin:0">
+          <button class="btn-danger" type="submit">Stop {{.RecipeID}}</button>
+        </form>
+        {{end}}
+      </div>
+      {{else}}
+      <p class="empty">{{if .Connected}}Nothing deployed here.{{else}}No last-known deployments.{{end}}</p>
+      {{end}}
+    </section>
+    {{else}}
+    <p class="empty">No nodes connected. A node appears here once its souslet dials in.</p>
+    {{end}}
+  </div>
+
+  <div class="shelf-head">
+    <h2>Models</h2>
+    <span class="filters muted">drag a model onto a node above, or use its menu</span>
+    <span class="spacer" style="margin-left:auto"></span>
+    <a class="btn" href="/models">Manage recipes</a>
+  </div>
+
+  {{range .Models}}
+  {{$m := .}}
+  <div class="model{{if .Archived}} archived{{end}}"
+       data-recipe-id="{{.ID}}"
+       data-footprint-gib="{{printf "%.2f" .FootprintGiB}}"
+       data-model-repo="{{.Repo}}"
+       data-archived="{{.Archived}}">
+    <span class="handle">
+      <span class="grip" aria-hidden="true">⠿</span>
+      <a class="title" href="/model/{{.ID}}">{{.ID}}</a>
+    </span>
+    <span class="mbar" title="{{.Repo}}">
+      <span class="fill" style="width: calc(var(--gib) * {{printf "%.2f" .FootprintGiB}})"></span>
+      <span class="foot">{{printf "%.1f" .FootprintGiB}} GiB</span>
+    </span>
+    <span class="status-and-act">
+      <span class="status">
+        {{if .Archived}}archived — cannot run here
+        {{else if .OnNode}}<span class="on">on {{.OnNode}} · {{.OnStatus}}</span>
+        {{else if .Cached}}weights on {{range $i, $c := .Cached}}{{if $i}}, {{end}}{{$c}}{{end}}
+        {{else}}not on any node{{end}}
+      </span>
+      {{if not .Archived}}
+      <details class="deploy-to">
+        <summary>Deploy to…</summary>
+        <div class="menu">
+          {{range .Fits}}
+          {{if .Fits}}
+          <form method="post" action="/api/deploy/{{$m.ID}}/{{.NodeID}}" style="margin:0">
+            <button class="node-choice" type="submit">{{.NodeID}}<span class="fit">{{printf "%.1f" .MarginAfterGiB}} GiB left</span></button>
+          </form>
+          {{else}}
+          <button class="node-choice" type="button" disabled title="does not fit">{{.NodeID}}<span class="fit over">{{printf "%.1f" (neg .MarginAfterGiB)}} GiB over</span></button>
+          {{end}}
+          {{else}}
+          <p class="empty" style="padding:8px 10px">No connected node has room. Free memory first, or force a deploy from the model page.</p>
+          {{end}}
+        </div>
+      </details>
+      {{end}}
+    </span>
+  </div>
+  {{else}}
+  <p class="empty">No recipes yet. <a href="/models">Create one.</a></p>
+  {{end}}
+</main>
+</body>
+</html>{{end}}

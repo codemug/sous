@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -159,22 +158,27 @@ func TestLastLinesReturnsTheEndNotTheStart(t *testing.T) {
 	}
 }
 
-func TestNodePageRenders(t *testing.T) {
-	h := newTestServer(t)
+func TestBoardRenders(t *testing.T) {
+	h, nodes := newTestServerWithNodes(t)
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
+	})
 	rr := send(t, h, http.MethodGet, "/", "", "")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Node", "pool-bar", "GiB free", "Sous"} {
+	for _, want := range []string{"Sous", "Fleet", "asus-gx10", "GiB free"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("node page missing %q", want)
+			t.Errorf("board missing %q", want)
 		}
 	}
-	// An idle node must say so rather than render an empty bar with no
-	// explanation.
-	if !strings.Contains(body, "Nothing deployed") {
-		t.Error("idle node page has no empty state")
+	// A connected node with nothing on it must say so, not draw a bare bar.
+	if !strings.Contains(body, "Nothing deployed here") {
+		t.Error("idle node bay has no empty state")
+	}
+	if !strings.Contains(body, "</html>") {
+		t.Error("board did not render to completion")
 	}
 }
 
@@ -191,7 +195,7 @@ func TestNodePageDoesNotSwallowUnknownPaths(t *testing.T) {
 }
 
 func TestNodePageDrawsSegmentsToScale(t *testing.T) {
-	h := newTestServer(t)
+	h := newTestServerNilGRPC(t)
 	if rr := post(t, h, "/api/deploy/qwen38", "", ""); rr.Code != http.StatusOK {
 		t.Fatalf("deploy failed: %d", rr.Code)
 	}
@@ -282,10 +286,15 @@ func TestPageNodeCardShowsDisconnectedNodeGreyedOutNotVanished(t *testing.T) {
 	}
 	body := rr.Body.String()
 	if !strings.Contains(body, "asus-gx10") {
-		t.Fatal("disconnected node vanished from the dashboard instead of rendering its last-known state")
+		t.Fatal("disconnected node vanished from the board instead of rendering its last-known state")
 	}
-	if !strings.Contains(body, "is-idle") {
-		t.Error("disconnected node card missing the is-idle chip/border treatment")
+	// The board keeps the bay but marks it offline (greyed, not a drop
+	// target) and says so in words rather than dropping it silently.
+	if !strings.Contains(body, "class=\"bay offline\"") {
+		t.Error("disconnected node bay missing the offline treatment")
+	}
+	if !strings.Contains(body, "disconnected") {
+		t.Error("disconnected node bay does not say it is disconnected")
 	}
 }
 
@@ -314,22 +323,19 @@ func TestFleetCardSegmentDoesNotClaimReadyForAnUnhealthyContainer(t *testing.T) 
 	})
 	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
 
-	seg := regexp.MustCompile(`<div class="([^"]*)"[^>]*data-seg="crashloop"`).FindStringSubmatch(body)
-	if seg == nil {
-		t.Fatalf("no segment rendered for the crashloop deployment; body:\n%s", body)
+	// The board never renders a "ready" verdict on the node path - there is
+	// no health probe there, so it cannot know one. A crashlooping
+	// container must not get a ready dot or the word "ready" beside it.
+	if !strings.Contains(body, "crashloop") {
+		t.Fatalf("no entry rendered for the crashloop deployment; body:\n%s", body)
 	}
-	class := seg[1]
-	if strings.Contains(class, "seg-ready") {
-		t.Errorf("crashloop (docker status %q) rendered class %q - claims ready for an unhealthy container", "restarting", class)
+	if strings.Contains(body, `class="dot ready"`) {
+		t.Error("board rendered a ready dot for a fleet deployment whose health it cannot read")
 	}
-	if !strings.Contains(class, "seg-unknown") {
-		t.Errorf("expected the neutral seg-unknown class for a fleet segment whose health cannot be read from Phase, got %q", class)
-	}
-	// The raw Docker status must stay visible (in the tooltip) rather than
-	// being hidden behind whichever color the segment ends up with - the
-	// coarseness should be disclosed, not disguised.
+	// The raw Docker status must stay visible rather than be smoothed into a
+	// colour - the coarseness is disclosed, not disguised.
 	if !strings.Contains(body, "restarting") {
-		t.Error(`raw docker status "restarting" not surfaced anywhere on the page`)
+		t.Error(`raw docker status "restarting" not surfaced anywhere on the board`)
 	}
 }
 

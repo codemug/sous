@@ -63,23 +63,25 @@ func TestModelsPageDraggableCardsCoexistWithWeightChips(t *testing.T) {
 // `document.querySelectorAll('[data-node-id]')` can find, carrying the id
 // used to build the deploy URL, and the drop-target class dragdrop.js
 // toggles drop-hover on.
-func TestNodePageFleetCardsAreDropTargets(t *testing.T) {
+func TestBoardNodeBaysAreDropTargets(t *testing.T) {
 	h, nodes := newTestServerWithNodes(t)
 	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
 		NodeId: "asus-gx10", PoolGib: 121.6, ReserveGib: 24,
 	})
 	body := send(t, h, http.MethodGet, "/", "", "").Body.String()
 
+	// The board's drop target is the node bay, keyed by data-node-id;
+	// board.js attaches dragover/drop to every [data-node-id] bay and posts
+	// the dropped recipe to /api/deploy/{recipe}/{node}.
 	if !strings.Contains(body, `data-node-id="asus-gx10"`) {
-		t.Errorf("expected data-node-id=\"asus-gx10\" on the fleet card; body:\n%s", body)
+		t.Errorf("expected data-node-id=\"asus-gx10\" on a node bay; body:\n%s", body)
 	}
-	if !strings.Contains(body, "drop-target") {
-		t.Error("expected the drop-target class on the fleet card")
+	if !strings.Contains(body, `class="bay`) {
+		t.Error("expected node bays on the board")
 	}
-	// Task 12's own data-node attribute and is-idle/connected chip must
-	// still be there - Task 13 adds to this card, it does not replace it.
-	if !strings.Contains(body, `data-node="asus-gx10"`) {
-		t.Error("expected Task 12's own data-node attribute to still render")
+	// The board's script is what wires the drop; the page must ship it.
+	if !strings.Contains(body, `/static/board.js`) {
+		t.Error("board page does not load board.js, so drag-and-drop would be dead")
 	}
 }
 

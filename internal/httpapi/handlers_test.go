@@ -172,6 +172,20 @@ func newTestServerNilGRPC(t *testing.T) http.Handler {
 	return h
 }
 
+// newTestServerNilGRPCWithRuntime is the single-node configuration (cmd/sous:
+// no fleet, so "GET /" renders the local deploy.Manager node page with its
+// pool ruler and stepper, NOT the multi-node board), plus a handle on the
+// fake runtime. The local-deploy rendering tests use this: their subject -
+// a model deployed on THIS box, shown with a boot stepper and a phase-
+// coloured pool bar - is exactly what the board (a fleet view of remote
+// souslet nodes) does not and should not show, and now lives only here.
+func newTestServerNilGRPCWithRuntime(t *testing.T) (http.Handler, *fakeRuntime) {
+	t.Helper()
+	rt := &fakeRuntime{running: map[string]bool{}}
+	h, _, _, _ := buildServerFull(t, t.TempDir(), rt, auth.Config{Disabled: true}, false)
+	return h, rt
+}
+
 // buildServerFull is buildServerWith's real implementation, broken out so
 // node-scoped tests can also get at the *nodecatalog.Catalog backing the new
 // routes; every other existing helper wraps this and discards it. withGRPC

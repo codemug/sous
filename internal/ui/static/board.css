@@ -1,0 +1,310 @@
+/* Sous board — "memory is a length".
+ *
+ * One shared GiB ruler runs across the fleet: every node is drawn to the
+ * width of its memory pool and every model to the width of its footprint,
+ * so "does it fit" is a length the eye reads before any request is sent.
+ * The scale lives in one custom property, --gib (px per GiB), set on the
+ * board element from the largest pool; every bar width is `calc(var(--gib)
+ * * <n>)`. Nothing here is decoration: every edge, hatch and length is a
+ * measurement.
+ *
+ * No build step, no framework, no webfont. Design tokens are CSS custom
+ * properties with a dark-scheme override; colours are chosen for the
+ * subject (occupied memory, reserve, ready, in-transition, fault), not a
+ * SaaS palette. */
+
+:root {
+  /* Engineering paper, not cream: a cool stone-grey with a green cast, so a
+   * node box (near-white) reads as a physical tray laid on a bench. */
+  --ground: #e9ece6;
+  --surface: #f7f8f6;
+  --surface-sunk: #e2e6df;
+  --ink: #1f2a36;          /* slate-navy: all text, rules, box edges. not black. */
+  --ink-soft: #5a6672;     /* secondary text */
+  --ink-faint: #8a94a0;    /* tertiary / disabled */
+  --line: #c9cfc8;         /* hairline dividers on the ground */
+  --line-box: #d3d8d0;     /* dividers inside a surface */
+
+  --weights: #2e5c8a;      /* occupied memory: weights solid, KV hatched in this hue */
+  --weights-soft: #7fa6c9; /* KV tint / ghost preview fill */
+  --ready: #1e7b4b;        /* used ONLY for a verified-ready dot + the word "ready" */
+  --loading: #9a6b00;      /* starting / fetching / stopping / stale snapshot */
+  --fault: #8e2f45;        /* exited / failed / negative margin / overhang / destructive */
+  --focus: #2e5c8a;        /* keyboard focus ring — same hue as memory, on purpose */
+
+  --reserve-ink: #1f2a36;  /* reserve hatch is ink; it is held-back, not occupied */
+
+  --r: 5px;                /* the ONE radius, for surfaces. bars are square: a
+                              measurement has no rounded corners. */
+  --pad: 16px;
+  --gap: 12px;
+
+  --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+:root[data-theme="dark"], :root:not([data-theme="light"]) {
+  /* left as light by default; dark applied only under the media query so a
+   * host with no preference stays on paper. */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #12171d;
+    --surface: #1b222b;
+    --surface-sunk: #141a21;
+    --ink: #e6eaee;
+    --ink-soft: #9aa6b2;
+    --ink-faint: #6b7681;
+    --line: #2a333d;
+    --line-box: #313b46;
+    --weights: #6fa3d8;
+    --weights-soft: #3f5c7a;
+    --ready: #4cbf82;
+    --loading: #e0b040;
+    --fault: #e07a90;
+    --focus: #6fa3d8;
+    --reserve-ink: #8a94a0;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #12171d; --surface: #1b222b; --surface-sunk: #141a21;
+  --ink: #e6eaee; --ink-soft: #9aa6b2; --ink-faint: #6b7681;
+  --line: #2a333d; --line-box: #313b46;
+  --weights: #6fa3d8; --weights-soft: #3f5c7a; --ready: #4cbf82;
+  --loading: #e0b040; --fault: #e07a90; --focus: #6fa3d8; --reserve-ink: #8a94a0;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+}
+a { color: var(--weights); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--ink-soft); }
+
+/* ---- top bar ------------------------------------------------------------ */
+.topbar {
+  display: flex; align-items: baseline; gap: 24px;
+  padding: 14px var(--pad);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.topbar .brand { font-weight: 700; letter-spacing: 0.02em; font-size: 17px; }
+.topbar nav { display: flex; gap: 18px; }
+.topbar nav a { color: var(--ink-soft); }
+.topbar nav a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+.topbar .spacer { margin-left: auto; }
+.topbar .who { color: var(--ink-soft); font-size: 13px; }
+
+/* ---- flash banner ------------------------------------------------------- */
+.flash {
+  margin: 12px var(--pad) 0; padding: 10px 14px; border-radius: var(--r);
+  border: 1px solid var(--line-box); background: var(--surface);
+}
+.flash.err { border-color: var(--fault); color: var(--fault); }
+
+main { padding: var(--pad); max-width: 1180px; }
+
+h1 { font-size: 22px; font-weight: 650; margin: 4px 0 2px; }
+.lede { color: var(--ink-soft); max-width: 68ch; margin: 0 0 20px; }
+
+/* ---- the ruler ---------------------------------------------------------- */
+.ruler {
+  position: relative; height: 18px; margin: 8px 0 6px;
+  border-bottom: 1px solid var(--ink);
+}
+.ruler .tick {
+  position: absolute; bottom: 0; width: 1px; height: 6px; background: var(--ink);
+}
+.ruler .tick span {
+  position: absolute; bottom: 8px; left: 0; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 11px; color: var(--ink-soft); white-space: nowrap;
+}
+
+/* ---- node bay ----------------------------------------------------------- */
+.bay {
+  background: var(--surface); border: 1px solid var(--line-box);
+  border-radius: var(--r); padding: 14px; margin-bottom: var(--gap);
+}
+.bay.drop-ok { outline: 2px dashed var(--weights); outline-offset: 3px; }
+.bay.drop-bad { outline: 2px dashed var(--fault); outline-offset: 3px; }
+.bay.offline { border-style: dashed; }
+.bay.offline .bar { filter: grayscale(1) opacity(0.55); }
+.bay-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.bay-head .id { font-size: 17px; font-weight: 600; }
+.bay-head .free { margin-left: auto; font-family: var(--mono); font-size: 15px; }
+.bay-head .free.over { color: var(--fault); }
+.freshness { font-size: 12px; color: var(--ink-soft); width: 100%; margin-top: 2px; }
+.freshness.stale { color: var(--loading); }
+.freshness.gone { color: var(--fault); }
+
+/* the pool bar — width set inline to pool*--gib */
+.bar {
+  position: relative; height: 46px; margin: 10px 0 4px;
+  display: flex; background: var(--surface-sunk);
+  border: 1px solid var(--ink); border-radius: 2px; overflow: hidden;
+}
+.seg { position: relative; height: 100%; overflow: hidden; border-right: 1px solid rgba(31,42,54,.18); }
+.seg:last-child { border-right: 0; }
+.seg .lab {
+  position: absolute; inset: 0; padding: 3px 6px; font-size: 11px; line-height: 1.2;
+  color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.seg.weights { background: var(--weights); }
+.seg.kv {
+  background-color: var(--weights);
+  background-image: repeating-linear-gradient(45deg, transparent 0 5px, rgba(255,255,255,.35) 5px 6px);
+}
+.seg.free { background: transparent; }
+.seg.free .lab { color: var(--ink-soft); }
+.seg.reserve {
+  background-color: transparent;
+  background-image: repeating-linear-gradient(45deg, transparent 0 6px, color-mix(in srgb, var(--reserve-ink) 45%, transparent) 6px 7px);
+}
+.seg.reserve .lab { color: var(--ink-soft); }
+.seg.transitional {
+  background-color: var(--loading);
+  background-image: repeating-linear-gradient(45deg, transparent 0 5px, rgba(255,255,255,.30) 5px 6px);
+}
+.seg.fault { background: var(--fault); }
+/* ghost preview injected during a drag */
+.seg.ghost {
+  background: color-mix(in srgb, var(--weights-soft) 60%, transparent);
+  border: 1px dashed var(--ink);
+}
+.seg.ghost.over { background: color-mix(in srgb, var(--fault) 45%, transparent); }
+
+.warnline { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--loading); }
+
+/* per-deployment status row under a bay */
+.dep {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 0; border-top: 1px solid var(--line-box); font-size: 14px;
+}
+.dep:first-of-type { border-top: 0; }
+.dep .name { font-family: var(--mono); }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.ready { background: var(--ready); }
+.dot.transitional { background: var(--loading); }
+.dot.fault { background: var(--fault); }
+.dot.unknown { background: var(--ink-faint); }
+.state { font-size: 13px; color: var(--ink-soft); }
+.state.ready { color: var(--ready); }
+.state.transitional { color: var(--loading); }
+.state.fault { color: var(--fault); }
+
+/* ---- model shelf -------------------------------------------------------- */
+.shelf-head { display: flex; align-items: baseline; gap: 16px; margin: 26px 0 8px; flex-wrap: wrap; }
+.shelf-head h2 { font-size: 18px; margin: 0; font-weight: 600; }
+.filters { display: flex; gap: 12px; font-size: 13px; }
+.filters a { color: var(--ink-soft); }
+.filters a[aria-current="true"] { color: var(--ink); font-weight: 600; }
+
+.model {
+  display: grid; grid-template-columns: 200px 1fr auto; align-items: center;
+  gap: 14px; padding: 9px 0; border-top: 1px solid var(--line);
+}
+.model:first-child { border-top: 0; }
+.model.archived { opacity: 0.5; }
+.model .handle { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.model .grip { color: var(--ink-faint); cursor: grab; user-select: none; }
+.model[draggable="true"]:active .grip { cursor: grabbing; }
+.model .title { font-family: var(--mono); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model .mbar { position: relative; height: 22px; background: var(--surface-sunk); border: 1px solid var(--line-box); border-radius: 2px; overflow: hidden; }
+.model .mbar .fill { height: 100%; background: var(--weights); }
+.model .mbar .foot { position: absolute; inset: 0; padding: 2px 6px; font-family: var(--mono); font-size: 11px; color: var(--ink); }
+.model .status { font-size: 13px; color: var(--ink-soft); text-align: right; white-space: nowrap; }
+.model .status .on { color: var(--ready); }
+
+/* ---- buttons & forms ---------------------------------------------------- */
+.btn, .btn-primary, .btn-danger {
+  font: inherit; font-size: 14px; padding: 7px 13px; border-radius: var(--r);
+  border: 1px solid var(--ink); background: var(--surface); color: var(--ink);
+  cursor: pointer; text-decoration: none; display: inline-block; line-height: 1.2;
+}
+.btn:hover, .btn-primary:hover, .btn-danger:hover { text-decoration: none; }
+.btn-primary { background: var(--ink); color: var(--surface); }
+.btn-danger { border-color: var(--fault); color: var(--fault); background: var(--surface); }
+.btn-danger:hover { background: var(--fault); color: #fff; }
+.btn:disabled, .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* the deploy-to menu (no-JS path, and the keyboard path) */
+details.deploy-to { position: relative; display: inline-block; }
+details.deploy-to > summary {
+  list-style: none; cursor: pointer;
+  font-size: 14px; padding: 7px 13px; border-radius: var(--r);
+  border: 1px solid var(--ink); background: var(--ink); color: var(--surface);
+}
+details.deploy-to > summary::-webkit-details-marker { display: none; }
+details.deploy-to[open] > .menu {
+  position: absolute; right: 0; z-index: 20; margin-top: 4px; min-width: 240px;
+  background: var(--surface); border: 1px solid var(--ink); border-radius: var(--r);
+  padding: 6px; box-shadow: 0 6px 20px rgba(31,42,54,.18);
+}
+.menu .node-choice { width: 100%; text-align: left; border: 0; background: transparent;
+  padding: 8px 10px; border-radius: 4px; cursor: pointer; font: inherit; color: var(--ink); }
+.menu .node-choice:hover { background: var(--surface-sunk); }
+.menu .node-choice:disabled { color: var(--ink-faint); cursor: not-allowed; }
+.menu .node-choice .fit { float: right; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+.menu .node-choice .fit.over { color: var(--fault); }
+
+/* the confirm sheet — ONE plain button, never type-the-name */
+.confirm-sheet {
+  border: 1px solid var(--ink); border-radius: var(--r); background: var(--surface);
+  padding: 14px; margin: 10px 0;
+}
+.confirm-sheet.danger { border-color: var(--fault); }
+.confirm-sheet .why { color: var(--ink-soft); font-size: 14px; margin: 6px 0 12px; max-width: 64ch; }
+
+/* the vLLM boot sequence — an actual ordered sequence, so numbered */
+ol.stages { margin: 10px 0; padding-left: 0; list-style: none; counter-reset: stage; }
+ol.stages li { counter-increment: stage; display: flex; gap: 10px; padding: 4px 0; align-items: baseline; }
+ol.stages li::before {
+  content: counter(stage); font-family: var(--mono); font-size: 12px;
+  color: var(--ink-soft); border: 1px solid var(--line-box); border-radius: 50%;
+  width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+ol.stages li.done::before { color: var(--ready); border-color: var(--ready); content: "\2713"; }
+ol.stages li.active::before { color: var(--loading); border-color: var(--loading); }
+
+.field { display: block; margin: 12px 0; }
+.field label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 4px; }
+.field input, .field textarea, .field select {
+  font: inherit; width: 100%; max-width: 520px; padding: 8px 10px;
+  border: 1px solid var(--line-box); border-radius: var(--r);
+  background: var(--surface); color: var(--ink);
+}
+.field textarea { min-height: 180px; font-family: var(--mono); font-size: 13px; }
+
+/* copy-a-secret control — works over plain HTTP (no navigator.clipboard) */
+.secret-row { display: flex; gap: 8px; align-items: center; max-width: 640px; }
+.secret-row input {
+  flex: 1; font-family: var(--mono); font-size: 13px; padding: 8px 10px;
+  border: 1px solid var(--ink); border-radius: var(--r); background: var(--surface-sunk); color: var(--ink);
+}
+.copy-hint { font-size: 12px; color: var(--ink-soft); min-height: 1em; }
+.copy-hint.ok { color: var(--ready); }
+
+.empty { color: var(--ink-soft); padding: 24px 0; }
+
+/* reduced motion: nothing animates that the operator did not trigger, but be
+   explicit for any transition added later. */
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* phone */
+@media (max-width: 720px) {
+  main { padding: 12px; }
+  .model { grid-template-columns: 1fr; gap: 6px; }
+  .model .status { text-align: left; }
+  .bay-head .free { margin-left: 0; width: 100%; }
+}
