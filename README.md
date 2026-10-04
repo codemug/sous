@@ -207,6 +207,16 @@ work. Every deployment is listed by `/v1/models` **including ones that are not
 ready**, each carrying its phase — hiding a loading model would make a client
 that polls conclude it does not exist.
 
+Models running on other nodes are listed too, each with the `node` it is on. A
+node's model is listed under its **recipe id**, because that is the name the
+gateway routes to a node by; its `served_as` names are not listed, since a
+request under one would not reach it. Its `phase` is the node's word for the
+container (`running`, `exited`, …) — a node does not report whether the model
+inside has finished loading. A node that has disconnected takes its models off
+the list with it. A recipe running on more than one node is listed once, against
+the node its requests go to: one where the container is running if there is one,
+and the lowest node id among those.
+
 Requests to a model that is not ready get a described `503` rather than a
 refused connection:
 

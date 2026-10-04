@@ -62,3 +62,63 @@ func TestNodeForFindsTheConnectedNodeRunningARecipe(t *testing.T) {
 		t.Fatal("expected NodeFor to report not-found for an undeployed recipe")
 	}
 }
+
+// ---- one recipe on more than one node --------------------------------------
+
+func twoNodes(aPhase, bPhase string) *Catalog {
+	c := New()
+	c.ReplaceSnapshot("node-b", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "qwen", Phase: bPhase}}})
+	c.ReplaceSnapshot("node-a", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "qwen", Phase: aPhase}}})
+	return c
+}
+
+// NodeFor used to return whichever node Go's map iteration reached first, so
+// requests for one model were spread over its nodes at random - and nothing
+// could say, ahead of a request, where it would go.
+func TestNodeForPicksTheSameNodeEveryTime(t *testing.T) {
+	c := twoNodes("running", "running")
+	for i := 0; i < 200; i++ {
+		if got, _ := c.NodeFor("qwen"); got != "node-a" {
+			t.Fatalf("call %d went to %q, want node-a (lowest id) every time", i, got)
+		}
+	}
+}
+
+// A node whose container has exited cannot answer. When another node has the
+// same recipe running, that one gets the request.
+func TestNodeForPrefersANodeWhereTheContainerIsRunning(t *testing.T) {
+	c := twoNodes("exited", "running")
+	for i := 0; i < 200; i++ {
+		if got, _ := c.NodeFor("qwen"); got != "node-b" {
+			t.Fatalf("call %d went to %q, want node-b, the one where it is running", i, got)
+		}
+	}
+	// With nowhere running, it is still found: the request is forwarded and the
+	// node answers for itself.
+	c = twoNodes("exited", "exited")
+	if got, ok := c.NodeFor("qwen"); !ok || got != "node-a" {
+		t.Fatalf("NodeFor = %q, %v; want node-a, true", got, ok)
+	}
+}
+
+// Placements is what a listing reads. It must name, for every recipe, the node
+// NodeFor routes to - the two answering differently is a listing that lies.
+func TestPlacementsAgreeWithNodeFor(t *testing.T) {
+	c := twoNodes("exited", "running")
+	c.ReplaceSnapshot("node-c", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "asr", Phase: "running"}}})
+	c.ReplaceSnapshot("node-gone", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "kokoro", Phase: "running"}}})
+	c.MarkDisconnected("node-gone")
+
+	ps := c.Placements()
+	if len(ps) != 2 || ps[0].Deployment.RecipeId != "asr" || ps[1].Deployment.RecipeId != "qwen" {
+		t.Fatalf("want asr then qwen (each once, sorted, nothing from a disconnected node), got %+v", ps)
+	}
+	for _, p := range ps {
+		if want, _ := c.NodeFor(p.Deployment.RecipeId); p.NodeID != want {
+			t.Errorf("%s: placed on %q but routed to %q", p.Deployment.RecipeId, p.NodeID, want)
+		}
+	}
+	if ps[1].Deployment.Phase != "running" {
+		t.Errorf("qwen is placed with phase %q, want the phase of the node it is routed to", ps[1].Deployment.Phase)
+	}
+}

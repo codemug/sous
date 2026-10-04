@@ -1375,3 +1375,256 @@ func TestCredentialsNeverReachTheModelOnTheNodePath(t *testing.T) {
 		t.Errorf("an ordinary header was dropped along with the credentials: %v", head.GetHeaders())
 	}
 }
+
+// ---- /v1/models across nodes -----------------------------------------------
+
+func listed(t *testing.T, g *Gateway, req *http.Request) []modelObj {
+	t.Helper()
+	if req == nil {
+		req = httptest.NewRequest("GET", "/v1/models", nil)
+	}
+	rr := httptest.NewRecorder()
+	g.ListModels(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /v1/models = %d: %s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Object string     `json:"object"`
+		Data   []modelObj `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("not JSON: %v: %s", err, rr.Body.String())
+	}
+	if out.Object != "list" {
+		t.Fatalf("object = %q", out.Object)
+	}
+	return out.Data
+}
+
+func byID(ms []modelObj) map[string]modelObj {
+	out := map[string]modelObj{}
+	for _, m := range ms {
+		out[m.ID] = m
+	}
+	return out
+}
+
+// gx10 is a node catalog holding what asus-gx10 really reported on 2026-10-04.
+func gx10(t *testing.T) (*nodecatalog.Catalog, *grpcserver.Server) {
+	t.Helper()
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10",
+		Deployments: []*pb.DeploymentState{
+			{RecipeId: "qwen38-27b", Phase: "running", HostPort: 18000},
+			{RecipeId: "asr", Phase: "running"},
+		},
+	})
+	return nodes, grpcserver.New(nodes, nil)
+}
+
+// THE BUG THIS EXISTS FOR. sous-api runs on a control-plane node and every
+// model runs somewhere else, so the only deployments there are, are on nodes.
+// ListModels read the LOCAL deployments and nothing else, and answered
+// {"data":[]} with a model serving requests through this same gateway - which
+// reads, to any client that picks a model from the list, as "nothing here".
+func TestListModelsIncludesModelsRunningOnNodes(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	// No local deployments at all - the control-plane case.
+	g := &Gateway{Res: &fakeRes{}, Nodes: nodes, GRPC: gsrv,
+		Cat: fakeCat{"qwen38-27b": {ID: "qwen38-27b", Modality: recipe.ModalityText}}}
+
+	got := byID(listed(t, g, nil))
+	m, ok := got["qwen38-27b"]
+	if !ok {
+		t.Fatalf("a model running on a node is not listed: %v", got)
+	}
+	if m.Node != "asus-gx10" || m.RecipeID != "qwen38-27b" || m.Phase != "running" {
+		t.Errorf("listed as %+v, want node asus-gx10, recipe qwen38-27b, phase running", m)
+	}
+	if m.Modality != string(recipe.ModalityText) {
+		t.Errorf("modality = %q, want it taken from the recipe", m.Modality)
+	}
+	if m.Object != "model" || m.OwnedBy != "sous" {
+		t.Errorf("not the OpenAI shape: %+v", m)
+	}
+	if _, ok := got["asr"]; !ok {
+		t.Error("the node's second deployment is missing")
+	}
+}
+
+// The pure multi-node end state has no local resolver at all. Listing must not
+// need one.
+func TestListModelsOnNodesNeedsNoLocalResolver(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	if got := byID(listed(t, g, nil)); len(got) != 2 {
+		t.Fatalf("want the node's two models, got %v", got)
+	}
+}
+
+// A LISTED NAME MUST BE ONE THE GATEWAY WILL ROUTE. The node path routes by
+// recipe id and by nothing else, so that is the id a node's model is listed
+// under - listing a served_as name there would advertise a name every request
+// for it is answered 404.
+func TestEveryListedNodeModelIsOneTheGatewayRoutes(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv,
+		Cat: fakeCat{"qwen38-27b": {ID: "qwen38-27b", ServedAs: []string{"some-other-name"}}}}
+	ms := listed(t, g, nil)
+	if len(ms) == 0 {
+		t.Fatal("nothing listed, so nothing was checked")
+	}
+	for _, m := range ms {
+		if _, ok := nodes.NodeFor(m.ID); !ok {
+			t.Errorf("%q is listed but the gateway cannot route it", m.ID)
+		}
+	}
+}
+
+// A node that has dropped off cannot be proxied to, and Proxy already refuses
+// it. Its models must leave the list with it rather than be offered and fail.
+func TestListModelsOmitsADisconnectedNodesModels(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	nodes.MarkDisconnected("asus-gx10")
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	if got := listed(t, g, nil); len(got) != 0 {
+		t.Fatalf("a disconnected node's models are still listed: %v", got)
+	}
+}
+
+// A scoped key sees only its own models on nodes too - the same rule the local
+// path applies, and the same one Proxy enforces with a 403.
+func TestScopedKeySeesOnlyItsOwnNodeModels(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req = req.WithContext(auth.WithKeyForTest(req.Context(), auth.KeyInfo{Name: "voice demo", Models: []string{"asr"}}))
+	got := byID(listed(t, g, req))
+	if _, ok := got["asr"]; !ok || len(got) != 1 {
+		t.Fatalf("a key scoped to asr should see exactly asr, got %v", got)
+	}
+}
+
+// Local deployments are listed exactly as before, and a name is never listed
+// twice. When the same id runs both here and on a node, the node's entry is the
+// one shown, because the node is where Proxy would send the request.
+func TestLocalAndNodeModelsAreListedTogetherOnce(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: 8000}, {RecipeID: "asr", HostPort: 8006}}}
+	cat := fakeCat{"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}}, "asr": {ID: "asr"}}
+	g := &Gateway{Res: res, Cat: cat, Host: "127.0.0.1", Nodes: nodes, GRPC: gsrv}
+
+	all := listed(t, g, nil)
+	got := byID(all)
+	if len(got) != len(all) {
+		t.Fatalf("a name is listed more than once: %v", all)
+	}
+	if _, ok := got["ornith"]; !ok {
+		t.Errorf("the local model lost its alias in the listing: %v", got)
+	}
+	if got["ornith"].Node != "" {
+		t.Errorf("a local model was given a node: %+v", got["ornith"])
+	}
+	if got["asr"].Node != "asus-gx10" {
+		t.Errorf("asr runs both here and on a node; listed as %+v, want the node's entry", got["asr"])
+	}
+	if _, ok := got["qwen38-27b"]; !ok {
+		t.Errorf("the node-only model is missing: %v", got)
+	}
+}
+
+// One recipe on two nodes is listed once, against the node a request for it
+// goes to, with that node's phase - not against whichever sorts first.
+func TestAModelOnTwoNodesIsListedWhereItIsRouted(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("node-a", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "qwen", Phase: "exited"}}})
+	nodes.ReplaceSnapshot("node-b", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "qwen", Phase: "running"}}})
+	g := &Gateway{Nodes: nodes, GRPC: grpcserver.New(nodes, nil)}
+
+	ms := listed(t, g, nil)
+	if len(ms) != 1 {
+		t.Fatalf("want qwen listed once, got %v", ms)
+	}
+	routed, _ := nodes.NodeFor("qwen")
+	if ms[0].Node != routed || ms[0].Phase != "running" {
+		t.Errorf("listed on %q as %q, but requests go to %q where it is running", ms[0].Node, ms[0].Phase, routed)
+	}
+}
+
+// A local model whose every listed name is taken by a node's model is still
+// reachable under its recipe id, so that is what it is listed as - it must not
+// vanish from the list while still answering requests.
+func TestALocalModelShadowedByANodeIsListedByItsRecipeID(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "ornith", Phase: "running"}}})
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: 8000}}}
+	cat := fakeCat{"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}}}
+	g := &Gateway{Res: res, Cat: cat, Host: "127.0.0.1", Nodes: nodes, GRPC: grpcserver.New(nodes, nil)}
+
+	got := byID(listed(t, g, nil))
+	if got["ornith"].Node != "asus-gx10" {
+		t.Errorf("ornith should be the node's model, got %+v", got["ornith"])
+	}
+	m, ok := got["ornith15"]
+	if !ok || m.Node != "" || m.Port != 8000 {
+		t.Fatalf("the local model dropped off the list, or is not listed as local: %v", got)
+	}
+
+	// And a key scoped to it sees it, as it may use it.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req = req.WithContext(authWithKey(req.Context(), []string{"ornith15"}))
+	if scoped := byID(listed(t, g, req)); len(scoped) != 1 || scoped["ornith15"].ID == "" {
+		t.Errorf("a key scoped to ornith15 should see exactly ornith15, got %v", scoped)
+	}
+}
+
+// A node publishes a model on its own loopback. That port means nothing to
+// anyone reading this list, and next to a local entry's port - which is on
+// this host - it would be read as one that does.
+func TestNodeModelsCarryNoPort(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	for _, m := range listed(t, g, nil) {
+		if m.Port != 0 {
+			t.Errorf("%s is listed with port %d", m.ID, m.Port)
+		}
+	}
+}
+
+// Proxy only takes the node path when it has a gRPC server to take it over.
+// Without one a node's models cannot be reached, so they are not offered.
+func TestNodeModelsAreNotListedWithoutAWayToReachThem(t *testing.T) {
+	nodes, _ := gx10(t)
+	g := &Gateway{Res: &fakeRes{}, Nodes: nodes}
+	if got := listed(t, g, nil); len(got) != 0 {
+		t.Fatalf("listed models there is no path to: %v", got)
+	}
+}
+
+// The recipe-id fallback must not list an id another local model already owns
+// as a name: aliases are resolved before recipe ids, so a request for it goes
+// to that other model, and listing it here would list the id twice.
+func TestRecipeIDFallbackYieldsToAnotherModelsName(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "ornith", Phase: "running"}}})
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: 8000}, {RecipeID: "other", HostPort: 8001}}}
+	cat := fakeCat{
+		"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}},
+		"other":    {ID: "other", ServedAs: []string{"Ornith15"}},
+	}
+	g := &Gateway{Res: res, Cat: cat, Host: "127.0.0.1", Nodes: nodes, GRPC: grpcserver.New(nodes, nil)}
+
+	n := 0
+	for _, m := range listed(t, g, nil) {
+		if strings.EqualFold(m.ID, "ornith15") {
+			n++
+			if m.RecipeID != "other" {
+				t.Errorf("ornith15 is listed for recipe %q, but a request for it resolves to other", m.RecipeID)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ornith15 listed %d times, want once", n)
+	}
+}
