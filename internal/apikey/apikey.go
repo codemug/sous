@@ -1,4 +1,5 @@
-// Package apikey issues credentials that can call models and nothing else.
+// Package apikey issues credentials that can call models and, unless asked
+// otherwise by name, nothing else.
 //
 // WHY A SECOND KIND OF CREDENTIAL. SOUS_API_TOKEN and the operator password are
 // root-equivalent by construction: anything holding one can deploy, undeploy,
@@ -7,10 +8,23 @@
 // and there is no way to walk it back short of rotating the token and breaking
 // every other caller at the same time.
 //
-// So keys issued here unlock the INFERENCE surface only. A leaked key spends
+// So a key issued here unlocks the INFERENCE surface only. A leaked key spends
 // GPU time; it cannot change what is deployed. That asymmetry is the whole
 // point, and it is enforced in one place - Scope - rather than by remembering
 // to check at each handler.
+//
+// AND THEN ADMIN KEYS, for the caller the paragraph above leaves out: the
+// script that genuinely has to deploy. It needs a root-equivalent credential
+// whatever is done here, and the only one on offer was the single shared
+// token - unnamed, unlisted, with no record of when it was last used, and
+// revocable only by breaking everyone at once. An admin key is that same power
+// with the properties a key has: a name, a row in the list, a last-used time,
+// and a revoke button of its own.
+//
+// It is the exception and is built to stay one. Generate and Create still
+// issue inference keys and take no argument that could make them anything
+// else; an admin key comes from GenerateAdmin and CreateAdmin, so the
+// dangerous path has to be asked for by name at every call site.
 //
 // STORED AS A HASH, never plaintext. The full key is returned exactly once, at
 // creation, and cannot be recovered afterwards: a store that can show a key
@@ -39,6 +53,35 @@ import (
 // minute and hunting for its owner.
 const Prefix = "sk-sous-"
 
+// Permission is what a key may reach.
+type Permission string
+
+const (
+	// Inference reaches /v1/* and nothing else. It is also what the ABSENCE of
+	// a permission means, which is what every key issued before permissions
+	// existed has on disk.
+	Inference Permission = "inference"
+	// Admin reaches everything the admin token does: the control plane, the
+	// dashboard, and inference.
+	Admin Permission = "admin"
+)
+
+// ParsePermission reads a permission as an operator typed or posted it.
+//
+// Empty means inference, so a caller that has never heard of permissions keeps
+// getting the key it always got. An unknown word is an ERROR rather than a
+// default: quietly issuing an inference key to someone who asked for "root"
+// hides their mistake, and quietly issuing an admin one would be worse.
+func ParsePermission(s string) (Permission, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(Inference):
+		return Inference, nil
+	case string(Admin):
+		return Admin, nil
+	}
+	return "", fmt.Errorf("unknown permission %q: use %q or %q", s, Inference, Admin)
+}
+
 // Key is one issued credential, as stored. The secret itself is NOT here.
 type Key struct {
 	// ID is the stable handle used to revoke. Safe to log and display.
@@ -62,6 +105,18 @@ type Key struct {
 	// id, case-insensitively.
 	Models []string `yaml:"models,omitempty" json:"models,omitempty"`
 
+	// Permission is what this key may reach. EMPTY MEANS INFERENCE, for the
+	// same reason an empty Models means all: every key file written before
+	// this field existed lacks it, and those keys must come back exactly as
+	// they were. Inference keys are still written without it, so a key file is
+	// byte-for-byte what it was - and a binary from before this change, reading
+	// an admin key's file, ignores the field and treats it as an inference key.
+	// A downgrade narrows; it never widens.
+	//
+	// Read it through Admin and Perm, not directly: only the exact stored word
+	// grants anything.
+	Permission Permission `yaml:"permission,omitempty" json:"-"`
+
 	CreatedAt time.Time `yaml:"created_at" json:"created_at"`
 	// LastUsedAt answers the question that decides whether a key can be
 	// revoked safely. Zero means never used, which is the easiest case of all.
@@ -79,8 +134,26 @@ type Key struct {
 // Active reports whether this key may still authenticate.
 func (k Key) Active() bool { return !k.Disabled }
 
-// Generate mints a new key, returning the record to store and the secret to
-// show the operator once.
+// Admin reports whether this key reaches the control plane.
+//
+// AN EXACT MATCH, deliberately not ParsePermission's forgiving one. That
+// function reads what a person typed; this reads a file on disk, where a
+// hand-edited "Admin" or "root" must fail closed into an inference key rather
+// than be interpreted.
+func (k Key) Admin() bool { return k.Permission == Admin }
+
+// Perm is the permission to show: never empty, so a listing always says what a
+// key may do.
+func (k Key) Perm() Permission {
+	if k.Admin() {
+		return Admin
+	}
+	return Inference
+}
+
+// MayReach reports whether this key may be used on a path.
+func (k Key) MayReach(path string) bool { return k.Admin() || Scope(path) }
+
 // Allows reports whether this key may use a given model name.
 //
 // An empty allowlist means every model - see Models. Matching is
@@ -102,7 +175,21 @@ func (k Key) Allows(model string) bool {
 // Scoped reports whether this key is limited to particular models.
 func (k Key) Scoped() bool { return len(k.Models) > 0 }
 
+// Generate mints a new INFERENCE key, returning the record to store and the
+// secret to show the operator once.
 func Generate(name string, models ...string) (Key, string, error) {
+	return generate(name, Inference, models)
+}
+
+// GenerateAdmin mints a key with the admin permission.
+//
+// NO MODEL LIST, by signature rather than by a check. An allowlist on a key
+// that can deploy any model it likes would promise a limit nothing enforces.
+func GenerateAdmin(name string) (Key, string, error) {
+	return generate(name, Admin, nil)
+}
+
+func generate(name string, perm Permission, models []string) (Key, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Key{}, "", errors.New("a key needs a name; an unattributable key is one nobody dares revoke")
@@ -124,14 +211,19 @@ func Generate(name string, models ...string) (Key, string, error) {
 		return Key{}, "", fmt.Errorf("apikey: entropy unavailable: %w", err)
 	}
 
-	return Key{
+	k := Key{
 		ID:        hex.EncodeToString(idb),
 		Name:      name,
 		Models:    cleanModels(models),
 		Hint:      tail(secret),
 		Hash:      Hash(secret),
 		CreatedAt: time.Now().UTC(),
-	}, secret, nil
+	}
+	// Only admin is written down; inference stays the absence of the field.
+	if perm == Admin {
+		k.Permission = Admin
+	}
+	return k, secret, nil
 }
 
 // Hash is the stored form. Exported so the verifier and the issuer cannot drift
@@ -174,7 +266,8 @@ func Verify(keys []Key, secret string) (Key, bool) {
 	return found, ok
 }
 
-// MarshalJSON omits a never-used timestamp rather than emitting the zero time.
+// MarshalJSON omits a never-used timestamp rather than emitting the zero time,
+// and always names the permission.
 //
 // encoding/json cannot omitempty a struct, so the tag alone would put
 // "0001-01-01T00:00:00Z" on the wire for every key that has never been used -
@@ -184,8 +277,12 @@ func (k Key) MarshalJSON() ([]byte, error) {
 	type plain Key
 	out := struct {
 		plain
+		// ALWAYS PRESENT, unlike on disk. Omitting it for inference keys would
+		// make a missing field mean two things to a client: an inference key,
+		// or a server too old to know the difference.
+		Permission Permission `json:"permission"`
 		LastUsedAt *time.Time `json:"last_used_at,omitempty"`
-	}{plain: plain(k)}
+	}{plain: plain(k), Permission: k.Perm()}
 	if !k.LastUsedAt.IsZero() {
 		t := k.LastUsedAt
 		out.LastUsedAt = &t

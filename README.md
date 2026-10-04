@@ -278,7 +278,8 @@ model hands the notebook the ability to destroy the node, and revoking it later
 breaks every other caller at the same time.
 
 So keys issued from the dashboard reach the **inference surface and nothing
-else**. A leaked key spends GPU time; it cannot change what is deployed.
+else**, unless you ask otherwise. A leaked key spends GPU time; it cannot change
+what is deployed.
 
 ```bash
 curl $SOUS/v1/chat/completions \
@@ -306,6 +307,45 @@ gets **403**, not 404: the model is real, and the caller should learn their
 credential is the problem rather than go hunting for a typo. `/v1/models` lists
 only what the key can reach, so it never advertises a model every request for it
 will be refused.
+
+### Admin keys
+
+Some callers really do have to deploy: the script that rolls a model, the CI job
+that reconciles a fleet. They need a root-equivalent credential whatever Sous
+does, and the only one on offer used to be the shared `SOUS_API_TOKEN` —
+unnamed, unlisted, with no record of when it was last used, and revocable only
+by breaking every other caller at once.
+
+A key can be issued with the **admin permission** instead:
+
+```bash
+curl -X POST $SOUS/api/keys -H "Authorization: Bearer $SOUS_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"fleet automation","permission":"admin"}'
+```
+
+It reaches everything the admin token does — the control plane, the dashboard
+and inference — and is presented the same way as any other key:
+
+```bash
+curl $SOUS/api/nodes -H "Authorization: Bearer sk-sous-…"
+```
+
+What it adds over sharing the token is everything a key already had: a name, a
+row on the Keys page marked `admin`, a last-used time, and a revoke button that
+stops that one caller and nobody else.
+
+- `permission` is `inference` or `admin`. Absent means `inference`, so nothing
+  that issued keys before changes what it gets, and every key issued before this
+  existed is an inference key. An unknown value is a **400**, not a default.
+- An admin key **cannot carry a model list**. A key that can deploy any model
+  cannot meaningfully be limited to some of them, so the combination is refused
+  rather than stored as a restriction that is not one.
+- It is **root-equivalent**, including on the Keys API: an admin key can issue
+  and revoke keys, admin ones included. Give one only to something you would
+  have given the token.
+- Listings always name the permission (`"permission":"inference"` or
+  `"permission":"admin"`).
 
 Keys are **stored as SHA-256 hashes** and the plaintext is shown exactly once,
 at creation. It is not recoverable afterwards by anyone, including whoever runs

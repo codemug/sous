@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/codemug/sous/internal/auth"
 )
 
 // browserPost mimics a form submitted from the dashboard: the Accept header is
@@ -113,5 +115,195 @@ func TestCreatingAnUnnamedKeyIsRefused(t *testing.T) {
 	rr := post(t, h, "/api/keys", "application/json", `{"name":""}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("unnamed key = %d, want 400", rr.Code)
+	}
+}
+
+// ---- permissions ----------------------------------------------------------
+
+// tokenServer is a server with auth ON and an admin token, because these tests
+// are about what a credential may reach - with auth off everything is
+// reachable and they would prove nothing.
+func tokenServer(t *testing.T) http.Handler {
+	t.Helper()
+	return buildServerAuth(t, auth.Config{Token: "admin-tok"})
+}
+
+func as(t *testing.T, h http.Handler, bearer, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Accept", "application/json")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+// issue creates a key with the admin token and returns its id, secret and the
+// permission the API reported for it.
+func issue(t *testing.T, h http.Handler, body string) (id, secret, permission string) {
+	t.Helper()
+	rr := as(t, h, "admin-tok", http.MethodPost, "/api/keys", body)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create %s = %d: %s", body, rr.Code, rr.Body.String())
+	}
+	var made struct {
+		Key struct {
+			ID         string `json:"id"`
+			Permission string `json:"permission"`
+		} `json:"key"`
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &made); err != nil {
+		t.Fatal(err)
+	}
+	return made.Key.ID, made.Secret, made.Key.Permission
+}
+
+// THE FEATURE, END TO END: a key issued with the admin permission drives the
+// admin API through the real middleware, and one issued without it still
+// cannot.
+func TestAnAdminKeyIssuedOverTheAPIReachesTheAdminAPI(t *testing.T) {
+	h := tokenServer(t)
+
+	_, admin, perm := issue(t, h, `{"name":"fleet automation","permission":"admin"}`)
+	if perm != "admin" {
+		t.Fatalf("the API reported permission %q for an admin key", perm)
+	}
+	for _, p := range []string{"/api/keys", "/api/status", "/v1/models"} {
+		if rr := as(t, h, admin, http.MethodGet, p, ""); rr.Code != http.StatusOK {
+			t.Errorf("GET %s with the admin key = %d, want 200: %.120s", p, rr.Code, rr.Body.String())
+		}
+	}
+	// It can do what the token can, including issuing keys - it is root-
+	// equivalent, and pretending otherwise for this one route would be a
+	// restriction with nothing behind it.
+	if rr := as(t, h, admin, http.MethodPost, "/api/keys", `{"name":"made by a key"}`); rr.Code != http.StatusCreated {
+		t.Errorf("POST /api/keys with the admin key = %d, want 201", rr.Code)
+	}
+
+	_, plain, perm := issue(t, h, `{"name":"notebook"}`)
+	if perm != "inference" {
+		t.Fatalf("the API reported permission %q for an ordinary key, want inference", perm)
+	}
+	for _, p := range []string{"/api/keys", "/api/status"} {
+		if rr := as(t, h, plain, http.MethodGet, p, ""); rr.Code != http.StatusUnauthorized {
+			t.Errorf("SCOPE HOLE: GET %s with an inference key = %d, want 401", p, rr.Code)
+		}
+	}
+	if rr := as(t, h, plain, http.MethodPost, "/api/keys", `{"name":"escalation","permission":"admin"}`); rr.Code != http.StatusUnauthorized {
+		t.Errorf("SCOPE HOLE: an inference key minted a key: %d", rr.Code)
+	}
+	if rr := as(t, h, plain, http.MethodGet, "/v1/models", ""); rr.Code != http.StatusOK {
+		t.Errorf("GET /v1/models with the inference key = %d, want 200", rr.Code)
+	}
+}
+
+// Saying "inference" out loud is the same as saying nothing.
+func TestAskingForInferenceByNameIsTheDefault(t *testing.T) {
+	h := tokenServer(t)
+	_, secret, perm := issue(t, h, `{"name":"notebook","permission":"inference"}`)
+	if perm != "inference" {
+		t.Fatalf("permission = %q", perm)
+	}
+	if rr := as(t, h, secret, http.MethodGet, "/api/keys", ""); rr.Code != http.StatusUnauthorized {
+		t.Errorf("SCOPE HOLE: an explicit inference key reached /api/keys: %d", rr.Code)
+	}
+}
+
+// Revoking is the point of an admin KEY over the shared token.
+func TestRevokingAnAdminKeyTakesTheAdminAPIAway(t *testing.T) {
+	h := tokenServer(t)
+	id, secret, _ := issue(t, h, `{"name":"fleet automation","permission":"admin"}`)
+	if rr := as(t, h, secret, http.MethodGet, "/api/keys", ""); rr.Code != http.StatusOK {
+		t.Fatalf("the admin key did not work before it was revoked: %d", rr.Code)
+	}
+	if rr := as(t, h, "admin-tok", http.MethodDelete, "/api/keys/"+id, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("revoke = %d: %s", rr.Code, rr.Body.String())
+	}
+	for _, p := range []string{"/api/keys", "/v1/models"} {
+		if rr := as(t, h, secret, http.MethodGet, p, ""); rr.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s with a revoked admin key = %d, want 401", p, rr.Code)
+		}
+	}
+}
+
+// An allowlist on a key that can deploy any model would promise a limit that
+// nothing enforces. Refuse it rather than store a restriction that is not one.
+func TestAnAdminKeyWithAModelListIsRefused(t *testing.T) {
+	h := tokenServer(t)
+	rr := as(t, h, "admin-tok", http.MethodPost, "/api/keys", `{"name":"confused","permission":"admin","models":["asr"]}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("admin + models = %d, want 400: %s", rr.Code, rr.Body.String())
+	}
+	if list := as(t, h, "admin-tok", http.MethodGet, "/api/keys", "").Body.String(); strings.Contains(list, "confused") {
+		t.Errorf("a refused key was stored anyway: %s", list)
+	}
+}
+
+func TestAnUnknownPermissionIsRefused(t *testing.T) {
+	h := tokenServer(t)
+	rr := as(t, h, "admin-tok", http.MethodPost, "/api/keys", `{"name":"typo","permission":"root"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("permission=root = %d, want 400: %s", rr.Code, rr.Body.String())
+	}
+	if list := as(t, h, "admin-tok", http.MethodGet, "/api/keys", "").Body.String(); strings.Contains(list, "typo") {
+		t.Errorf("a key was issued for a permission that does not exist: %s", list)
+	}
+}
+
+// The page has to offer the choice, default it to the safe one, and say plainly
+// which keys in the list are the dangerous kind.
+func TestKeysPageOffersThePermissionAndMarksAdminKeys(t *testing.T) {
+	h := newTestServer(t)
+
+	form := browserGet(t, h, "/keys").Body.String()
+	if !strings.Contains(form, `name="permission"`) {
+		t.Fatal("the new-key form has no permission field")
+	}
+	// Inference must be the option a hurried operator gets.
+	inf, adm := strings.Index(form, `value="inference"`), strings.Index(form, `value="admin"`)
+	if inf < 0 || adm < 0 || inf > adm {
+		t.Errorf("the permission field does not list inference first: inference@%d admin@%d", inf, adm)
+	}
+	if strings.Contains(form, `value="admin" selected`) || strings.Contains(form, `value="admin" checked`) {
+		t.Error("admin is preselected on the new-key form")
+	}
+
+	rr := browserPost(t, h, "/keys", "name=fleet+automation&permission=admin")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create returned %d: %.200s", rr.Code, rr.Body.String())
+	}
+	fresh := rr.Body.String()
+	if !realSecret.MatchString(fresh) {
+		t.Fatal("the fresh admin secret was not shown")
+	}
+	// The one moment the operator is holding the secret is the moment to say
+	// what it can do.
+	if !strings.Contains(fresh, "can deploy") {
+		t.Error("the page does not warn that the fresh key is an admin one")
+	}
+
+	browserPost(t, h, "/keys", "name=notebook")
+	list := browserGet(t, h, "/keys").Body.String()
+	if strings.Count(list, "chip is-admin") != 1 {
+		t.Errorf("want exactly one key marked admin in the list, found %d", strings.Count(list, "chip is-admin"))
+	}
+}
+
+// From the form, an admin key with a model list is refused with a message the
+// operator can read, not a silent drop of half of what they asked for.
+func TestKeysPageRefusesAnAdminKeyWithModels(t *testing.T) {
+	h := newTestServer(t)
+	rr := browserPost(t, h, "/keys", "name=confused&permission=admin&models=asr")
+	if rr.Code == http.StatusOK && realSecret.MatchString(rr.Body.String()) {
+		t.Fatal("an admin key with a model list was issued from the form")
+	}
+	if list := browserGet(t, h, "/keys").Body.String(); strings.Contains(list, "confused") {
+		t.Error("a refused key appears in the list")
 	}
 }

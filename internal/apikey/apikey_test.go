@@ -317,3 +317,189 @@ func TestScopeSurvivesTheStore(t *testing.T) {
 		t.Errorf("models = %v, want two after a round trip", list[0].Models)
 	}
 }
+
+// ---- permissions ----------------------------------------------------------
+
+var controlPlane = []string{
+	"/api/deploy/qwen36/asus-gx10", "/api/undeploy/qwen36/asus-gx10", "/api/recipes",
+	"/api/recipes/qwen36", "/api/keys", "/api/nodes", "/api/status", "/", "/keys",
+}
+
+// THE DEFAULT HAS TO STAY INFERENCE. Admin keys exist now, and the danger of
+// adding them is that the ordinary way of issuing a key starts handing out
+// more than it used to. It must not: a key made the way keys were always made
+// reaches models and nothing else.
+func TestAKeyIsInferenceOnlyUnlessAskedOtherwise(t *testing.T) {
+	k, _, err := Generate("laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.Admin() {
+		t.Fatal("an ordinary key came out with the admin permission")
+	}
+	if !k.MayReach("/v1/chat/completions") {
+		t.Error("an inference key cannot reach inference")
+	}
+	for _, p := range controlPlane {
+		if k.MayReach(p) {
+			t.Errorf("SCOPE HOLE: an inference key may reach %s", p)
+		}
+	}
+}
+
+// An admin key is the admin token with a name and a revoke button: it reaches
+// everything the token does, inference included.
+func TestAnAdminKeyReachesTheControlPlane(t *testing.T) {
+	k, secret, err := GenerateAdmin("fleet automation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !k.Admin() {
+		t.Fatal("GenerateAdmin returned a key without the admin permission")
+	}
+	if !strings.HasPrefix(secret, Prefix) {
+		t.Errorf("secret = %q, want the %q prefix", secret, Prefix)
+	}
+	for _, p := range append([]string{"/v1/chat/completions", "/v1/models"}, controlPlane...) {
+		if !k.MayReach(p) {
+			t.Errorf("an admin key may not reach %s", p)
+		}
+	}
+	// It carries no model list: there is nothing an allowlist could mean on a
+	// key that can deploy any model it likes.
+	if k.Scoped() {
+		t.Errorf("an admin key carries a model list: %v", k.Models)
+	}
+}
+
+// FAIL CLOSED ON A HAND-EDITED FILE. Keys are YAML on disk, and the only value
+// that grants admin is the exact word. Anything else - a typo, a different
+// case, a guess - is an inference key, not an error and not an admin.
+func TestOnlyTheExactWordGrantsAdmin(t *testing.T) {
+	for _, p := range []Permission{"", "inference", "Admin", "ADMIN", "admin ", " admin", "root", "true", "all"} {
+		if (Key{Permission: p}).Admin() {
+			t.Errorf("permission %q was treated as admin", p)
+		}
+	}
+	if !(Key{Permission: Admin}).Admin() {
+		t.Error("the admin permission itself was not recognised")
+	}
+}
+
+// Every key issued before permissions existed has no such field on disk. It
+// must come back exactly as it was: usable, and inference-only.
+func TestAKeyStoredBeforePermissionsExistedIsInferenceOnly(t *testing.T) {
+	m := newMgr(t)
+	old, secret, err := Generate("issued in v0.23")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What a v0.23 key file holds: no permission field at all.
+	legacy := map[string]any{
+		"id": old.ID, "name": old.Name, "hint": old.Hint, "hash": old.Hash,
+		"created_at": old.CreatedAt,
+	}
+	if err := m.Store.WriteYAML(store.KindAPIKey, old.ID, legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := m.Authenticate(secret)
+	if !ok {
+		t.Fatal("a key from before permissions existed stopped authenticating")
+	}
+	if got.Admin() {
+		t.Fatal("a key from before permissions existed came back as admin")
+	}
+	if got.MayReach("/api/recipes") {
+		t.Error("SCOPE HOLE: a legacy key may reach the control plane")
+	}
+}
+
+func TestAdminPermissionSurvivesTheStore(t *testing.T) {
+	m := newMgr(t)
+	k, secret, err := m.CreateAdmin("fleet automation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := m.Authenticate(secret)
+	if !ok {
+		t.Fatal("a freshly created admin key did not authenticate")
+	}
+	if got.ID != k.ID || !got.Admin() {
+		t.Errorf("authenticated as %q admin=%v, want %q admin=true", got.ID, got.Admin(), k.ID)
+	}
+	// And an ordinary key made beside it did not inherit anything.
+	_, plain, _ := m.Create("notebook")
+	if p, ok := m.Authenticate(plain); !ok || p.Admin() {
+		t.Errorf("the ordinary key: ok=%v admin=%v, want ok and not admin", ok, p.Admin())
+	}
+}
+
+// Revoking is the reason to issue an admin KEY instead of sharing the token:
+// it has to actually stop the key.
+func TestARevokedAdminKeyIsJustARevokedKey(t *testing.T) {
+	m := newMgr(t)
+	k, secret, _ := m.CreateAdmin("leaked")
+	if err := m.Revoke(k.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Authenticate(secret); ok {
+		t.Fatal("a revoked admin key still authenticates")
+	}
+}
+
+// The API always says what a key may do. Leaving the field out for inference
+// keys would make "no permission field" mean two things to a client: an
+// inference key, or a server too old to know the difference.
+func TestJSONAlwaysNamesThePermission(t *testing.T) {
+	plain, _, _ := Generate("notebook")
+	admin, _, _ := GenerateAdmin("fleet automation")
+	for want, k := range map[string]Key{"inference": plain, "admin": admin} {
+		b, err := json.Marshal(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"permission":"`+want+`"`) {
+			t.Errorf("JSON for the %s key does not name its permission: %s", want, b)
+		}
+	}
+}
+
+func TestParsePermission(t *testing.T) {
+	for in, want := range map[string]Permission{
+		"": Inference, "inference": Inference, "admin": Admin, " Admin ": Admin, "INFERENCE": Inference,
+	} {
+		got, err := ParsePermission(in)
+		if err != nil || got != want {
+			t.Errorf("ParsePermission(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	// A word it does not know is an error, never a default: silently issuing an
+	// inference key to someone who asked for "root" hides their mistake, and
+	// silently issuing an admin one would be worse.
+	for _, in := range []string{"root", "all", "true", "admin,inference"} {
+		if p, err := ParsePermission(in); err == nil {
+			t.Errorf("ParsePermission(%q) = %q, want an error", in, p)
+		}
+	}
+}
+
+// The guard is what auth actually calls, so it has to carry the permission
+// through - and must not invent it for a key that lacks it.
+func TestTheGuardReportsThePermission(t *testing.T) {
+	m := newMgr(t)
+	_, adminSecret, _ := m.CreateAdmin("fleet automation")
+	_, plainSecret, _ := m.Create("notebook", "asr")
+	g := Guard{M: m}
+
+	name, models, admin, ok := g.Authenticate(adminSecret)
+	if !ok || !admin || name != "fleet automation" || len(models) != 0 {
+		t.Errorf("admin key: name=%q models=%v admin=%v ok=%v", name, models, admin, ok)
+	}
+	name, models, admin, ok = g.Authenticate(plainSecret)
+	if !ok || admin || name != "notebook" || len(models) != 1 {
+		t.Errorf("inference key: name=%q models=%v admin=%v ok=%v", name, models, admin, ok)
+	}
+	if _, _, admin, ok := g.Authenticate("sk-sous-not-a-real-key"); ok || admin {
+		t.Errorf("an unknown secret: admin=%v ok=%v, want neither", admin, ok)
+	}
+}

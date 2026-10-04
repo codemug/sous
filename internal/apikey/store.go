@@ -56,10 +56,19 @@ func (m *Manager) List() ([]Key, error) {
 	return out, nil
 }
 
-// Create issues a key and returns the secret ONCE. It is never recoverable
-// afterwards, by anyone, including whoever runs this process.
+// Create issues an inference key and returns the secret ONCE. It is never
+// recoverable afterwards, by anyone, including whoever runs this process.
 func (m *Manager) Create(name string, models ...string) (Key, string, error) {
-	k, secret, err := Generate(name, models...)
+	return m.save(Generate(name, models...))
+}
+
+// CreateAdmin issues a key with the admin permission. See GenerateAdmin for
+// why it takes no model list.
+func (m *Manager) CreateAdmin(name string) (Key, string, error) {
+	return m.save(GenerateAdmin(name))
+}
+
+func (m *Manager) save(k Key, secret string, err error) (Key, string, error) {
 	if err != nil {
 		return Key{}, "", err
 	}
@@ -143,13 +152,17 @@ func (m *Manager) FlushLastUsed() {
 	}
 }
 
-// Scope decides what an API key may reach.
+// Scope decides what an INFERENCE key may reach - which is every key that was
+// not issued as an admin one.
 //
 // ONE PLACE, ON PURPOSE. The rule is "inference only", and expressing it as a
 // path predicate here means a route added later is refused by default rather
 // than exposed by an omission. A handler-by-handler check would eventually miss
 // one, and the failure mode of missing one is a notebook credential that can
 // undeploy a model.
+//
+// An admin key is not an exception carved into this rule. It skips the rule,
+// in Key.MayReach and in auth, so nothing here has to know that admin exists.
 func Scope(path string) bool {
 	return path == "/v1/models" || strings.HasPrefix(path, "/v1/")
 }
@@ -160,15 +173,16 @@ type Guard struct{ M *Manager }
 
 // Authenticate reports the key's NAME on success, which is what belongs in a
 // log line: an id identifies the row, a name identifies who to ask about it.
-func (g Guard) Authenticate(secret string) (string, []string, bool) {
+// admin says whether the key was issued with the admin permission.
+func (g Guard) Authenticate(secret string) (name string, models []string, admin, ok bool) {
 	if g.M == nil {
-		return "", nil, false
+		return "", nil, false, false
 	}
-	k, ok := g.M.Authenticate(secret)
-	if !ok {
-		return "", nil, false
+	k, found := g.M.Authenticate(secret)
+	if !found {
+		return "", nil, false, false
 	}
-	return k.Name, k.Models, true
+	return k.Name, k.Models, k.Admin(), true
 }
 
 func (g Guard) Scope(path string) bool { return Scope(path) }

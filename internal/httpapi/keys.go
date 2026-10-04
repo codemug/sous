@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -17,6 +18,9 @@ type keysPage struct {
 	// which is the intended behaviour and what the page says.
 	Fresh     string
 	FreshName string
+	// FreshAdmin says the key just shown carries the admin permission, so the
+	// page can say what it is at the one moment someone is holding it.
+	FreshAdmin bool
 }
 
 func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
@@ -31,15 +35,18 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 // createKey mints a key and returns the secret ONCE.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
+	permission := r.FormValue("permission")
 	var jsonModels []string
 	if name == "" {
 		var body struct {
-			Name   string   `json:"name"`
-			Models []string `json:"models"`
+			Name       string   `json:"name"`
+			Models     []string `json:"models"`
+			Permission string   `json:"permission"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err == nil {
 			name = strings.TrimSpace(body.Name)
 			jsonModels = body.Models
+			permission = body.Permission
 		}
 	}
 
@@ -50,7 +57,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		models = jsonModels
 	}
 
-	k, secret, err := s.keys.Create(name, models...)
+	k, secret, err := s.issueKey(name, permission, models)
 	if err != nil {
 		if wantsHTML(r) {
 			s.redirect(w, r, "/keys", err.Error(), true)
@@ -69,12 +76,35 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
-			d.Keys = &keysPage{Keys: all, Fresh: secret, FreshName: k.Name}
+			d.Keys = &keysPage{Keys: all, Fresh: secret, FreshName: k.Name, FreshAdmin: k.Admin()}
 			return nil
 		})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"key": k, "secret": secret})
+}
+
+// issueKey turns what a caller asked for into a key.
+//
+// Absent or "inference" is the key that has always been issued. "admin" is the
+// only thing that produces an admin key, and it goes through CreateAdmin - the
+// ordinary Create has no argument that could do it.
+func (s *Server) issueKey(name, permission string, models []string) (apikey.Key, string, error) {
+	perm, err := apikey.ParsePermission(permission)
+	if err != nil {
+		return apikey.Key{}, "", err
+	}
+	if perm != apikey.Admin {
+		return s.keys.Create(name, models...)
+	}
+	// REFUSED, NOT QUIETLY DROPPED. An allowlist on a key that can deploy any
+	// model promises a limit nothing enforces, and the caller who sent one
+	// believes they asked for a narrower key than they would get.
+	if len(models) > 0 {
+		return apikey.Key{}, "", errors.New("an admin key reaches every model and the control plane, " +
+			"so it cannot carry a model list. Leave models empty, or issue an inference key")
+	}
+	return s.keys.CreateAdmin(name)
 }
 
 func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {

@@ -26,6 +26,11 @@
 // present themselves, not about what they may do - an API token that could not
 // deploy would be useless, and one that can deploy is already as powerful as
 // the password.
+//
+// ISSUED API KEYS ARE A FOURTH WAY IN, and the one way whose reach depends on
+// the credential itself: a key reaches inference only, unless it was issued
+// with the admin permission, in which case it reaches what the token does.
+// See Config.Keys.
 package auth
 
 import (
@@ -53,25 +58,31 @@ type Config struct {
 	Disabled bool
 
 	// Keys authenticates issued API keys, which reach the inference surface and
-	// NOTHING ELSE.
+	// NOTHING ELSE - unless the key was issued with the admin permission.
 	//
-	// This is the point of them. User, Password and Token are all
+	// Inference-only is the point of them. User, Password and Token are all
 	// root-equivalent: a holder can deploy, undeploy and delete recipes. Giving
 	// one to a notebook so it can call a model hands it the ability to destroy
 	// the node, and revoking it later breaks every other caller at once.
 	// A key issued here spends GPU time and can do nothing else.
+	//
+	// An ADMIN key is for the caller that argument does not cover: automation
+	// that really must deploy. It is as powerful as Token, and exists so that
+	// power can be handed out under a name and taken back on its own, instead
+	// of by sharing the one token everything else also uses.
 	Keys KeyAuthenticator
 }
 
 // KeyAuthenticator resolves a presented secret to a key. An interface so auth
 // does not depend on the store, and so tests can supply one in a line.
 type KeyAuthenticator interface {
-	// Authenticate returns the key's NAME and the models it may reach. A nil
-	// or empty model list means every model.
-	Authenticate(secret string) (name string, models []string, ok bool)
-	// Scope reports whether a key may reach this path. Asking the key package
-	// rather than deciding here keeps one definition of what "inference only"
-	// means.
+	// Authenticate returns the key's NAME, the models it may reach, and whether
+	// it carries the admin permission. A nil or empty model list means every
+	// model.
+	Authenticate(secret string) (name string, models []string, admin, ok bool)
+	// Scope reports whether an INFERENCE key may reach this path. Asking the
+	// key package rather than deciding here keeps one definition of what
+	// "inference only" means. It is not consulted for an admin key.
 	Scope(path string) bool
 }
 
@@ -169,10 +180,10 @@ func (c Config) Authorized(r *http.Request) bool {
 	return c.authorized(r)
 }
 
-// authorizedKey checks an API key, which is scoped. Separate from authorized
-// because the answer depends on the PATH: the same credential is valid for
-// /v1/chat/completions and invalid for /api/undeploy, and collapsing the two
-// checks into one would lose that.
+// authorizedKey checks an API key, which is scoped unless it is an admin one.
+// Separate from authorized because the answer depends on the PATH: the same
+// inference key is valid for /v1/chat/completions and invalid for
+// /api/undeploy, and collapsing the two checks into one would lose that.
 func (c Config) authorizedKey(r *http.Request) bool {
 	if c.Keys == nil {
 		return false
@@ -188,16 +199,26 @@ func (c Config) authorizedKey(r *http.Request) bool {
 			return false
 		}
 	}
-	name, models, ok := c.Keys.Authenticate(tok)
+	name, models, admin, ok := c.Keys.Authenticate(tok)
 	if !ok {
 		return false
 	}
 	// The key travels on the request so the gateway can enforce its model
 	// allowlist. Auth knows WHICH key authenticated; only the gateway knows
 	// which model is being asked for, and neither can decide alone.
-	*r = *r.WithContext(withKey(r.Context(), KeyInfo{Name: name, Models: models}))
-	// AUTHENTICATED BUT OUT OF SCOPE IS STILL A REFUSAL. A valid key on
-	// /api/deploy must fail exactly as an invalid one does.
+	//
+	// An admin key travels too, though it is not scoped: the request log names
+	// the sender from here, and "which key deployed that" is the question an
+	// admin key exists to answer.
+	*r = *r.WithContext(withKey(r.Context(), KeyInfo{Name: name, Models: models, Admin: admin}))
+	// THE ONE PLACE A KEY BECOMES MORE THAN AN INFERENCE CREDENTIAL. admin is
+	// true only for a key that was issued as one, read back from its own
+	// record; everything else falls through to the scope check below.
+	if admin {
+		return true
+	}
+	// AUTHENTICATED BUT OUT OF SCOPE IS STILL A REFUSAL. A valid inference key
+	// on /api/deploy must fail exactly as an invalid one does.
 	return c.Keys.Scope(r.URL.Path)
 }
 
@@ -255,6 +276,10 @@ const LoginPath = "/login"
 type KeyInfo struct {
 	Name   string
 	Models []string
+	// Admin marks a key issued with the admin permission. It is here for
+	// attribution, not for a second authorisation check: the middleware has
+	// already decided, and a handler must not re-derive access from it.
+	Admin bool
 }
 
 type keyCtx struct{}
@@ -267,7 +292,7 @@ func withKey(ctx context.Context, k KeyInfo) context.Context {
 //
 // Absent means the caller used the operator password or the admin token, which
 // are not scoped - so a handler that finds nothing here must NOT treat that as
-// a denied key.
+// a denied key. Present does not mean scoped either: an admin key is here too.
 func FromContext(ctx context.Context) (KeyInfo, bool) {
 	k, ok := ctx.Value(keyCtx{}).(KeyInfo)
 	return k, ok
