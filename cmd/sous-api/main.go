@@ -35,7 +35,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -49,6 +48,7 @@ import (
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/fetch"
+	"github.com/codemug/sous/internal/gateway"
 	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/hf"
 	"github.com/codemug/sous/internal/httpapi"
@@ -73,7 +73,7 @@ func main() {
 		return
 	}
 
-	cfg, grpcListen, caStatePath := fromFlags(os.Args[1:])
+	cfg, grpcListen, caStatePath, metricsListen := fromFlags(os.Args[1:])
 
 	st, err := store.New(cfg.DataDir)
 	if err != nil {
@@ -267,6 +267,49 @@ func main() {
 		log.Fatalf("http: %v", err)
 	}
 
+	// MODEL METRICS, opt-in: one scrape federating every vLLM model's own
+	// /metrics on every connected node, fetched through the same catalog and
+	// gRPC server httpapi.New just handed the Gateway. A model's port is on
+	// its node's loopback and chosen at deploy time, so this is the only
+	// place a scraper can reach them from.
+	//
+	// ITS OWN LISTENER, WITH NO AUTHENTICATION, and never a route on h. Every
+	// other exporter in this fleet (node-exporter, cAdvisor, DCGM) is
+	// unauthenticated and tailnet-bound, a scrape config cannot easily carry
+	// a key that gets rotated, and what this serves is counters and
+	// histograms only - no prompt or completion content ever passes through
+	// it. Mounting it on h instead would mean either putting a credential in
+	// every scrape config or opening a hole in the auth middleware that sits
+	// in front of deploy and undeploy. So it binds a separate address, which
+	// fromFlags has already refused if it would bind every interface: the
+	// network boundary is this listener's only protection, as it is the
+	// other two's.
+	if metricsListen != "" {
+		metricsLis, err := net.Listen("tcp", metricsListen)
+		if err != nil {
+			log.Fatalf("listen (metrics) on %s: %v", metricsListen, err)
+		}
+		metricsSrv := &http.Server{
+			Handler: &gateway.Metrics{Nodes: nodes, GRPC: gsrv, Cat: cat},
+			// Unauthenticated, so anyone who can reach it can open
+			// connections and do nothing with them. Every phase of one is
+			// bounded: sending the request, reading the answer, and sitting
+			// idle between requests. A scrape takes at most the handler's
+			// per-model timeout, well inside WriteTimeout.
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    8 << 10,
+		}
+		go func() {
+			log.Printf("sous-api: model metrics (unauthenticated) on http://%s/metrics", metricsListen)
+			if err := metricsSrv.Serve(metricsLis); err != nil {
+				log.Fatalf("metrics server: %v", err)
+			}
+		}()
+	}
+
 	log.Printf("sous-api: HTTP listening on %s (models in %s)", cfg.Listen, cfg.ModelDir)
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: h}
 	log.Fatal(httpSrv.ListenAndServe())
@@ -315,10 +358,16 @@ func dropCaches() error {
 // mirrored here for both listeners: both are network-reachable and both
 // carry the same "must not be reachable from everywhere" invariant this
 // project applies to every listener it opens.
-func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath string) {
+//
+// -metrics-listen is the optional third listener, and gets the same check
+// when it is set: it is unauthenticated (see main), so the network boundary
+// is the only protection it has. Empty, its default, means it is not opened.
+func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath, metricsListen string) {
 	fs := flag.NewFlagSet("sous-api", flag.ExitOnError)
 	fs.StringVar(&cfg.Listen, "listen", "", "HTTP listen address (host:port), tailnet IP only, never 0.0.0.0")
 	fs.StringVar(&grpcListen, "grpc-listen", "", "gRPC listen address (host:port) for souslets to dial, tailnet IP only, never 0.0.0.0")
+	fs.StringVar(&metricsListen, "metrics-listen", "",
+		"optional, UNAUTHENTICATED listen address (host:port) serving GET /metrics for every vLLM model on every connected node; tailnet IP only, never 0.0.0.0; empty disables it")
 	fs.StringVar(&cfg.DataDir, "data", "/var/lib/sous-api", "data directory")
 	fs.StringVar(&caStatePath, "ca-state", "", "path to persist the node CA across restarts")
 	fs.StringVar(&cfg.ModelDir, "models", "", "host path holding model weights")
@@ -347,10 +396,18 @@ func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath string
 	if err := requireBindable("-grpc-listen", grpcListen); err != nil {
 		log.Fatal(err)
 	}
+	if metricsListen != "" {
+		if err := requireBindable("-metrics-listen", metricsListen); err != nil {
+			log.Fatal(err)
+		}
+		if err := requireOwnAddress(metricsListen, cfg.Listen, grpcListen); err != nil {
+			log.Fatal(err)
+		}
+	}
 	if cfg.PortLow > cfg.PortHigh {
 		log.Fatal("config: -port-low is above -port-high")
 	}
-	return cfg, grpcListen, caStatePath
+	return cfg, grpcListen, caStatePath, metricsListen
 }
 
 // requireBindable rejects an address that isn't host:port, or whose host
@@ -364,9 +421,32 @@ func requireBindable(flagName, addr string) error {
 	if err != nil {
 		return fmt.Errorf("config: %s must be host:port: %w", flagName, err)
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" || strings.EqualFold(host, "[::]") {
-		return fmt.Errorf("config: %s refuses to bind %q; "+
-			"a listener that can start and stop models must not be reachable from everywhere", flagName, host)
+	refuse := fmt.Errorf("config: %s refuses to bind %q; "+
+		"none of this process's listeners may be reachable from everywhere - name the one address it should answer on", flagName, host)
+	if host == "" {
+		return refuse
+	}
+	// RESOLVED, NOT COMPARED AS TEXT. "0.0.0.0" and "::" have many spellings
+	// - [::0], [0::0], [::ffff:0.0.0.0], a zoned [::%lo], a name that resolves
+	// to one of them - and a list of strings only ever catches the ones
+	// somebody thought of. What matters is the address the listener would be
+	// given, so that is what is checked.
+	ta, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("config: %s %q does not resolve: %w", flagName, addr, err)
+	}
+	if ta.IP == nil || ta.IP.IsUnspecified() {
+		return refuse
+	}
+	return nil
+}
+
+// requireOwnAddress refuses a metrics address another listener already has.
+// Two listeners cannot share one, and the one that would lose is the API:
+// the metrics listener is opened first.
+func requireOwnAddress(metricsListen, listen, grpcListen string) error {
+	if metricsListen == listen || metricsListen == grpcListen {
+		return fmt.Errorf("config: -metrics-listen %q is the address of another listener; give it a port of its own", metricsListen)
 	}
 	return nil
 }
