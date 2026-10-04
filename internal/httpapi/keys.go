@@ -4,11 +4,27 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/codemug/sous/internal/apikey"
+	"github.com/codemug/sous/internal/auth"
 )
+
+// errAdminFromKey is the one thing an admin key may not do.
+var errAdminFromKey = errors.New("an admin key cannot issue another admin key. " +
+	"Admin keys come from the operator: sign in, or use SOUS_API_TOKEN")
+
+// issuer names who is making a key request, for the log. A key is named; the
+// password, a session and the token are all just "the operator", because
+// nothing distinguishes them once the middleware has let the request through.
+func issuer(r *http.Request) string {
+	if k, ok := auth.FromContext(r.Context()); ok {
+		return "key " + k.Name
+	}
+	return "the operator"
+}
 
 // keysPage is the key list plus, exactly once, a freshly minted secret.
 type keysPage struct {
@@ -35,7 +51,10 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 // createKey mints a key and returns the secret ONCE.
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
-	permission := r.FormValue("permission")
+	// PostFormValue, not FormValue: the body only. FormValue also reads the
+	// query string, which is where a crafted link or a form's action would put
+	// "permission=admin" on an operator's behalf.
+	permission := r.PostFormValue("permission")
 	var jsonModels []string
 	if name == "" {
 		var body struct {
@@ -57,15 +76,22 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		models = jsonModels
 	}
 
-	k, secret, err := s.issueKey(name, permission, models)
+	k, secret, err := s.issueKey(r, name, permission, models)
 	if err != nil {
 		if wantsHTML(r) {
 			s.redirect(w, r, "/keys", err.Error(), true)
 			return
 		}
-		writeErr(w, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if errors.Is(err, errAdminFromKey) {
+			status = http.StatusForbidden
+		}
+		writeErr(w, status, err.Error())
 		return
 	}
+	// LOGGED, because the Keys page is not a record: a row can be deleted, and
+	// an admin key is a root credential whose existence should outlive its row.
+	log.Printf("apikey: %s key %q (%s) issued by %s", k.Perm(), k.Name, k.ID, issuer(r))
 
 	if wantsHTML(r) {
 		// Carried in the query string for ONE render. It never reaches the
@@ -89,13 +115,25 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 // Absent or "inference" is the key that has always been issued. "admin" is the
 // only thing that produces an admin key, and it goes through CreateAdmin - the
 // ordinary Create has no argument that could do it.
-func (s *Server) issueKey(name, permission string, models []string) (apikey.Key, string, error) {
+func (s *Server) issueKey(r *http.Request, name, permission string, models []string) (apikey.Key, string, error) {
 	perm, err := apikey.ParsePermission(permission)
 	if err != nil {
 		return apikey.Key{}, "", err
 	}
 	if perm != apikey.Admin {
 		return s.keys.Create(name, models...)
+	}
+	// AN ADMIN KEY CANNOT MAKE ANOTHER. If it could, revoking a leaked one
+	// would revoke nothing - its holder mints a successor under a plausible
+	// name first, and the list cannot tell that key from a real one. So admin
+	// keys are issued by the operator and by nothing else, which also means
+	// the answer to "where did this admin key come from" is always a person.
+	//
+	// This is a brake, not a wall: an admin key can still deploy a container,
+	// and a container on this node can read the token. It turns a silent,
+	// one-request persistence into one that has to touch a node to happen.
+	if _, viaKey := auth.FromContext(r.Context()); viaKey {
+		return apikey.Key{}, "", errAdminFromKey
 	}
 	// REFUSED, NOT QUIETLY DROPPED. An allowlist on a key that can deploy any
 	// model promises a limit nothing enforces, and the caller who sent one
@@ -115,10 +153,15 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
+	action := "revoked"
 	if r.URL.Query().Get("delete") == "true" || strings.EqualFold(r.FormValue("delete"), "true") {
+		action = "deleted"
 		err = s.keys.Delete(id)
 	} else {
 		err = s.keys.Revoke(id)
+	}
+	if err == nil {
+		log.Printf("apikey: key %s %s by %s", id, action, issuer(r))
 	}
 	if err != nil {
 		if wantsHTML(r) {

@@ -65,7 +65,9 @@ can, for the script that really has to deploy.</p>
   change what is deployed. It is root-equivalent, exactly like the admin token —
   the difference is that it has a name, shows when it was last used, and can be
   revoked without breaking every other caller. It takes no model list: a key
-  that can deploy any model cannot be limited to some of them.</p>
+  that can deploy any model cannot be limited to some of them. And an admin key
+  cannot issue another admin key - those come only from here, or from the
+  token.</p>
 </div>
 
 {{if .Keys}}

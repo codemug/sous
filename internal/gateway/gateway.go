@@ -412,9 +412,10 @@ func (g *Gateway) Proxy(w http.ResponseWriter, r *http.Request) {
 			pr.SetURL(target)
 			pr.Out.Host = target.Host
 			// The upstream is a local container that has no idea what a
-			// gateway is; forwarding hop headers only confuses its logs.
-			pr.Out.Header.Del("Authorization")
-			pr.Out.Header.Del("Cookie")
+			// gateway is, and must never be handed the caller's credential.
+			for _, h := range credentialHeaders {
+				pr.Out.Header.Del(h)
+			}
 		},
 		// -1 flushes every write immediately. Without it Go buffers, and an SSE
 		// stream arrives in one lump at the end - which turns token streaming
@@ -506,13 +507,16 @@ func (g *Gateway) proxyOverGRPC(w http.ResponseWriter, r *http.Request, name str
 
 	headers := make(map[string]string, len(r.Header))
 	for k := range r.Header {
-		switch k {
-		case "Authorization", "Cookie", "Content-Length", "Host":
+		if isCredentialHeader(k) {
 			// Same reasoning as the local-forward path just below: the
-			// upstream is a local process on nodeID that has no use for
-			// auth/hop headers meant for the gateway itself, and the body
-			// was already fully buffered here (Content-Length would be
-			// stale, Host is for this hop not that one).
+			// upstream is a process on nodeID that must not be handed the
+			// credential meant for this gateway.
+			continue
+		}
+		switch k {
+		case "Content-Length", "Host":
+			// The body was already fully buffered here (Content-Length would
+			// be stale), and Host is for this hop, not that one.
 			continue
 		}
 		headers[k] = r.Header.Get(k)
@@ -749,4 +753,28 @@ func allowedBy(allow []string, asked string, rt route) bool {
 // auth middleware does, without the gateway importing test code.
 func authWithKey(ctx context.Context, models []string) context.Context {
 	return auth.WithKeyForTest(ctx, auth.KeyInfo{Name: "test", Models: models})
+}
+
+// credentialHeaders are the headers a caller can authenticate with. NONE OF
+// THEM MAY TRAVEL PAST THE GATEWAY.
+//
+// ONE LIST, for both forwarding paths. There used to be two - Authorization and
+// Cookie, written out at each site - and X-API-Token, which auth accepts as a
+// bearer, was in neither. So a caller using it handed its credential to the
+// model container on every inference request. That container runs someone
+// else's image, sometimes with trust_remote_code; holding an admin credential
+// it can deploy privileged containers on every node.
+//
+// Canonical form, because that is how net/http stores header keys: the gRPC
+// path ranges over r.Header and compares keys directly.
+var credentialHeaders = []string{"Authorization", "X-Api-Token", "Cookie"}
+
+func isCredentialHeader(k string) bool {
+	k = http.CanonicalHeaderKey(k)
+	for _, h := range credentialHeaders {
+		if k == h {
+			return true
+		}
+	}
+	return false
 }

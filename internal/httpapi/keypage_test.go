@@ -179,9 +179,7 @@ func TestAnAdminKeyIssuedOverTheAPIReachesTheAdminAPI(t *testing.T) {
 			t.Errorf("GET %s with the admin key = %d, want 200: %.120s", p, rr.Code, rr.Body.String())
 		}
 	}
-	// It can do what the token can, including issuing keys - it is root-
-	// equivalent, and pretending otherwise for this one route would be a
-	// restriction with nothing behind it.
+	// It can issue ordinary keys, as the token can.
 	if rr := as(t, h, admin, http.MethodPost, "/api/keys", `{"name":"made by a key"}`); rr.Code != http.StatusCreated {
 		t.Errorf("POST /api/keys with the admin key = %d, want 201", rr.Code)
 	}
@@ -305,5 +303,43 @@ func TestKeysPageRefusesAnAdminKeyWithModels(t *testing.T) {
 	}
 	if list := browserGet(t, h, "/keys").Body.String(); strings.Contains(list, "confused") {
 		t.Error("a refused key appears in the list")
+	}
+}
+
+// AN ADMIN KEY CANNOT ISSUE ANOTHER ADMIN KEY. Otherwise revoking a leaked one
+// revokes nothing: whoever held it made a second, under a plausible name, and
+// the list cannot tell it from a real one. Admin keys come from the operator -
+// the password, a session, or the token - and from nothing else.
+func TestAnAdminKeyCannotIssueAnotherAdminKey(t *testing.T) {
+	h := tokenServer(t)
+	_, admin, _ := issue(t, h, `{"name":"fleet automation","permission":"admin"}`)
+
+	rr := as(t, h, admin, http.MethodPost, "/api/keys", `{"name":"successor","permission":"admin"}`)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("an admin key minting an admin key = %d, want 403: %s", rr.Code, rr.Body.String())
+	}
+	if list := as(t, h, "admin-tok", http.MethodGet, "/api/keys", "").Body.String(); strings.Contains(list, "successor") {
+		t.Errorf("the refused key was stored anyway: %s", list)
+	}
+	// The token still can, which is the point of keeping it.
+	if _, _, perm := issue(t, h, `{"name":"second automation","permission":"admin"}`); perm != "admin" {
+		t.Errorf("the admin token could not issue an admin key: permission %q", perm)
+	}
+}
+
+// The permission comes from the BODY of the request. A query string is where
+// a crafted link or a form's action would put it, and "admin" must not be
+// something a URL can ask for on an operator's behalf.
+func TestThePermissionCannotBeSmuggledInTheQueryString(t *testing.T) {
+	h := newTestServer(t)
+	rr := browserPost(t, h, "/keys?permission=admin", "name=from+a+link")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("create returned %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "This is an admin key") {
+		t.Fatal("a query-string permission produced an admin key")
+	}
+	if list := browserGet(t, h, "/keys").Body.String(); strings.Contains(list, "chip is-admin") {
+		t.Error("a query-string permission produced an admin key in the list")
 	}
 }

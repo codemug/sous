@@ -207,9 +207,9 @@ func (c Config) authorizedKey(r *http.Request) bool {
 	// allowlist. Auth knows WHICH key authenticated; only the gateway knows
 	// which model is being asked for, and neither can decide alone.
 	//
-	// An admin key travels too, though it is not scoped: the request log names
-	// the sender from here, and "which key deployed that" is the question an
-	// admin key exists to answer.
+	// An admin key travels too, though it is not scoped: the gateway's request
+	// log names the sender from here, and the key handlers use it to tell a
+	// key-authenticated caller from the operator.
 	*r = *r.WithContext(withKey(r.Context(), KeyInfo{Name: name, Models: models, Admin: admin}))
 	// THE ONE PLACE A KEY BECOMES MORE THAN AN INFERENCE CREDENTIAL. admin is
 	// true only for a key that was issued as one, read back from its own
@@ -255,7 +255,9 @@ func bearer(r *http.Request) (string, bool) {
 		return h[len(p):], true
 	}
 	// X-API-Token is accepted as a convenience for callers that already use
-	// Authorization for something else.
+	// Authorization for something else. The gateway strips it before a request
+	// goes on to a model, exactly as it strips Authorization: see
+	// gateway.credentialHeaders.
 	if v := r.Header.Get("X-API-Token"); v != "" {
 		return v, true
 	}
@@ -276,9 +278,10 @@ const LoginPath = "/login"
 type KeyInfo struct {
 	Name   string
 	Models []string
-	// Admin marks a key issued with the admin permission. It is here for
-	// attribution, not for a second authorisation check: the middleware has
-	// already decided, and a handler must not re-derive access from it.
+	// Admin marks a key issued with the admin permission. The middleware has
+	// already decided what this request may reach; a handler must not re-derive
+	// general access from this. It is here for attribution, and for the one
+	// thing even an admin key may not do - see httpapi's issueKey.
 	Admin bool
 }
 

@@ -113,6 +113,12 @@ type Key struct {
 	// an admin key's file, ignores the field and treats it as an inference key.
 	// A downgrade narrows; it never widens.
 	//
+	// It also does not round-trip: that older binary rewrites the file without
+	// the field the first time it revokes the key or records a use, so an admin
+	// key that was touched while downgraded is an inference key for good.
+	// Narrower again, and worth knowing before rolling back with admin keys in
+	// use - they will need reissuing.
+	//
 	// Read it through Admin and Perm, not directly: only the exact stored word
 	// grants anything.
 	Permission Permission `yaml:"permission,omitempty" json:"-"`
@@ -150,9 +156,6 @@ func (k Key) Perm() Permission {
 	}
 	return Inference
 }
-
-// MayReach reports whether this key may be used on a path.
-func (k Key) MayReach(path string) bool { return k.Admin() || Scope(path) }
 
 // Allows reports whether this key may use a given model name.
 //

@@ -396,7 +396,13 @@ func (c *Client) forwardToLocalContainer(ctx context.Context, head *pb.HTTPReque
 		return nil, fmt.Errorf("build local request: %w", err)
 	}
 	for k, v := range head.GetHeaders() {
-		switch k {
+		switch http.CanonicalHeaderKey(k) {
+		case "Authorization", "X-Api-Token", "Cookie":
+			// sous-api strips these before sending (gateway.credentialHeaders).
+			// Dropped here as well so a souslet paired with an older sous-api,
+			// which let X-API-Token through, still does not hand a caller's
+			// credential to the model container.
+			continue
 		case "Content-Length", "Host":
 			// The body was reassembled from chunks (a stale length would
 			// corrupt framing) and NewRequestWithContext already derives the

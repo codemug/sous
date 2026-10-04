@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -413,6 +414,10 @@ func min(a, b int) int {
 // caller can immediately proxy through it without its own retry loop - the
 // readiness probe is a real OpenProxyStream/Close round trip against srv,
 // not a sleep.
+// lastProxiedHead is the request head the fake souslet below most recently
+// received - what the gateway actually put on the wire for a node.
+var lastProxiedHead atomic.Pointer[pb.HTTPRequestHead]
+
 func dialFakeEchoingSouslet(t *testing.T, srv *grpcserver.Server, nodeID string) func() {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
@@ -452,6 +457,7 @@ func dialFakeEchoingSouslet(t *testing.T, srv *grpcserver.Server, nodeID string)
 			if env.GetHttpReqHead() == nil {
 				continue // the request-body chunk that follows the head; nothing to answer
 			}
+			lastProxiedHead.Store(env.GetHttpReqHead())
 			streamID := env.StreamId
 			_ = stream.Send(&pb.Envelope{StreamId: streamID, Payload: &pb.Envelope_HttpRespHead{
 				HttpRespHead: &pb.HTTPResponseHead{Status: 200},
@@ -1290,5 +1296,82 @@ func TestRefusedRequestsAreStillLogged(t *testing.T) {
 	}
 	if rl.calls != 1 {
 		t.Errorf("Log called %d times for a refused request, want 1", rl.calls)
+	}
+}
+
+// ---- credentials stop at the gateway ---------------------------------------
+
+// credentialed is a request carrying every form a caller's credential can
+// take. X-API-Token is the one that used to get through: auth accepts it as a
+// bearer, and only Authorization and Cookie were being removed.
+func credentialed(body string) *http.Request {
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-sous-admin-key")
+	req.Header.Set("X-API-Token", "sk-sous-admin-key")
+	req.Header.Set("Cookie", "sous_session=abc")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Id", "keep-me")
+	return req
+}
+
+// A MODEL CONTAINER MUST NEVER BE HANDED THE CALLER'S CREDENTIAL. It runs
+// someone else's image, sometimes with trust_remote_code, and an admin key in
+// its hands can deploy privileged containers on every node. Local path.
+func TestCredentialsNeverReachTheModel(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: port}}}
+	cat := fakeCat{"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}}}
+	rr := httptest.NewRecorder()
+	newGW(res, cat, "127.0.0.1").Proxy(rr, credentialed(`{"model":"ornith"}`))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+	for _, h := range []string{"Authorization", "X-Api-Token", "Cookie"} {
+		if v := got.Get(h); v != "" {
+			t.Errorf("CREDENTIAL LEAK: the model received %s: %q", h, v)
+		}
+	}
+	if got.Get("X-Request-Id") != "keep-me" {
+		t.Error("an ordinary header was dropped along with the credentials")
+	}
+}
+
+// The same, on the path through a souslet to another node.
+func TestCredentialsNeverReachTheModelOnTheNodePath(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId:      "asus-gx10",
+		Deployments: []*pb.DeploymentState{{RecipeId: "dflash2", Phase: "ready"}},
+	})
+	gsrv := grpcserver.New(nodes, nil)
+	stop := dialFakeEchoingSouslet(t, gsrv, "asus-gx10")
+	defer stop()
+
+	lastProxiedHead.Store(nil)
+	rec := httptest.NewRecorder()
+	(&Gateway{Nodes: nodes, GRPC: gsrv}).Proxy(rec, credentialed(`{"model":"dflash2"}`))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	head := lastProxiedHead.Load()
+	if head == nil {
+		t.Fatal("the fake souslet never saw a request")
+	}
+	for k, v := range head.GetHeaders() {
+		switch http.CanonicalHeaderKey(k) {
+		case "Authorization", "X-Api-Token", "Cookie":
+			t.Errorf("CREDENTIAL LEAK: %s was sent to the node: %q", k, v)
+		}
+	}
+	if head.GetHeaders()["X-Request-Id"] != "keep-me" {
+		t.Errorf("an ordinary header was dropped along with the credentials: %v", head.GetHeaders())
 	}
 }

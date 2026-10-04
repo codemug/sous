@@ -3,6 +3,7 @@ package apikey
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -337,11 +338,13 @@ func TestAKeyIsInferenceOnlyUnlessAskedOtherwise(t *testing.T) {
 	if k.Admin() {
 		t.Fatal("an ordinary key came out with the admin permission")
 	}
-	if !k.MayReach("/v1/chat/completions") {
+	// Not admin, so Scope is the whole of what it may reach - and Scope must
+	// still refuse the control plane.
+	if !Scope("/v1/chat/completions") {
 		t.Error("an inference key cannot reach inference")
 	}
 	for _, p := range controlPlane {
-		if k.MayReach(p) {
+		if Scope(p) {
 			t.Errorf("SCOPE HOLE: an inference key may reach %s", p)
 		}
 	}
@@ -359,11 +362,6 @@ func TestAnAdminKeyReachesTheControlPlane(t *testing.T) {
 	}
 	if !strings.HasPrefix(secret, Prefix) {
 		t.Errorf("secret = %q, want the %q prefix", secret, Prefix)
-	}
-	for _, p := range append([]string{"/v1/chat/completions", "/v1/models"}, controlPlane...) {
-		if !k.MayReach(p) {
-			t.Errorf("an admin key may not reach %s", p)
-		}
 	}
 	// It carries no model list: there is nothing an allowlist could mean on a
 	// key that can deploy any model it likes.
@@ -408,9 +406,6 @@ func TestAKeyStoredBeforePermissionsExistedIsInferenceOnly(t *testing.T) {
 	}
 	if got.Admin() {
 		t.Fatal("a key from before permissions existed came back as admin")
-	}
-	if got.MayReach("/api/recipes") {
-		t.Error("SCOPE HOLE: a legacy key may reach the control plane")
 	}
 }
 
@@ -501,5 +496,54 @@ func TestTheGuardReportsThePermission(t *testing.T) {
 	}
 	if _, _, admin, ok := g.Authenticate("sk-sous-not-a-real-key"); ok || admin {
 		t.Errorf("an unknown secret: admin=%v ok=%v, want neither", admin, ok)
+	}
+}
+
+// REVOKE HAS TO STICK. The last-used flush reads a key file, sets a timestamp
+// and writes the whole record back. Without a lock around that, a Revoke
+// landing between its read and its write is overwritten by the stale copy -
+// the operator sees "revoked", and thirty seconds later the key works again.
+// For an admin key that is a leaked root credential nobody knows is live.
+//
+// A key in active use is exactly the one being revoked after a leak, and
+// exactly the one the flush is busy with.
+func TestRevokeIsNotUndoneByTheLastUsedFlush(t *testing.T) {
+	m := newMgr(t)
+	for i := 0; i < 150; i++ {
+		k, secret, err := m.CreateAdmin("leaked")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := m.Authenticate(secret); !ok { // marks it used: the flush now has work
+			t.Fatal("a fresh key did not authenticate")
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); m.FlushLastUsed() }()
+		go func() { defer wg.Done(); _ = m.Revoke(k.ID) }()
+		wg.Wait()
+		m.FlushLastUsed() // and whatever the revoked key's own last use queued
+		if _, ok := m.Authenticate(secret); ok {
+			t.Fatalf("round %d: a revoked key authenticates again after a flush", i)
+		}
+	}
+}
+
+// The same race, for Delete: the flush's write must not bring a deleted key's
+// file back.
+func TestDeleteIsNotUndoneByTheLastUsedFlush(t *testing.T) {
+	m := newMgr(t)
+	for i := 0; i < 150; i++ {
+		k, secret, _ := m.Create("temp")
+		m.Authenticate(secret)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); m.FlushLastUsed() }()
+		go func() { defer wg.Done(); _ = m.Delete(k.ID) }()
+		wg.Wait()
+		m.FlushLastUsed()
+		if _, ok := m.Authenticate(secret); ok {
+			t.Fatalf("round %d: a deleted key came back after a flush", i)
+		}
 	}
 }

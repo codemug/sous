@@ -332,8 +332,8 @@ curl $SOUS/api/nodes -H "Authorization: Bearer sk-sous-…"
 ```
 
 What it adds over sharing the token is everything a key already had: a name, a
-row on the Keys page marked `admin`, a last-used time, and a revoke button that
-stops that one caller and nobody else.
+row on the Keys page marked `admin`, a last-used time, and a revoke button of
+its own - revoking it stops that key without touching any other caller.
 
 - `permission` is `inference` or `admin`. Absent means `inference`, so nothing
   that issued keys before changes what it gets, and every key issued before this
@@ -341,11 +341,26 @@ stops that one caller and nobody else.
 - An admin key **cannot carry a model list**. A key that can deploy any model
   cannot meaningfully be limited to some of them, so the combination is refused
   rather than stored as a restriction that is not one.
-- It is **root-equivalent**, including on the Keys API: an admin key can issue
-  and revoke keys, admin ones included. Give one only to something you would
-  have given the token.
+- It is **root-equivalent**: it can deploy a privileged container on any node.
+  Give one only to something you would have given the token.
+- An admin key **cannot issue another admin key** (403). Admin keys come from
+  the operator - the password, a session, or `SOUS_API_TOKEN` - so a leaked one
+  cannot quietly mint a successor, and "where did this admin key come from" is
+  always a person. It can still issue inference keys and revoke any key. This
+  is a brake rather than a wall: something that can deploy containers can
+  reach the token another way, but not in one unlogged request.
+- **Rotating `SOUS_API_TOKEN` or the password does not revoke keys.** Sessions
+  die with the old credentials; issued keys, admin ones included, do not. After
+  a leak, revoke keys on the Keys page as well as rotating.
+- Issuing, revoking and deleting a key are **logged** with the key's name, its
+  id and who did it, so the record outlives a deleted row.
 - Listings always name the permission (`"permission":"inference"` or
   `"permission":"admin"`).
+
+The gateway **strips the caller's credential** - `Authorization`,
+`X-API-Token` and `Cookie` - before a request goes on to a model, on this node
+or another. A model container runs someone else's image; it is never handed the
+key that reached it.
 
 Keys are **stored as SHA-256 hashes** and the plaintext is shown exactly once,
 at creation. It is not recoverable afterwards by anyone, including whoever runs
