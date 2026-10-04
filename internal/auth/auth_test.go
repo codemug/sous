@@ -284,17 +284,23 @@ func TestFromEnvAcceptsTokenOnly(t *testing.T) {
 	}
 }
 
-// fakeKeys is a one-key authenticator scoped to /v1/.
+// fakeKeys is an authenticator holding one inference key, scoped to /v1/, and
+// optionally one admin key.
 type fakeKeys struct {
 	secret string
 	models []string
+	// adminSecret, when set, authenticates as a key with the admin permission.
+	adminSecret string
 }
 
-func (f fakeKeys) Authenticate(s string) (string, []string, bool) {
+func (f fakeKeys) Authenticate(s string) (string, []string, bool, bool) {
 	if s != "" && s == f.secret {
-		return "test-key", f.models, true
+		return "test-key", f.models, false, true
 	}
-	return "", nil, false
+	if s != "" && s == f.adminSecret {
+		return "admin-key", nil, true, true
+	}
+	return "", nil, false, false
 }
 func (f fakeKeys) Scope(p string) bool { return strings.HasPrefix(p, "/v1/") }
 
@@ -376,5 +382,82 @@ func TestNoKeyAuthenticatorMeansNoKeyAccess(t *testing.T) {
 	c := Config{User: "u", Password: "p"}
 	if got := hit(t, c, "/v1/models", "sk-sous-good"); got != http.StatusUnauthorized {
 		t.Errorf("got %d with no authenticator configured, want 401", got)
+	}
+}
+
+// ---- admin keys -----------------------------------------------------------
+
+func withAdminKey() Config {
+	return Config{User: "u", Password: "p", Token: "admin-tok",
+		Keys: fakeKeys{secret: "sk-sous-good", adminSecret: "sk-sous-admin"}}
+}
+
+// A key issued with the admin permission reaches what the admin token reaches.
+// That is the whole feature: a credential for automation that can be named,
+// listed and revoked on its own, instead of the one shared token.
+func TestAdminAPIKeyReachesTheControlPlane(t *testing.T) {
+	c := withAdminKey()
+	for _, p := range []string{
+		"/api/deploy/qwen36/asus-gx10", "/api/undeploy/qwen36/asus-gx10", "/api/recipes",
+		"/api/keys", "/api/nodes", "/api/status", "/", "/v1/models", "/v1/chat/completions",
+	} {
+		if got := hit(t, c, p, "sk-sous-admin"); got != http.StatusOK {
+			t.Errorf("%s with an admin key = %d, want 200", p, got)
+		}
+	}
+}
+
+// ADDING ADMIN KEYS MUST NOT WIDEN THE ORDINARY ONES. The inference key sits in
+// the same authenticator as an admin key here, and must be refused on the
+// control plane exactly as before.
+func TestAnInferenceKeyGainsNothingFromAdminKeysExisting(t *testing.T) {
+	c := withAdminKey()
+	for _, p := range []string{"/api/deploy/qwen36/asus-gx10", "/api/recipes", "/api/keys", "/api/nodes", "/"} {
+		if got := hit(t, c, p, "sk-sous-good"); got == http.StatusOK {
+			t.Errorf("SCOPE HOLE: an inference key reached %s", p)
+		}
+	}
+	if got := hit(t, c, "/v1/models", "sk-sous-good"); got != http.StatusOK {
+		t.Errorf("the inference key on /v1/models = %d, want 200", got)
+	}
+}
+
+func TestAWrongAdminKeyIsRefusedEverywhere(t *testing.T) {
+	c := withAdminKey()
+	for _, p := range []string{"/api/recipes", "/v1/models"} {
+		if got := hit(t, c, p, "sk-sous-admin-but-wrong"); got != http.StatusUnauthorized {
+			t.Errorf("%s with a wrong key = %d, want 401", p, got)
+		}
+	}
+}
+
+// The gateway and the request log read the key off the request. An admin key
+// has to arrive there marked as one, under its own name.
+func TestAnAdminKeyTravelsOnTheRequestAsAdmin(t *testing.T) {
+	c := withAdminKey()
+	var seen KeyInfo
+	var had bool
+	h := c.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen, had = FromContext(r.Context())
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/recipes", nil)
+	req.Header.Set("Authorization", "Bearer sk-sous-admin")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if !had || !seen.Admin || seen.Name != "admin-key" {
+		t.Errorf("key on the request: present=%v %+v, want the admin key marked Admin", had, seen)
+	}
+}
+
+// As a basic-auth password too, which is how `curl -u` and most HTTP libraries
+// present a lone secret.
+func TestAdminAPIKeyWorksAsBasicPassword(t *testing.T) {
+	c := withAdminKey()
+	req := httptest.NewRequest(http.MethodGet, "/api/recipes", nil)
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth("", "sk-sous-admin")
+	rr := httptest.NewRecorder()
+	c.Middleware(ok(t)).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("admin key as basic password = %d, want 200", rr.Code)
 	}
 }

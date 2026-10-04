@@ -20,6 +20,20 @@ type Manager struct {
 	// a timestamp nobody reads in real time into sustained disk writes on the
 	// hot path.
 	pending map[string]time.Time
+
+	// fileMu serialises every read-modify-write of a key file.
+	//
+	// WITHOUT IT A REVOKE CAN BE UNDONE. The last-used flush reads a record,
+	// sets a timestamp and writes the whole thing back; a Revoke landing
+	// between that read and that write was overwritten by the stale copy, still
+	// enabled. The operator saw "revoked" and the key worked again at the next
+	// flush. A Delete in the same window had its file recreated. The key being
+	// revoked after a leak is by definition one in use, which is exactly the
+	// one the flush is busy with - and for an admin key the cost of losing that
+	// race is a live root credential nobody knows about.
+	//
+	// Separate from mu so a request marking a key used never waits on disk.
+	fileMu sync.Mutex
 }
 
 // ValidID keeps a key id inside one path segment. The store guards this too;
@@ -56,10 +70,19 @@ func (m *Manager) List() ([]Key, error) {
 	return out, nil
 }
 
-// Create issues a key and returns the secret ONCE. It is never recoverable
-// afterwards, by anyone, including whoever runs this process.
+// Create issues an inference key and returns the secret ONCE. It is never
+// recoverable afterwards, by anyone, including whoever runs this process.
 func (m *Manager) Create(name string, models ...string) (Key, string, error) {
-	k, secret, err := Generate(name, models...)
+	return m.save(Generate(name, models...))
+}
+
+// CreateAdmin issues a key with the admin permission. See GenerateAdmin for
+// why it takes no model list.
+func (m *Manager) CreateAdmin(name string) (Key, string, error) {
+	return m.save(GenerateAdmin(name))
+}
+
+func (m *Manager) save(k Key, secret string, err error) (Key, string, error) {
 	if err != nil {
 		return Key{}, "", err
 	}
@@ -79,6 +102,8 @@ func (m *Manager) Revoke(id string) error {
 	if !ValidID(id) {
 		return fmt.Errorf("apikey: invalid id %q", id)
 	}
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
 	var k Key
 	if err := m.Store.ReadYAML(store.KindAPIKey, id, &k); err != nil {
 		return err
@@ -92,6 +117,8 @@ func (m *Manager) Delete(id string) error {
 	if !ValidID(id) {
 		return fmt.Errorf("apikey: invalid id %q", id)
 	}
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
 	return m.Store.Delete(store.KindAPIKey, id)
 }
 
@@ -132,24 +159,43 @@ func (m *Manager) FlushLastUsed() {
 	m.mu.Unlock()
 
 	for id, t := range pending {
-		var k Key
-		if err := m.Store.ReadYAML(store.KindAPIKey, id, &k); err != nil {
-			continue
-		}
-		if t.After(k.LastUsedAt) {
-			k.LastUsedAt = t
-			_ = m.Store.WriteYAML(store.KindAPIKey, id, k)
-		}
+		m.flushOne(id, t)
 	}
 }
 
-// Scope decides what an API key may reach.
+// flushOne writes one key's last-used time, holding fileMu across the read and
+// the write so it cannot put back a record a Revoke or Delete has just changed.
+// A key deleted in the meantime fails the read and is skipped: the flush must
+// never be what brings a key file back.
+func (m *Manager) flushOne(id string, t time.Time) {
+	m.fileMu.Lock()
+	defer m.fileMu.Unlock()
+	var k Key
+	if err := m.Store.ReadYAML(store.KindAPIKey, id, &k); err != nil {
+		return
+	}
+	if t.After(k.LastUsedAt) {
+		k.LastUsedAt = t
+		_ = m.Store.WriteYAML(store.KindAPIKey, id, k)
+	}
+}
+
+// Scope decides what an INFERENCE key may reach - which is every key that was
+// not issued as an admin one.
 //
 // ONE PLACE, ON PURPOSE. The rule is "inference only", and expressing it as a
 // path predicate here means a route added later is refused by default rather
 // than exposed by an omission. A handler-by-handler check would eventually miss
 // one, and the failure mode of missing one is a notebook credential that can
 // undeploy a model.
+//
+// "Refused by default" holds for everything outside /v1/. A route added UNDER
+// /v1/ is reachable with an inference key the moment it exists, so that prefix
+// is for inference and nothing else.
+//
+// An admin key is not an exception carved into this rule. It skips the rule,
+// in exactly one place - auth's authorizedKey - so nothing here has to know
+// that admin exists.
 func Scope(path string) bool {
 	return path == "/v1/models" || strings.HasPrefix(path, "/v1/")
 }
@@ -160,15 +206,16 @@ type Guard struct{ M *Manager }
 
 // Authenticate reports the key's NAME on success, which is what belongs in a
 // log line: an id identifies the row, a name identifies who to ask about it.
-func (g Guard) Authenticate(secret string) (string, []string, bool) {
+// admin says whether the key was issued with the admin permission.
+func (g Guard) Authenticate(secret string) (name string, models []string, admin, ok bool) {
 	if g.M == nil {
-		return "", nil, false
+		return "", nil, false, false
 	}
-	k, ok := g.M.Authenticate(secret)
-	if !ok {
-		return "", nil, false
+	k, found := g.M.Authenticate(secret)
+	if !found {
+		return "", nil, false, false
 	}
-	return k.Name, k.Models, true
+	return k.Name, k.Models, k.Admin(), true
 }
 
 func (g Guard) Scope(path string) bool { return Scope(path) }

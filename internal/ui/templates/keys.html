@@ -3,7 +3,9 @@
 <h1>API keys</h1>
 <p class="lede">Credentials for calling models. A key reaches the inference API
 and nothing else — it cannot deploy, undeploy, or delete anything, which is why
-it is safe to put one in a notebook or a demo page.</p>
+it is safe to put one in a notebook or a demo page. An <strong>admin</strong>
+key is the exception you ask for by name: it can do everything the admin token
+can, for the script that really has to deploy.</p>
 
 {{with .Keys}}
 
@@ -17,6 +19,11 @@ it is safe to put one in a notebook or a demo page.</p>
   <span class="mono" id="copied" hidden>copied</span>
   <p class="note">Issued as <strong>{{.FreshName}}</strong>. Use it as a bearer
   token, or as the API key in any OpenAI client pointed at this host.</p>
+  {{if .FreshAdmin}}
+  <p class="note"><strong>This is an admin key.</strong> It can deploy, undeploy
+  and delete, on this node and every connected one — treat it as you would the
+  admin token, and revoke it here the moment it is no longer needed.</p>
+  {{end}}
 </div>
 <script>
   function copyFresh() {
@@ -41,12 +48,26 @@ it is safe to put one in a notebook or a demo page.</p>
     <input id="kmodels" name="models" type="text"
            placeholder="asr, kokoro — leave blank for all"
            autocomplete="off" spellcheck="false">
+    <label for="kperm" class="mono">Permission</label>
+    {{/* Inference is listed first and nothing is marked selected, so the
+         browser's default - and a hurried operator's - is the safe one. */}}
+    <select id="kperm" name="permission">
+      <option value="inference">Inference only</option>
+      <option value="admin">Admin — can deploy and delete</option>
+    </select>
     <button class="btn-primary" type="submit">Create</button>
   </form>
   <p class="note">Name it after whoever holds it — a key nobody can attribute is
   a key nobody dares revoke. Leave <span class="mono">Models</span> blank for a
   key that reaches every model, or name them to narrow it: a demo page that only
   needs speech should not hold a credential for the chat model.</p>
+  <p class="note"><span class="mono">Admin</span> is for automation that has to
+  change what is deployed. It is root-equivalent, exactly like the admin token —
+  the difference is that it has a name, shows when it was last used, and can be
+  revoked without breaking every other caller. It takes no model list: a key
+  that can deploy any model cannot be limited to some of them. And an admin key
+  cannot issue another admin key - those come only from here, or from the
+  token.</p>
 </div>
 
 {{if .Keys}}
@@ -57,14 +78,17 @@ it is safe to put one in a notebook or a demo page.</p>
     <article class="card{{if .Disabled}} is-gone{{else}} is-ready{{end}}">
       <div class="card-head">
         <span class="card-title">{{.Name}}</span>
+        {{/* Said on the card, not only in a column: which keys can change the
+             fleet is the first thing to know when deciding what to revoke. */}}
+        {{if .Admin}}<span class="chip is-admin">admin</span>{{end}}
         {{if .Disabled}}<span class="chip is-gone">revoked</span>
         {{else}}<span class="chip is-ready">active</span>{{end}}
       </div>
       <span class="card-sub">{{.ID}} · ends in …{{.Hint}}</span>
       <div class="card-foot">
         <span class="stat">
-          <span class="mlabel">Models</span>
-          <span class="v">{{if .Scoped}}{{range $i,$m := .Models}}{{if $i}}, {{end}}{{$m}}{{end}}{{else}}all models{{end}}</span>
+          <span class="mlabel">Reaches</span>
+          <span class="v">{{if .Admin}}everything — inference and the admin API{{else if .Scoped}}{{range $i,$m := .Models}}{{if $i}}, {{end}}{{$m}}{{end}}{{else}}all models{{end}}</span>
         </span>
         <span class="stat"><span class="mlabel">Created</span><span class="v">{{ago .CreatedAt}}</span></span>
         <span class="stat">
@@ -114,6 +138,9 @@ it is safe to put one in a notebook or a demo page.</p>
   <p class="note">Or as the <span class="mono">api_key</span> in any OpenAI
   client with <span class="mono">base_url</span> set to
   <span class="mono">{{$.BaseURL}}/v1</span>.</p>
+  <p class="note">An admin key is presented the same way, on the admin API:</p>
+  <pre class="snippet">curl {{$.BaseURL}}/api/nodes \
+  -H "Authorization: Bearer sk-sous-…"</pre>
 </div>
 
 {{end}}
