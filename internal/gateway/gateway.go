@@ -235,6 +235,8 @@ type modelObj struct {
 	RecipeID string `json:"recipe_id"`
 	Modality string `json:"modality,omitempty"`
 	Port     int    `json:"port,omitempty"`
+	// Node is set for a model that runs on a node rather than in this process.
+	Node string `json:"node,omitempty"`
 }
 
 // ListModels answers GET /v1/models.
@@ -242,11 +244,21 @@ type modelObj struct {
 // EVERY deployment is listed, not only the ready ones, with its phase attached.
 // Hiding a starting model would make a client that polls /v1/models conclude it
 // does not exist, which is a worse answer than "it exists and is not ready".
+//
+// BOTH KINDS: the ones this process runs, and the ones running on nodes. It
+// used to read only the first, and sous-api on a control-plane node - which
+// runs no model itself - answered {"data":[]} while proxying requests to the
+// models it had just said were not there.
 func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
-	rs, err := g.Routes(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server_error", err.Error())
-		return
+	// Res is nil in the pure multi-node end state; there is then nothing local
+	// to list, which is not an error.
+	var rs []route
+	if g.Res != nil {
+		var err error
+		if rs, err = g.Routes(r.Context()); err != nil {
+			writeErr(w, http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
 	}
 	// A scoped key sees only its own models. Listing the rest would advertise
 	// models every request for them is going to be refused for.
@@ -256,7 +268,16 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := g.now().Unix()
-	data := make([]modelObj, 0, len(rs))
+	onNodes := g.nodeModels(now)
+	// Proxy sends a name a node is running to that node, whatever is deployed
+	// here under the same name. The listing says the same: the node's entry
+	// stands, and a local name it shadows is dropped rather than listed twice.
+	shadowed := make(map[string]bool, len(onNodes))
+	for _, m := range onNodes {
+		shadowed[m.ID] = true
+	}
+
+	data := make([]modelObj, 0, len(rs)+len(onNodes))
 	for _, rt := range rs {
 		if len(allow) > 0 && !allowedBy(allow, rt.RecipeID, rt) {
 			continue
@@ -266,6 +287,9 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 			names = []string{rt.RecipeID}
 		}
 		for _, n := range names {
+			if shadowed[n] {
+				continue
+			}
 			data = append(data, modelObj{
 				ID: n, Object: "model", Created: now, OwnedBy: "sous",
 				Phase: string(rt.Phase), RecipeID: rt.RecipeID,
@@ -273,7 +297,66 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	for _, m := range onNodes {
+		// The same test proxyOverGRPC applies before it forwards.
+		if len(allow) > 0 && !allowedBy(allow, m.ID, route{RecipeID: m.ID}) {
+			continue
+		}
+		data = append(data, m)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+// nodeModels lists what connected nodes are running, sorted by id.
+//
+// THE ID IS THE RECIPE ID, not the recipe's served_as names. The node path
+// routes by recipe id and nothing else (see proxyOverGRPC), so that is the one
+// name a request for this model will actually reach it under; listing any
+// other would advertise a name that is answered 404.
+//
+// Only CONNECTED nodes, the rule Nodes.NodeFor applies: a node that has dropped
+// off cannot be proxied to, so its models leave the list with it.
+//
+// Phase is the node's own word for the container - Docker's status ("running",
+// "exited", ...), not a deploy.Phase. A node does not report whether the model
+// inside has finished loading, and "running" is not rewritten to "ready" here
+// to pretend it does.
+func (g *Gateway) nodeModels(now int64) []modelObj {
+	if g.Nodes == nil || g.GRPC == nil {
+		return nil
+	}
+	views := g.Nodes.All()
+	// By node id, so that a recipe running on two nodes is listed against the
+	// same one every time.
+	sort.Slice(views, func(i, j int) bool { return views[i].NodeID < views[j].NodeID })
+
+	seen := map[string]bool{}
+	var out []modelObj
+	for _, n := range views {
+		if !n.Connected {
+			continue
+		}
+		for _, d := range n.Deployments {
+			id := d.GetRecipeId()
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			m := modelObj{
+				ID: id, Object: "model", Created: now, OwnedBy: "sous",
+				Phase: d.GetPhase(), RecipeID: id,
+				Port: int(d.GetHostPort()), Node: n.NodeID,
+			}
+			if g.Cat != nil {
+				if rec, err := g.Cat.Get(id); err == nil {
+					m.Modality = string(rec.Modality)
+				}
+			}
+			out = append(out, m)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 func (g *Gateway) now() time.Time {
