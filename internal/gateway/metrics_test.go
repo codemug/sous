@@ -1,11 +1,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -573,5 +575,161 @@ func TestRelabelRejectsWhatIsNotASample(t *testing.T) {
 		if _, got, err := relabel(in, "n", "r"); err == nil {
 			t.Errorf("relabel(%q) = %q, want an error", in, got)
 		}
+	}
+}
+
+// ---- against the real thing, and against a model that will not answer -------
+
+// testdata/vllm-0.30.0-metrics.txt is what vLLM v0.30.0 really answered on
+// asus-gx10 on 2026-10-05, fetched as this code fetches it: a GET carrying a
+// JSON body. Parsing is all or nothing, so one line shape this parser does
+// not know would blank a model's every metric - this is the check that the
+// real exposition has none.
+func TestMetricsParsesWhatVLLMReallyServes(t *testing.T) {
+	body, err := os.ReadFile("testdata/vllm-0.30.0-metrics.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := parseExposition(body, "asus-gx10", "qwen38-27b")
+	if err != nil {
+		t.Fatalf("vLLM's own /metrics did not parse: %v", err)
+	}
+	wantSamples, wantTypes := 0, 0
+	for _, l := range strings.Split(string(body), "\n") {
+		switch {
+		case strings.HasPrefix(l, "# TYPE "):
+			wantTypes++
+		case l != "" && !strings.HasPrefix(l, "#"):
+			wantSamples++
+		}
+	}
+	var b bytes.Buffer
+	e.write(&b)
+	gotSamples, gotTypes := 0, 0
+	for _, l := range strings.Split(strings.TrimRight(b.String(), "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(l, "# TYPE "):
+			gotTypes++
+		case strings.HasPrefix(l, "#"):
+		default:
+			gotSamples++
+			if !strings.Contains(l, `node="asus-gx10",recipe="qwen38-27b"} `) {
+				t.Fatalf("a sample came out without its labels: %s", l)
+			}
+		}
+	}
+	if gotSamples != wantSamples || gotTypes != wantTypes {
+		t.Fatalf("%d samples and %d TYPE lines in, %d and %d out", wantSamples, wantTypes, gotSamples, gotTypes)
+	}
+	if !strings.Contains(b.String(), `vllm:spec_decode_num_drafts_total{engine="0",model_name="qwen38-27b",node="asus-gx10",recipe="qwen38-27b"} `) {
+		t.Error("the draft counter the dashboard reads is missing")
+	}
+}
+
+// A 200 with nothing in it is not a model reporting metrics.
+func TestMetricsABodyWithNoSamplesIsNotUp(t *testing.T) {
+	nodes := nodecatalog.New()
+	gsrv := grpcserver.New(nodes, nil)
+	dialFakeMetricsSouslet(t, gsrv, "gx10", []string{"empty"}, map[string]metricsReply{
+		"empty": {body: "# HELP nothing here\n\n"},
+	})
+	m := &Metrics{Nodes: nodes, GRPC: gsrv, Cat: vllm("empty")}
+	rec, lines := scrape(t, m, nil)
+	if !has(lines, `sous_model_scrape_up{node="gx10",recipe="empty"} 0`) {
+		t.Errorf("a body with no samples was reported up:\n%s", rec.Body.String())
+	}
+}
+
+// A SOUSLET CANNOT CANCEL A REQUEST IT IS FORWARDING. Giving up here frees
+// this side; the node's request to the hung container stays open until the
+// container answers. Asked again on every scrape, a model that never answers
+// would collect one more stuck request on its node every 15 seconds for as
+// long as it stays hung. So after a timeout it is left alone for a while.
+func TestMetricsAHungModelIsNotAskedAgainUntilItsBackoffPasses(t *testing.T) {
+	nodes := nodecatalog.New()
+	gsrv := grpcserver.New(nodes, nil)
+	node := dialFakeMetricsSouslet(t, gsrv, "gx10", []string{"good", "stuck"}, map[string]metricsReply{
+		"good":  {body: "vllm:num_requests_running 1\n"},
+		"stuck": {hang: true},
+	})
+	now := time.Unix(1_700_000_000, 0)
+	m := &Metrics{Nodes: nodes, GRPC: gsrv, Cat: vllm("good", "stuck"), Timeout: 150 * time.Millisecond,
+		Now: func() time.Time { return now }}
+
+	asked := func(model string) int {
+		n := 0
+		for _, r := range node.requests() {
+			if strings.Contains(r.body, `"`+model+`"`) {
+				n++
+			}
+		}
+		return n
+	}
+
+	scrape(t, m, nil)
+	if asked("stuck") != 1 {
+		t.Fatalf("first scrape asked the hung model %d times, want 1", asked("stuck"))
+	}
+
+	// Straight away again: the healthy model is asked, the hung one is not.
+	start := time.Now()
+	rec, lines := scrape(t, m, nil)
+	if time.Since(start) > 120*time.Millisecond {
+		t.Errorf("a scrape that skips the hung model still waited for it (%v)", time.Since(start))
+	}
+	if asked("stuck") != 1 || asked("good") != 2 {
+		t.Fatalf("second scrape: hung model asked %d times (want 1), healthy %d (want 2)", asked("stuck"), asked("good"))
+	}
+	if !has(lines, `sous_model_scrape_up{node="gx10",recipe="stuck"} 0`) || !has(lines, `sous_model_scrape_up{node="gx10",recipe="good"} 1`) {
+		t.Errorf("a skipped model must still be reported down, and the other up:\n%s", rec.Body.String())
+	}
+
+	// Once the backoff has passed it gets another chance.
+	now = now.Add(10 * time.Minute)
+	scrape(t, m, nil)
+	if asked("stuck") != 2 {
+		t.Fatalf("after the backoff the hung model was asked %d times in all, want 2", asked("stuck"))
+	}
+}
+
+// A failure that is not a timeout leaves nothing open on the node, so there
+// is nothing to back off from: it is asked again on the next scrape, and is
+// seen the moment it recovers.
+func TestMetricsAModelThatRefusesIsAskedAgainOnTheNextScrape(t *testing.T) {
+	nodes := nodecatalog.New()
+	gsrv := grpcserver.New(nodes, nil)
+	node := dialFakeMetricsSouslet(t, gsrv, "gx10", []string{"down"}, map[string]metricsReply{
+		"down": {err: "connection refused"},
+	})
+	m := &Metrics{Nodes: nodes, GRPC: gsrv, Cat: vllm("down")}
+	scrape(t, m, nil)
+	scrape(t, m, nil)
+	if n := len(node.requests()); n != 2 {
+		t.Fatalf("a refusing model was asked %d times over two scrapes, want 2", n)
+	}
+}
+
+// THE LISTENER IS UNAUTHENTICATED, so anyone who can reach it can ask as
+// often as they like. Scrapes run one at a time, and with the backoff above a
+// burst of them costs a hung model one request, not one each.
+func TestMetricsABurstOfScrapesAsksAHungModelOnce(t *testing.T) {
+	nodes := nodecatalog.New()
+	gsrv := grpcserver.New(nodes, nil)
+	node := dialFakeMetricsSouslet(t, gsrv, "gx10", []string{"stuck"}, map[string]metricsReply{
+		"stuck": {hang: true},
+	})
+	m := &Metrics{Nodes: nodes, GRPC: gsrv, Cat: vllm("stuck"), Timeout: 100 * time.Millisecond}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/metrics", nil))
+		}()
+	}
+	wg.Wait()
+	if n := len(node.requests()); n != 1 {
+		t.Fatalf("8 scrapes at once sent the hung model %d requests, want 1", n)
 	}
 }

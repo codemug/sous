@@ -291,6 +291,13 @@ are not asked. The request to the node is `GET /metrics` with
 `{"model":"<recipe id>"}` as its body — the shape a v0.22.5 `souslet` already
 forwards — and none of the scraper's headers.
 
+Scrapes run one at a time, and a model that **timed out** is left alone for 30 s,
+doubling to at most 5 minutes, before it is asked again (it reads 0 in
+`sous_model_scrape_up` meanwhile). A `souslet` cannot cancel a request it is
+forwarding, so asking a hung model on every scrape would pile stuck requests up
+on its node. A model that refuses or errors is asked again on the next scrape. A
+`200` with no samples in it counts as down.
+
 **The metrics listener is unauthenticated, on purpose.** It is a separate
 listener serving exactly `GET /metrics` (anything else is 404/405), never a
 route on the authenticated one. This fleet's other exporters (node-exporter,

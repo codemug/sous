@@ -414,7 +414,7 @@ func requireBindable(flagName, addr string) error {
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" || strings.EqualFold(host, "[::]") {
 		return fmt.Errorf("config: %s refuses to bind %q; "+
-			"a listener that can start and stop models must not be reachable from everywhere", flagName, host)
+			"none of this process's listeners may be reachable from everywhere - name the one address it should answer on", flagName, host)
 	}
 	return nil
 }

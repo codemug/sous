@@ -46,6 +46,101 @@ type Metrics struct {
 	// out the real timeout.
 	Timeout  time.Duration
 	MaxBytes int64
+	// Now is the clock the backoff below reads; nil means time.Now.
+	Now func() time.Time
+
+	// scrapeMu makes scrapes take turns. The listener is unauthenticated, so
+	// how often it is asked is not this process's to decide; how much work
+	// each asking can start on the nodes is. One fan-out at a time, each
+	// bounded by Timeout.
+	scrapeMu sync.Mutex
+
+	// backoff holds the models that timed out, and until when to leave them
+	// alone. See skip.
+	backoffMu sync.Mutex
+	backoff   map[scrapeTarget]backoffState
+}
+
+type backoffState struct {
+	until    time.Time
+	timeouts int
+}
+
+const (
+	// A model that timed out is next asked after this long, doubling with
+	// each further timeout up to the cap.
+	metricsBackoffBase = 30 * time.Second
+	metricsBackoffMax  = 5 * time.Minute
+)
+
+func (m *Metrics) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
+}
+
+// skip reports whether t timed out recently enough to be left alone.
+//
+// A SOUSLET CANNOT CANCEL A REQUEST IT IS FORWARDING. When a fetch here gives
+// up, this side is freed, but the node's request to the container stays open
+// until the container answers it. A model that never answers, asked on every
+// scrape, would collect one more stuck request on its node every scrape
+// interval for as long as it stays hung. Backing off bounds that to a few an
+// hour, and costs a recovering model at most metricsBackoffMax of missing
+// metrics.
+//
+// ONLY A TIMEOUT. A refusal or an error envelope comes straight back and
+// leaves nothing open, so those are asked again on the next scrape and are
+// seen the moment they recover.
+func (m *Metrics) skip(t scrapeTarget) bool {
+	m.backoffMu.Lock()
+	defer m.backoffMu.Unlock()
+	st, ok := m.backoff[t]
+	return ok && m.now().Before(st.until)
+}
+
+func (m *Metrics) timedOut(t scrapeTarget) {
+	m.backoffMu.Lock()
+	defer m.backoffMu.Unlock()
+	if m.backoff == nil {
+		m.backoff = map[scrapeTarget]backoffState{}
+	}
+	st := m.backoff[t]
+	d := metricsBackoffMax
+	// 30s << 4 is already past the cap; the bound also keeps the shift from
+	// overflowing after days of timeouts.
+	if st.timeouts < 4 {
+		d = metricsBackoffBase << st.timeouts
+	}
+	m.backoff[t] = backoffState{until: m.now().Add(d), timeouts: st.timeouts + 1}
+}
+
+// answered forgets t's timeouts. Also called for a model that failed some
+// other way: it answered, which is all the backoff is about.
+func (m *Metrics) answered(t scrapeTarget) {
+	m.backoffMu.Lock()
+	defer m.backoffMu.Unlock()
+	delete(m.backoff, t)
+}
+
+// forget drops the backoff of every model that is no longer a target, so a
+// recipe undeployed while hung does not stay in the map for ever.
+func (m *Metrics) forget(current []scrapeTarget) {
+	m.backoffMu.Lock()
+	defer m.backoffMu.Unlock()
+	if len(m.backoff) == 0 {
+		return
+	}
+	keep := make(map[scrapeTarget]bool, len(current))
+	for _, t := range current {
+		keep[t] = true
+	}
+	for t := range m.backoff {
+		if !keep[t] {
+			delete(m.backoff, t)
+		}
+	}
 }
 
 const (
@@ -84,19 +179,41 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Concurrently, each under its own deadline, so the scrape takes as long
 	// as the slowest model's timeout rather than the sum of them. The caller's
 	// own request is the parent: a scraper that gave up stops the fetches too.
+	m.scrapeMu.Lock()
+	defer m.scrapeMu.Unlock()
+	// Whoever asked may have gone while this waited its turn.
+	if r.Context().Err() != nil {
+		return
+	}
+
 	targets := m.targets()
+	m.forget(targets)
 	results := make([]scrapeResult, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
+		results[i].target = t
+		if m.skip(t) {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			start := time.Now()
 			ctx, cancel := context.WithTimeout(r.Context(), m.timeout())
 			defer cancel()
-			results[i].target = t
-			if body, err := m.fetch(ctx, t.node, t.recipe); err == nil {
-				results[i].fams, _ = parseExposition(body, t.node, t.recipe)
+			body, err := m.fetch(ctx, t.node, t.recipe)
+			// DeadlineExceeded and nothing else: a scraper that hung up
+			// cancels ctx too, and that says nothing about the model.
+			if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				m.timedOut(t)
+			} else {
+				m.answered(t)
+			}
+			if err == nil {
+				// A 200 with no sample in it is not a model reporting metrics.
+				if fams, perr := parseExposition(body, t.node, t.recipe); perr == nil && fams.samples() > 0 {
+					results[i].fams = fams
+				}
 			}
 			results[i].took = time.Since(start)
 		}()
@@ -279,6 +396,14 @@ type family struct {
 	help, typ string // the comment lines to emit; "" if none was seen
 	kind      string // the TYPE's type word, to tell which samples are this family's
 	samples   []string
+}
+
+func (e *exposition) samples() int {
+	n := 0
+	for _, f := range e.fams {
+		n += len(f.samples)
+	}
+	return n
 }
 
 func (e *exposition) get(name string) *family {
