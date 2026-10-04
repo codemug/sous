@@ -291,12 +291,25 @@ are not asked. The request to the node is `GET /metrics` with
 `{"model":"<recipe id>"}` as its body — the shape a v0.22.5 `souslet` already
 forwards — and none of the scraper's headers.
 
-Scrapes run one at a time, and a model that **timed out** is left alone for 30 s,
-doubling to at most 5 minutes, before it is asked again (it reads 0 in
-`sous_model_scrape_up` meanwhile). A `souslet` cannot cancel a request it is
-forwarding, so asking a hung model on every scrape would pile stuck requests up
-on its node. A model that refuses or errors is asked again on the next scrape. A
-`200` with no samples in it counts as down.
+What an unauthenticated caller can make it do is bounded:
+
+- Scrapes run one at a time, and a scrape within 5 s of the last is answered
+  from it, so the nodes are asked at most once every 5 s however often the port
+  is.
+- A model that **timed out** is left alone for 30 s, doubling to at most
+  5 minutes, before it is asked again (it reads 0 in `sous_model_scrape_up`
+  meanwhile). A `souslet` cannot cancel a request it is forwarding, so asking a
+  hung model on every scrape would pile stuck requests up on its node. A scraper
+  hanging up does not cancel a fetch. A model that refuses or errors is asked
+  again on the next scrape.
+- One model contributes at most 8 MiB and 50,000 samples; past either it counts
+  as down. So does a `200` with no samples in it.
+- A model's body is checked as strictly as a metrics store would check it
+  (UTF-8, known `# TYPE`s, valid escapes, no repeated or `__`-reserved label
+  names, values in the format's own number grammar), so one model's malformed
+  line costs that model its metrics rather than failing the scrape for all.
+- The listener has read, write and idle timeouts, and the answer is written
+  after the scrape lock is released: a client that never reads holds up nobody.
 
 **The metrics listener is unauthenticated, on purpose.** It is a separate
 listener serving exactly `GET /metrics` (anything else is 404/405), never a
@@ -304,9 +317,11 @@ route on the authenticated one. This fleet's other exporters (node-exporter,
 cAdvisor, DCGM) are unauthenticated and tailnet-bound, a scrape config cannot
 easily carry a key that gets rotated, and what this serves is counters and
 histograms — no prompt or completion content. So, like `-listen` and
-`-grpc-listen`, it refuses `0.0.0.0`, `::` and an empty host: **bind it to a
-private (tailnet) address**, because the network boundary is all that protects
-it.
+`-grpc-listen`, it refuses any address that resolves to "every interface"
+(`0.0.0.0`, `::` and their other spellings, or an empty host) and must have an
+address of its own: **bind it to a private (tailnet) address**, because the
+network boundary is all that protects it. It reveals per-model request counts
+and timings, node ids and recipe ids to anyone who can reach it.
 
 ## Downloading models
 

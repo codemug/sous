@@ -35,7 +35,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -292,9 +291,16 @@ func main() {
 		}
 		metricsSrv := &http.Server{
 			Handler: &gateway.Metrics{Nodes: nodes, GRPC: gsrv, Cat: cat},
-			// Unauthenticated, so anyone who can reach it can hold a
-			// connection open; this bounds how long one can sit in headers.
+			// Unauthenticated, so anyone who can reach it can open
+			// connections and do nothing with them. Every phase of one is
+			// bounded: sending the request, reading the answer, and sitting
+			// idle between requests. A scrape takes at most the handler's
+			// per-model timeout, well inside WriteTimeout.
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    8 << 10,
 		}
 		go func() {
 			log.Printf("sous-api: model metrics (unauthenticated) on http://%s/metrics", metricsListen)
@@ -394,6 +400,9 @@ func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath, metri
 		if err := requireBindable("-metrics-listen", metricsListen); err != nil {
 			log.Fatal(err)
 		}
+		if err := requireOwnAddress(metricsListen, cfg.Listen, grpcListen); err != nil {
+			log.Fatal(err)
+		}
 	}
 	if cfg.PortLow > cfg.PortHigh {
 		log.Fatal("config: -port-low is above -port-high")
@@ -412,9 +421,32 @@ func requireBindable(flagName, addr string) error {
 	if err != nil {
 		return fmt.Errorf("config: %s must be host:port: %w", flagName, err)
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" || strings.EqualFold(host, "[::]") {
-		return fmt.Errorf("config: %s refuses to bind %q; "+
-			"none of this process's listeners may be reachable from everywhere - name the one address it should answer on", flagName, host)
+	refuse := fmt.Errorf("config: %s refuses to bind %q; "+
+		"none of this process's listeners may be reachable from everywhere - name the one address it should answer on", flagName, host)
+	if host == "" {
+		return refuse
+	}
+	// RESOLVED, NOT COMPARED AS TEXT. "0.0.0.0" and "::" have many spellings
+	// - [::0], [0::0], [::ffff:0.0.0.0], a zoned [::%lo], a name that resolves
+	// to one of them - and a list of strings only ever catches the ones
+	// somebody thought of. What matters is the address the listener would be
+	// given, so that is what is checked.
+	ta, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("config: %s %q does not resolve: %w", flagName, addr, err)
+	}
+	if ta.IP == nil || ta.IP.IsUnspecified() {
+		return refuse
+	}
+	return nil
+}
+
+// requireOwnAddress refuses a metrics address another listener already has.
+// Two listeners cannot share one, and the one that would lose is the API:
+// the metrics listener is opened first.
+func requireOwnAddress(metricsListen, listen, grpcListen string) error {
+	if metricsListen == listen || metricsListen == grpcListen {
+		return fmt.Errorf("config: -metrics-listen %q is the address of another listener; give it a port of its own", metricsListen)
 	}
 	return nil
 }

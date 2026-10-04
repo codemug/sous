@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/nodecatalog"
@@ -46,14 +47,31 @@ type Metrics struct {
 	// out the real timeout.
 	Timeout  time.Duration
 	MaxBytes int64
-	// Now is the clock the backoff below reads; nil means time.Now.
+	// MaxSamples caps the samples taken from one model on one scrape; zero
+	// means defaultMetricsMaxSamples.
+	MaxSamples int
+	// MinInterval is how long one scrape's answer is reused for. Zero means
+	// defaultMetricsMinInterval; negative means never reuse one.
+	MinInterval time.Duration
+	// Now is the clock the reuse and the backoff below read; nil means
+	// time.Now.
 	Now func() time.Time
 
-	// scrapeMu makes scrapes take turns. The listener is unauthenticated, so
-	// how often it is asked is not this process's to decide; how much work
-	// each asking can start on the nodes is. One fan-out at a time, each
-	// bounded by Timeout.
-	scrapeMu sync.Mutex
+	// turn is the scrape lock: whoever has put a value in it is scraping. A
+	// channel rather than a mutex so that a caller waiting for it can give up
+	// when its client does.
+	//
+	// The listener is unauthenticated, so how often it is asked is not this
+	// process's to decide; how much work each asking can start on the nodes
+	// is. One fan-out at a time, each bounded by Timeout, and at most one per
+	// MinInterval.
+	once sync.Once
+	turn chan struct{}
+	// last is the previous scrape's answer and lastAt when it was made. Both
+	// are touched only while holding turn. last is never written to again
+	// once made, which is what makes handing it out after releasing turn safe.
+	last   []byte
+	lastAt time.Time
 
 	// backoff holds the models that timed out, and until when to leave them
 	// alone. See skip.
@@ -151,6 +169,18 @@ const (
 	// answers /metrics with something else entirely from being held in memory
 	// whole.
 	defaultMetricsMaxBytes = 8 << 20
+
+	// A real vLLM serves about 600 samples. The byte cap alone is not enough:
+	// 8 MiB of the shortest possible sample is two million lines, each of
+	// which grows by the labels added here - 112 MiB of output from one model
+	// when it was measured.
+	defaultMetricsMaxSamples = 50_000
+
+	// Shorter than any sane scrape interval, so a store scraping every 15s
+	// always gets a fresh answer, and long enough that a loop hammering the
+	// port starts one fan-out to the nodes every few seconds rather than one
+	// per request.
+	defaultMetricsMinInterval = 5 * time.Second
 )
 
 // metricsContentType is the classic text format. Not OpenMetrics: the
@@ -176,16 +206,50 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Concurrently, each under its own deadline, so the scrape takes as long
-	// as the slowest model's timeout rather than the sum of them. The caller's
-	// own request is the parent: a scraper that gave up stops the fetches too.
-	m.scrapeMu.Lock()
-	defer m.scrapeMu.Unlock()
-	// Whoever asked may have gone while this waited its turn.
-	if r.Context().Err() != nil {
-		return
+	body, ok := m.scrape(r.Context())
+	if !ok {
+		return // the client left while waiting its turn; there is nobody to answer
 	}
+	// WRITTEN AFTER THE TURN IS GIVEN UP, never under it. A client that asks
+	// and then does not read would otherwise hold the lock for as long as it
+	// cared to, and every later scrape with it.
+	w.Header().Set("Content-Type", metricsContentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
 
+// scrape returns the answer to one scrape, and false if ctx ended before it
+// had a turn.
+//
+// Inside MinInterval of the last scrape, the answer is that scrape's.
+func (m *Metrics) scrape(ctx context.Context) ([]byte, bool) {
+	m.once.Do(func() { m.turn = make(chan struct{}, 1) })
+	select {
+	case m.turn <- struct{}{}:
+	case <-ctx.Done():
+		return nil, false
+	}
+	defer func() { <-m.turn }()
+
+	if iv := m.minInterval(); iv > 0 && m.last != nil && m.now().Sub(m.lastAt) < iv {
+		return m.last, true
+	}
+	m.last, m.lastAt = m.collect(), m.now()
+	return m.last, true
+}
+
+// collect asks every target for its metrics and builds the answer.
+//
+// Concurrently, each under its own deadline, so it takes as long as the
+// slowest model's timeout rather than the sum of them.
+//
+// THE FETCHES BELONG TO THE SCRAPE, NOT TO WHOEVER ASKED FOR IT. They used to
+// run under the request's context, so a scraper that hung up cancelled them
+// - and a cancelled fetch of a hung model looked like a model that had
+// answered, which cleared its backoff. Ten scrapes that each gave up early
+// left ten stuck requests on the node. Now a fetch runs to its own deadline
+// whatever the caller does, and its result is there for the next one.
+func (m *Metrics) collect() []byte {
 	targets := m.targets()
 	m.forget(targets)
 	results := make([]scrapeResult, len(targets))
@@ -199,19 +263,18 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			ctx, cancel := context.WithTimeout(r.Context(), m.timeout())
+			ctx, cancel := context.WithTimeout(context.Background(), m.timeout())
 			defer cancel()
-			body, err := m.fetch(ctx, t.node, t.recipe)
-			// DeadlineExceeded and nothing else: a scraper that hung up
-			// cancels ctx too, and that says nothing about the model.
-			if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			body, sent, err := m.fetch(ctx, t.node, t.recipe)
+			switch classify(err, sent, errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+			case modelTimedOut:
 				m.timedOut(t)
-			} else {
+			case modelAnswered:
 				m.answered(t)
 			}
 			if err == nil {
 				// A 200 with no sample in it is not a model reporting metrics.
-				if fams, perr := parseExposition(body, t.node, t.recipe); perr == nil && fams.samples() > 0 {
+				if fams, perr := parseExposition(body, t.node, t.recipe, m.maxSamples()); perr == nil && fams.samples() > 0 {
 					results[i].fams = fams
 				}
 			}
@@ -260,10 +323,33 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&b, "sous_node_connected{%s} %d\n", labelPair("node", n.NodeID), c)
 		}
 	}
+	return b.Bytes()
+}
 
-	w.Header().Set("Content-Type", metricsContentType)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(b.Bytes())
+// outcome is what one fetch says about its model, for the backoff.
+type outcome int
+
+const (
+	// modelAnswered: it replied, with metrics or with a refusal. Nothing is
+	// left open on the node.
+	modelAnswered outcome = iota
+	// modelTimedOut: it was asked and the deadline passed first. The node is
+	// still holding that request.
+	modelTimedOut
+	// modelUnknown: the request never got as far as the node - its send
+	// queue was full, or it had gone. That says nothing about the model, so
+	// the backoff is left as it was.
+	modelUnknown
+)
+
+func classify(err error, sent, deadlinePassed bool) outcome {
+	switch {
+	case err != nil && !sent:
+		return modelUnknown
+	case err != nil && deadlinePassed:
+		return modelTimedOut
+	}
+	return modelAnswered
 }
 
 type scrapeTarget struct{ node, recipe string }
@@ -316,53 +402,55 @@ func (m *Metrics) targets() []scrapeTarget {
 // none on this listener, but a scraper configured with one by mistake must not
 // hand it to a container), and not its Accept: an OpenMetrics answer would be
 // relayed under a text-format Content-Type.
-func (m *Metrics) fetch(ctx context.Context, nodeID, recipeID string) ([]byte, error) {
+//
+// sent reports whether the whole request was handed to the node's connection
+// before anything went wrong - the difference between a model that did not
+// answer and one that was never asked.
+func (m *Metrics) fetch(ctx context.Context, nodeID, recipeID string) (out []byte, sent bool, err error) {
 	stream, err := m.GRPC.OpenProxyStream(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer stream.Close()
-	// ProxyStream's calls take no context; closing the stream is what unblocks
-	// whichever of them is waiting when the deadline passes. Without this a
-	// model that never answers would hold this scrape until its node
-	// disconnected.
+	// Closing the stream is what unblocks a call waiting on it, so the
+	// deadline is enforced by closing it. The returned stop is deferred so a
+	// fetch that finished in time does not leave the callback armed.
 	defer context.AfterFunc(ctx, stream.Close)()
 
 	body, err := json.Marshal(map[string]string{"model": recipeID})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := stream.Send(&pb.HTTPRequestHead{
 		Method: http.MethodGet, Path: "/metrics",
 		Headers: map[string]string{"Content-Type": "application/json"},
 	}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := sendChunkedProxyBody(stream, body); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	head, err := stream.RecvHead()
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	// 0 is read as 200, as proxyOverGRPC reads it.
+	// A souslet that sets no status means 200, as it does on the inference
+	// path.
 	if s := head.GetStatus(); s != 0 && s != http.StatusOK {
-		return nil, fmt.Errorf("%s on %s answered /metrics with %d", recipeID, nodeID, s)
+		return nil, true, fmt.Errorf("%s on %s answered /metrics with %d", recipeID, nodeID, s)
 	}
-	var out []byte
 	for {
 		chunk, err := stream.RecvChunk()
 		if err != nil {
-			return nil, err
+			return nil, true, err
 		}
-		// Refused rather than truncated: the first 8 MiB of an exposition is
-		// not a smaller valid one, it is a body cut off mid-line.
+		// Checked before appending, so a body past the cap is never held.
 		if int64(len(out)+len(chunk.GetData())) > m.maxBytes() {
-			return nil, fmt.Errorf("%s on %s answered /metrics with more than %d bytes", recipeID, nodeID, m.maxBytes())
+			return nil, true, fmt.Errorf("%s on %s answered /metrics with more than %d bytes", recipeID, nodeID, m.maxBytes())
 		}
 		out = append(out, chunk.GetData()...)
 		if chunk.GetEof() {
-			return out, nil
+			return out, true, nil
 		}
 	}
 }
@@ -379,6 +467,20 @@ func (m *Metrics) maxBytes() int64 {
 		return m.MaxBytes
 	}
 	return defaultMetricsMaxBytes
+}
+
+func (m *Metrics) maxSamples() int {
+	if m.MaxSamples > 0 {
+		return m.MaxSamples
+	}
+	return defaultMetricsMaxSamples
+}
+
+func (m *Metrics) minInterval() time.Duration {
+	if m.MinInterval != 0 {
+		return m.MinInterval
+	}
+	return defaultMetricsMinInterval
 }
 
 // ---- the text format ----------------------------------------------------
@@ -456,8 +558,21 @@ func (e *exposition) write(b *bytes.Buffer) {
 // would fail a Prometheus scrape of that model directly: half of a model
 // served as though it were all of it is worse than none of it and a 0 in
 // sous_model_scrape_up.
-func parseExposition(body []byte, node, recipeID string) (*exposition, error) {
+//
+// AND STRICT, where a real parser is. This output is one scrape for every
+// model, and a store that rejects a scrape on its first malformed line would
+// lose all of them to one container's bad one. So what the standard parser
+// refuses is refused here, for that model alone: invalid UTF-8, an unknown
+// TYPE, a bad escape, a repeated or reserved label name, a value Go would
+// read as a float and the format would not.
+//
+// maxSamples bounds how many samples are taken; zero means no bound.
+func parseExposition(body []byte, node, recipeID string, maxSamples int) (*exposition, error) {
+	if !utf8.Valid(body) {
+		return nil, errors.New("not valid UTF-8")
+	}
 	e := &exposition{}
+	n := 0
 	// The family the last HELP or TYPE declared. A histogram's _bucket, _sum
 	// and _count samples are that family's, not three families of their own.
 	cur := ""
@@ -470,6 +585,12 @@ func parseExposition(body []byte, node, recipeID string) (*exposition, error) {
 			kw, name, rest, ok := metaLine(line)
 			if !ok {
 				continue
+			}
+			if kw == "TYPE" && !validType(rest) {
+				return nil, fmt.Errorf("line %d: %q is not a metric type", i+1, rest)
+			}
+			if kw == "HELP" && !validHelp(rest) {
+				return nil, fmt.Errorf("line %d: HELP for %s has an escape the format does not have", i+1, name)
 			}
 			f := e.get(name)
 			cur = name
@@ -484,6 +605,9 @@ func parseExposition(body []byte, node, recipeID string) (*exposition, error) {
 		name, out, err := relabel(line, node, recipeID)
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		if n++; maxSamples > 0 && n > maxSamples {
+			return nil, fmt.Errorf("more than %d samples", maxSamples)
 		}
 		fam := name
 		if cur != "" && sampleOf(name, cur, e.fams[cur].kind) {
@@ -546,6 +670,9 @@ type label struct{ name, value string }
 // one. A sample with a label name twice is a parse error, and dropping the
 // incoming one would lose what the model said.
 func relabel(line, node, recipeID string) (string, string, error) {
+	if !utf8.ValidString(line) {
+		return "", "", errors.New("not valid UTF-8")
+	}
 	s := strings.TrimLeft(line, " \t")
 	end := strings.IndexAny(s, "{ \t")
 	if end < 0 {
@@ -570,7 +697,7 @@ func relabel(line, node, recipeID string) (string, string, error) {
 	if len(f) == 0 || len(f) > 2 {
 		return "", "", fmt.Errorf("%s: want a value and an optional timestamp, got %q", name, s)
 	}
-	if _, err := strconv.ParseFloat(f[0], 64); err != nil {
+	if !validValue(f[0]) {
 		return "", "", fmt.Errorf("%s: value %q is not a number", name, f[0])
 	}
 	if len(f) == 2 {
@@ -581,6 +708,14 @@ func relabel(line, node, recipeID string) (string, string, error) {
 
 	have := make(map[string]bool, len(labels))
 	for _, l := range labels {
+		if have[l.name] {
+			return "", "", fmt.Errorf("%s: label %s given twice", name, l.name)
+		}
+		// Names starting __ are the store's own; __name__ in particular
+		// would let a sample call itself a different metric.
+		if strings.HasPrefix(l.name, "__") {
+			return "", "", fmt.Errorf("%s: label name %s is reserved", name, l.name)
+		}
 		have[l.name] = true
 	}
 	for i, l := range labels {
@@ -642,6 +777,9 @@ func parseLabels(s string) ([]label, string, error) {
 		for ; i < len(s) && s[i] != '"'; i++ {
 			if s[i] == '\\' {
 				i++
+				if i >= len(s) || (s[i] != '\\' && s[i] != '"' && s[i] != 'n') {
+					return nil, "", fmt.Errorf("label %s: an escape the format does not have", name)
+				}
 			}
 		}
 		if i >= len(s) {
@@ -674,6 +812,40 @@ func cutBlank(s string) (before, after string) {
 		return s, ""
 	}
 	return s[:i], strings.TrimLeft(s[i:], " \t")
+}
+
+// validValue is the exposition format's idea of a number, which is narrower
+// than Go's: strconv also reads hex floats ("0x1p3") and digit separators
+// ("1_0"). This is the check the standard parser makes before it calls
+// strconv, for the same reason.
+func validValue(s string) bool {
+	if strings.ContainsAny(s, "pP_") {
+		return false
+	}
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
+func validType(s string) bool {
+	switch s {
+	case "counter", "gauge", "histogram", "summary", "untyped":
+		return true
+	}
+	return false
+}
+
+// validHelp accepts the two escapes HELP text has, \\ and \n, and no other.
+func validHelp(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			continue
+		}
+		i++
+		if i >= len(s) || (s[i] != '\\' && s[i] != 'n') {
+			return false
+		}
+	}
+	return true
 }
 
 func validMetricName(s string) bool {

@@ -60,3 +60,37 @@ func TestFromFlagsInAChildProcess(t *testing.T) {
 	fromFlags(strings.Split(args, "\x1f"))
 	os.Exit(0)
 }
+
+// EVERY SPELLING OF "ALL INTERFACES", not only the common ones. The check
+// used to compare the host against a list of strings, and [::0], [0::0],
+// [::ffff:0.0.0.0] and a zoned [::%lo] all walked past it and bound
+// everything - for -listen and -grpc-listen as well as this flag.
+func TestRequireBindableRefusesEveryUnspecifiedAddress(t *testing.T) {
+	for _, addr := range []string{
+		"0.0.0.0:1", "[::]:1", ":1", "[::0]:1", "[0::0]:1", "[0:0:0:0:0:0:0:0]:1",
+		"[0000::]:1", "[::ffff:0.0.0.0]:1", "[::%lo]:1", "1", "",
+	} {
+		if err := requireBindable("-listen", addr); err == nil {
+			t.Errorf("%q was accepted", addr)
+		}
+	}
+	for _, addr := range []string{"100.64.0.1:8090", "127.0.0.1:1", "[::1]:1", "[fd7a:115c:a1e0::1]:1"} {
+		if err := requireBindable("-listen", addr); err != nil {
+			t.Errorf("%q was refused: %v", addr, err)
+		}
+	}
+}
+
+// The metrics listener on the address of another listener would stop that one
+// from starting - and the one it stops is the API.
+func TestMetricsListenMustBeItsOwnAddress(t *testing.T) {
+	if err := requireOwnAddress("100.64.0.1:8090", "100.64.0.1:8090", "100.64.0.1:8091"); err == nil {
+		t.Error("-metrics-listen equal to -listen was accepted")
+	}
+	if err := requireOwnAddress("100.64.0.1:8091", "100.64.0.1:8090", "100.64.0.1:8091"); err == nil {
+		t.Error("-metrics-listen equal to -grpc-listen was accepted")
+	}
+	if err := requireOwnAddress("100.64.0.1:8092", "100.64.0.1:8090", "100.64.0.1:8091"); err != nil {
+		t.Errorf("a distinct address was refused: %v", err)
+	}
+}

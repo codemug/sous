@@ -52,7 +52,7 @@ type nodeConn struct {
 	// payload, or when the caller gives up), which is what keeps this map
 	// from growing forever across a long-lived connection serving many
 	// sequential proxied requests.
-	proxyStreams map[string]chan *pb.Envelope
+	proxyStreams map[string]proxyRoute
 
 	// done is closed exactly once, by Connect's cleanup, when this
 	// connection is torn down. It exists so the write-loop goroutine (and
@@ -155,7 +155,7 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 		send:         make(chan *pb.Envelope, 32),
 		controlSend:  make(chan *pb.Envelope, 32),
 		pending:      make(map[string]chan *pb.Envelope),
-		proxyStreams: make(map[string]chan *pb.Envelope),
+		proxyStreams: make(map[string]proxyRoute),
 		done:         make(chan struct{}),
 	}
 	// Register the connection BEFORE the catalog ever reflects this node as
@@ -263,9 +263,9 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 			if ok {
 				delete(nc.pending, env.StreamId)
 			}
-			var proxyCh chan *pb.Envelope
+			var route proxyRoute
 			if !ok {
-				proxyCh, ok = nc.proxyStreams[env.StreamId]
+				route, ok = nc.proxyStreams[env.StreamId]
 			}
 			nc.mu.Unlock()
 			if !ok {
@@ -276,13 +276,19 @@ func (s *Server) Connect(stream pb.Souslet_ConnectServer) error {
 				continue
 			}
 			// Unlike waiter (a fresh, unshared size-1 channel Send alone
-			// holds), proxyCh is read concurrently by ProxyStream.RecvHead/
-			// RecvChunk, which also select on nc.done - so this send must
-			// too, or a proxy consumer that has already given up (node
-			// disconnected, stream closed) could leave this goroutine
-			// blocked here forever once proxyCh's buffer fills.
+			// holds), route.replies is read by ProxyStream.RecvHead/RecvChunk,
+			// and its reader can stop reading: the node disconnected, or the
+			// stream was closed. This send must give up in both cases.
+			//
+			// IT USED TO WATCH ONLY nc.done. A stream closed with its buffer
+			// full - an inference client that hung up mid-response - then
+			// held this goroutine for good, and this goroutine is the only
+			// reader of everything the node sends: its deploy replies, its
+			// snapshots and every other stream's chunks stalled until the
+			// node's connection dropped.
 			select {
-			case proxyCh <- env:
+			case route.replies <- env:
+			case <-route.closed:
 			case <-nc.done:
 			}
 		}
@@ -449,10 +455,18 @@ func (s *Server) OpenProxyStream(nodeID string) (*ProxyStream, error) {
 	// deliver the next message - matches Send's waiter sizing philosophy,
 	// just larger since a response can be many chunks, not one reply.
 	replies := make(chan *pb.Envelope, 16)
+	closed := make(chan struct{})
 	nc.mu.Lock()
-	nc.proxyStreams[streamID] = replies
+	nc.proxyStreams[streamID] = proxyRoute{replies: replies, closed: closed}
 	nc.mu.Unlock()
-	return &ProxyStream{nc: nc, streamID: streamID, replies: replies, closed: make(chan struct{})}, nil
+	return &ProxyStream{nc: nc, streamID: streamID, replies: replies, closed: closed}, nil
+}
+
+// proxyRoute is what the read loop needs to hand a reply to a proxy stream:
+// where to put it, and how to tell that nobody will take it any more.
+type proxyRoute struct {
+	replies chan *pb.Envelope
+	closed  chan struct{}
 }
 
 // errProxyStreamClosed is what a call blocked on a stream returns once Close

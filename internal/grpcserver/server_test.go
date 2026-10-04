@@ -791,3 +791,65 @@ func waitUntilTrue(t *testing.T, timeout time.Duration, cond func() bool, failMs
 	}
 	t.Fatal(failMsg)
 }
+
+// ONE ABANDONED STREAM MUST NOT STALL ITS WHOLE NODE. Every message a node
+// sends arrives on one read loop, which hands each proxy reply to its
+// stream's 16-slot buffer. That hand-off used to wait on the buffer or on the
+// node disconnecting, and on nothing else - so a stream whose reader had gone
+// (a slow inference client that hung up mid-response) with its buffer full
+// blocked the loop for good, and with it every deploy, snapshot and inference
+// reply from that node until its connection dropped.
+func TestAClosedStreamWithAFullBufferDoesNotStallItsNode(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat, nil)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "proxy-stall-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	abandoned, err := srv.OpenProxyStream(nodeID)
+	if err != nil {
+		t.Fatalf("OpenProxyStream: %v", err)
+	}
+	// Far more replies than the buffer holds, and nobody reading them.
+	for i := 0; i < 40; i++ {
+		if err := stream.Send(&pb.Envelope{StreamId: abandoned.streamID, Payload: &pb.Envelope_HttpRespChunk{
+			HttpRespChunk: &pb.HTTPResponseChunk{Data: []byte("x")},
+		}}); err != nil {
+			t.Fatalf("send chunk %d: %v", i, err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // let the read loop reach the full buffer
+	abandoned.Close()
+
+	// Anything else from the same node must still get through.
+	other, err := srv.OpenProxyStream(nodeID)
+	if err != nil {
+		t.Fatalf("OpenProxyStream: %v", err)
+	}
+	defer other.Close()
+	if err := stream.Send(&pb.Envelope{StreamId: other.streamID, Payload: &pb.Envelope_HttpRespHead{
+		HttpRespHead: &pb.HTTPResponseHead{Status: 200},
+	}}); err != nil {
+		t.Fatalf("send head: %v", err)
+	}
+	got := make(chan error, 1)
+	go func() {
+		_, err := other.RecvHead()
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatalf("RecvHead on the second stream: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second stream on the same node got nothing for 2s: the abandoned stream is holding the node's read loop")
+	}
+}
