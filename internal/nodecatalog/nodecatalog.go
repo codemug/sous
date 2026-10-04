@@ -7,6 +7,7 @@
 package nodecatalog
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -92,23 +93,80 @@ func (c *Catalog) All() []NodeView {
 	return out
 }
 
-// NodeFor returns the connected node currently running recipeID, if any.
-// Disconnected nodes are not returned even if their last snapshot still
+// NodeFor returns the connected node a request for recipeID is routed to, if
+// any. Disconnected nodes are not returned even if their last snapshot still
 // lists the recipe - gateway proxying to a node with no live connection
 // cannot succeed, so it should fail fast rather than be offered as a
 // candidate.
 func (c *Catalog) NodeFor(recipeID string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	p, ok := c.place(recipeID)
+	return p.NodeID, ok
+}
+
+// Placement is one recipe on the node requests for it are routed to.
+type Placement struct {
+	NodeID     string
+	Deployment *pb.DeploymentState
+}
+
+// Placements returns every recipe running on a connected node, once each,
+// sorted by recipe id, against the node NodeFor picks for it. It is what a
+// listing reads, and it goes through the same choice NodeFor does so that the
+// two cannot answer differently.
+func (c *Catalog) Placements() []Placement {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	seen := map[string]bool{}
+	var out []Placement
+	for _, n := range c.nodes {
+		if !n.Connected {
+			continue
+		}
+		for _, d := range n.Deployments {
+			id := d.GetRecipeId()
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			if p, ok := c.place(id); ok {
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Deployment.RecipeId < out[j].Deployment.RecipeId })
+	return out
+}
+
+// place chooses the node for recipeID. The caller holds c.mu.
+//
+// THE SAME NODE EVERY TIME. This used to return whichever node the map
+// iteration reached first, which spread one model's requests over its nodes at
+// random and left nothing able to say where a request would go. Now: a node
+// where the container is running beats one where it is not (the second cannot
+// answer), and the lowest node id breaks the tie.
+func (c *Catalog) place(recipeID string) (Placement, bool) {
+	var best Placement
+	found, bestRunning := false, false
 	for id, n := range c.nodes {
 		if !n.Connected {
 			continue
 		}
 		for _, d := range n.Deployments {
-			if d.RecipeId == recipeID {
-				return id, true
+			if d.GetRecipeId() != recipeID {
+				continue
 			}
+			running := d.GetPhase() == phaseRunning
+			if !found || (running && !bestRunning) || (running == bestRunning && id < best.NodeID) {
+				best, bestRunning, found = Placement{NodeID: id, Deployment: d}, running, true
+			}
+			break
 		}
 	}
-	return "", false
+	return best, found
 }
+
+// phaseRunning is Docker's status word for a running container, which is what
+// a souslet reports as DeploymentState.Phase.
+const phaseRunning = "running"

@@ -213,7 +213,9 @@ gateway routes to a node by; its `served_as` names are not listed, since a
 request under one would not reach it. Its `phase` is the node's word for the
 container (`running`, `exited`, …) — a node does not report whether the model
 inside has finished loading. A node that has disconnected takes its models off
-the list with it.
+the list with it. A recipe running on more than one node is listed once, against
+the node its requests go to: one where the container is running if there is one,
+and the lowest node id among those.
 
 Requests to a model that is not ready get a described `503` rather than a
 refused connection:

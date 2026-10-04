@@ -286,12 +286,24 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 		if len(names) == 0 {
 			names = []string{rt.RecipeID}
 		}
+		listed := false
 		for _, n := range names {
 			if shadowed[n] {
 				continue
 			}
+			listed = true
 			data = append(data, modelObj{
 				ID: n, Object: "model", Created: now, OwnedBy: "sous",
+				Phase: string(rt.Phase), RecipeID: rt.RecipeID,
+				Modality: rt.Modality, Port: rt.Port,
+			})
+		}
+		// Every name it is listed by went to a node. It still answers to its
+		// recipe id, so it is listed as that rather than left off a list of
+		// models it is one of.
+		if !listed && !shadowed[rt.RecipeID] {
+			data = append(data, modelObj{
+				ID: rt.RecipeID, Object: "model", Created: now, OwnedBy: "sous",
 				Phase: string(rt.Phase), RecipeID: rt.RecipeID,
 				Modality: rt.Modality, Port: rt.Port,
 			})
@@ -314,48 +326,37 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 // name a request for this model will actually reach it under; listing any
 // other would advertise a name that is answered 404.
 //
-// Only CONNECTED nodes, the rule Nodes.NodeFor applies: a node that has dropped
-// off cannot be proxied to, so its models leave the list with it.
+// Each is listed against the node Nodes.NodeFor routes it to - Placements
+// makes the same choice - so only connected nodes appear, and a recipe on two
+// nodes appears once, where its requests go.
 //
 // Phase is the node's own word for the container - Docker's status ("running",
 // "exited", ...), not a deploy.Phase. A node does not report whether the model
 // inside has finished loading, and "running" is not rewritten to "ready" here
 // to pretend it does.
+//
+// No port. A node publishes on its own loopback; next to a local entry's port,
+// which is on this host, it would be read as something a caller can dial.
 func (g *Gateway) nodeModels(now int64) []modelObj {
+	// The condition Proxy takes the node path under.
 	if g.Nodes == nil || g.GRPC == nil {
 		return nil
 	}
-	views := g.Nodes.All()
-	// By node id, so that a recipe running on two nodes is listed against the
-	// same one every time.
-	sort.Slice(views, func(i, j int) bool { return views[i].NodeID < views[j].NodeID })
-
-	seen := map[string]bool{}
-	var out []modelObj
-	for _, n := range views {
-		if !n.Connected {
-			continue
+	ps := g.Nodes.Placements()
+	out := make([]modelObj, 0, len(ps))
+	for _, p := range ps {
+		id := p.Deployment.GetRecipeId()
+		m := modelObj{
+			ID: id, Object: "model", Created: now, OwnedBy: "sous",
+			Phase: p.Deployment.GetPhase(), RecipeID: id, Node: p.NodeID,
 		}
-		for _, d := range n.Deployments {
-			id := d.GetRecipeId()
-			if id == "" || seen[id] {
-				continue
+		if g.Cat != nil {
+			if rec, err := g.Cat.Get(id); err == nil {
+				m.Modality = string(rec.Modality)
 			}
-			seen[id] = true
-			m := modelObj{
-				ID: id, Object: "model", Created: now, OwnedBy: "sous",
-				Phase: d.GetPhase(), RecipeID: id,
-				Port: int(d.GetHostPort()), Node: n.NodeID,
-			}
-			if g.Cat != nil {
-				if rec, err := g.Cat.Get(id); err == nil {
-					m.Modality = string(rec.Modality)
-				}
-			}
-			out = append(out, m)
 		}
+		out = append(out, m)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 

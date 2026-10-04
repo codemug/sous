@@ -1533,3 +1533,71 @@ func TestLocalAndNodeModelsAreListedTogetherOnce(t *testing.T) {
 		t.Errorf("the node-only model is missing: %v", got)
 	}
 }
+
+// One recipe on two nodes is listed once, against the node a request for it
+// goes to, with that node's phase - not against whichever sorts first.
+func TestAModelOnTwoNodesIsListedWhereItIsRouted(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("node-a", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "qwen", Phase: "exited"}}})
+	nodes.ReplaceSnapshot("node-b", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "qwen", Phase: "running"}}})
+	g := &Gateway{Nodes: nodes, GRPC: grpcserver.New(nodes, nil)}
+
+	ms := listed(t, g, nil)
+	if len(ms) != 1 {
+		t.Fatalf("want qwen listed once, got %v", ms)
+	}
+	routed, _ := nodes.NodeFor("qwen")
+	if ms[0].Node != routed || ms[0].Phase != "running" {
+		t.Errorf("listed on %q as %q, but requests go to %q where it is running", ms[0].Node, ms[0].Phase, routed)
+	}
+}
+
+// A local model whose every listed name is taken by a node's model is still
+// reachable under its recipe id, so that is what it is listed as - it must not
+// vanish from the list while still answering requests.
+func TestALocalModelShadowedByANodeIsListedByItsRecipeID(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "ornith", Phase: "running"}}})
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: 8000}}}
+	cat := fakeCat{"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}}}
+	g := &Gateway{Res: res, Cat: cat, Host: "127.0.0.1", Nodes: nodes, GRPC: grpcserver.New(nodes, nil)}
+
+	got := byID(listed(t, g, nil))
+	if got["ornith"].Node != "asus-gx10" {
+		t.Errorf("ornith should be the node's model, got %+v", got["ornith"])
+	}
+	m, ok := got["ornith15"]
+	if !ok || m.Node != "" || m.Port != 8000 {
+		t.Fatalf("the local model dropped off the list, or is not listed as local: %v", got)
+	}
+
+	// And a key scoped to it sees it, as it may use it.
+	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req = req.WithContext(authWithKey(req.Context(), []string{"ornith15"}))
+	if scoped := byID(listed(t, g, req)); len(scoped) != 1 || scoped["ornith15"].ID == "" {
+		t.Errorf("a key scoped to ornith15 should see exactly ornith15, got %v", scoped)
+	}
+}
+
+// A node publishes a model on its own loopback. That port means nothing to
+// anyone reading this list, and next to a local entry's port - which is on
+// this host - it would be read as one that does.
+func TestNodeModelsCarryNoPort(t *testing.T) {
+	nodes, gsrv := gx10(t)
+	g := &Gateway{Nodes: nodes, GRPC: gsrv}
+	for _, m := range listed(t, g, nil) {
+		if m.Port != 0 {
+			t.Errorf("%s is listed with port %d", m.ID, m.Port)
+		}
+	}
+}
+
+// Proxy only takes the node path when it has a gRPC server to take it over.
+// Without one a node's models cannot be reached, so they are not offered.
+func TestNodeModelsAreNotListedWithoutAWayToReachThem(t *testing.T) {
+	nodes, _ := gx10(t)
+	g := &Gateway{Res: &fakeRes{}, Nodes: nodes}
+	if got := listed(t, g, nil); len(got) != 0 {
+		t.Fatalf("listed models there is no path to: %v", got)
+	}
+}
