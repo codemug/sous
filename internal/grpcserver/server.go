@@ -420,6 +420,14 @@ type ProxyStream struct {
 	streamID string
 	replies  chan *pb.Envelope
 
+	// closed is closed by Close, and every blocking call below also selects
+	// on it - which is what lets a caller with a deadline give up on a model
+	// that never answers. Close used to unregister the stream and nothing
+	// else, so a RecvHead already waiting stayed blocked until the whole
+	// node disconnected: for a healthy node that answers everything but one
+	// hung container, forever. The gateway's own proxy path never closes a
+	// stream under a pending call, so nothing changes for it.
+	closed    chan struct{}
 	closeOnce sync.Once
 }
 
@@ -444,8 +452,12 @@ func (s *Server) OpenProxyStream(nodeID string) (*ProxyStream, error) {
 	nc.mu.Lock()
 	nc.proxyStreams[streamID] = replies
 	nc.mu.Unlock()
-	return &ProxyStream{nc: nc, streamID: streamID, replies: replies}, nil
+	return &ProxyStream{nc: nc, streamID: streamID, replies: replies, closed: make(chan struct{})}, nil
 }
+
+// errProxyStreamClosed is what a call blocked on a stream returns once Close
+// has been called on it - by this caller giving up, typically on a deadline.
+var errProxyStreamClosed = fmt.Errorf("proxy stream closed")
 
 // Send delivers the request head. Must be called before any SendChunk.
 func (p *ProxyStream) Send(head *pb.HTTPRequestHead) error {
@@ -456,6 +468,8 @@ func (p *ProxyStream) Send(head *pb.HTTPRequestHead) error {
 	case <-p.nc.done:
 		p.Close()
 		return fmt.Errorf("node disconnected while opening a proxy stream")
+	case <-p.closed:
+		return errProxyStreamClosed
 	}
 }
 
@@ -472,6 +486,8 @@ func (p *ProxyStream) SendChunk(data []byte, eof bool) error {
 	case <-p.nc.done:
 		p.Close()
 		return fmt.Errorf("node disconnected while sending a proxied request body")
+	case <-p.closed:
+		return errProxyStreamClosed
 	}
 }
 
@@ -498,6 +514,8 @@ func (p *ProxyStream) RecvHead() (*pb.HTTPResponseHead, error) {
 	case <-p.nc.done:
 		p.Close()
 		return nil, fmt.Errorf("node disconnected while waiting for the response head")
+	case <-p.closed:
+		return nil, errProxyStreamClosed
 	}
 }
 
@@ -529,6 +547,8 @@ func (p *ProxyStream) RecvChunk() (*pb.HTTPResponseChunk, error) {
 	case <-p.nc.done:
 		p.Close()
 		return nil, fmt.Errorf("node disconnected while streaming the response")
+	case <-p.closed:
+		return nil, errProxyStreamClosed
 	}
 }
 
@@ -540,10 +560,15 @@ func (p *ProxyStream) RecvChunk() (*pb.HTTPResponseChunk, error) {
 // this, a stream_id whose caller stopped reading early would sit in
 // nc.proxyStreams forever, a slow leak across a long-lived connection
 // serving many sequential proxied requests.
+//
+// Safe to call from another goroutine while a Send/SendChunk/RecvHead/
+// RecvChunk on this stream is blocked: that call returns an error rather than
+// waiting on a node that is no longer being listened to.
 func (p *ProxyStream) Close() {
 	p.closeOnce.Do(func() {
 		p.nc.mu.Lock()
 		delete(p.nc.proxyStreams, p.streamID)
 		p.nc.mu.Unlock()
+		close(p.closed)
 	})
 }

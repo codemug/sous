@@ -49,6 +49,7 @@ import (
 	"github.com/codemug/sous/internal/deploy"
 	"github.com/codemug/sous/internal/engine"
 	"github.com/codemug/sous/internal/fetch"
+	"github.com/codemug/sous/internal/gateway"
 	"github.com/codemug/sous/internal/grpcserver"
 	"github.com/codemug/sous/internal/hf"
 	"github.com/codemug/sous/internal/httpapi"
@@ -73,7 +74,7 @@ func main() {
 		return
 	}
 
-	cfg, grpcListen, caStatePath := fromFlags(os.Args[1:])
+	cfg, grpcListen, caStatePath, metricsListen := fromFlags(os.Args[1:])
 
 	st, err := store.New(cfg.DataDir)
 	if err != nil {
@@ -267,6 +268,42 @@ func main() {
 		log.Fatalf("http: %v", err)
 	}
 
+	// MODEL METRICS, opt-in: one scrape federating every vLLM model's own
+	// /metrics on every connected node, fetched through the same catalog and
+	// gRPC server httpapi.New just handed the Gateway. A model's port is on
+	// its node's loopback and chosen at deploy time, so this is the only
+	// place a scraper can reach them from.
+	//
+	// ITS OWN LISTENER, WITH NO AUTHENTICATION, and never a route on h. Every
+	// other exporter in this fleet (node-exporter, cAdvisor, DCGM) is
+	// unauthenticated and tailnet-bound, a scrape config cannot easily carry
+	// a key that gets rotated, and what this serves is counters and
+	// histograms only - no prompt or completion content ever passes through
+	// it. Mounting it on h instead would mean either putting a credential in
+	// every scrape config or opening a hole in the auth middleware that sits
+	// in front of deploy and undeploy. So it binds a separate address, which
+	// fromFlags has already refused if it would bind every interface: the
+	// network boundary is this listener's only protection, as it is the
+	// other two's.
+	if metricsListen != "" {
+		metricsLis, err := net.Listen("tcp", metricsListen)
+		if err != nil {
+			log.Fatalf("listen (metrics) on %s: %v", metricsListen, err)
+		}
+		metricsSrv := &http.Server{
+			Handler: &gateway.Metrics{Nodes: nodes, GRPC: gsrv, Cat: cat},
+			// Unauthenticated, so anyone who can reach it can hold a
+			// connection open; this bounds how long one can sit in headers.
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			log.Printf("sous-api: model metrics (unauthenticated) on http://%s/metrics", metricsListen)
+			if err := metricsSrv.Serve(metricsLis); err != nil {
+				log.Fatalf("metrics server: %v", err)
+			}
+		}()
+	}
+
 	log.Printf("sous-api: HTTP listening on %s (models in %s)", cfg.Listen, cfg.ModelDir)
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: h}
 	log.Fatal(httpSrv.ListenAndServe())
@@ -315,10 +352,16 @@ func dropCaches() error {
 // mirrored here for both listeners: both are network-reachable and both
 // carry the same "must not be reachable from everywhere" invariant this
 // project applies to every listener it opens.
-func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath string) {
+//
+// -metrics-listen is the optional third listener, and gets the same check
+// when it is set: it is unauthenticated (see main), so the network boundary
+// is the only protection it has. Empty, its default, means it is not opened.
+func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath, metricsListen string) {
 	fs := flag.NewFlagSet("sous-api", flag.ExitOnError)
 	fs.StringVar(&cfg.Listen, "listen", "", "HTTP listen address (host:port), tailnet IP only, never 0.0.0.0")
 	fs.StringVar(&grpcListen, "grpc-listen", "", "gRPC listen address (host:port) for souslets to dial, tailnet IP only, never 0.0.0.0")
+	fs.StringVar(&metricsListen, "metrics-listen", "",
+		"optional, UNAUTHENTICATED listen address (host:port) serving GET /metrics for every vLLM model on every connected node; tailnet IP only, never 0.0.0.0; empty disables it")
 	fs.StringVar(&cfg.DataDir, "data", "/var/lib/sous-api", "data directory")
 	fs.StringVar(&caStatePath, "ca-state", "", "path to persist the node CA across restarts")
 	fs.StringVar(&cfg.ModelDir, "models", "", "host path holding model weights")
@@ -347,10 +390,15 @@ func fromFlags(args []string) (cfg config.Config, grpcListen, caStatePath string
 	if err := requireBindable("-grpc-listen", grpcListen); err != nil {
 		log.Fatal(err)
 	}
+	if metricsListen != "" {
+		if err := requireBindable("-metrics-listen", metricsListen); err != nil {
+			log.Fatal(err)
+		}
+	}
 	if cfg.PortLow > cfg.PortHigh {
 		log.Fatal("config: -port-low is above -port-high")
 	}
-	return cfg, grpcListen, caStatePath
+	return cfg, grpcListen, caStatePath, metricsListen
 }
 
 // requireBindable rejects an address that isn't host:port, or whose host

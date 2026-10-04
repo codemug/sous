@@ -645,6 +645,59 @@ func TestProxyStreamUnblocksWithErrorWhenNodeDisconnectsMidStream(t *testing.T) 
 	}
 }
 
+// A caller that gives up on a stream - a deadline passing while the node's
+// model never answers - must be able to unblock its own pending RecvHead by
+// closing the stream, without waiting for the whole node to disconnect.
+// Otherwise every abandoned request strands a goroutine for as long as that
+// node stays connected, which for a healthy node is forever. The node's
+// connection must survive this: one stream given up on is not a reason to
+// stop talking to the node.
+func TestCloseUnblocksAPendingRecvHead(t *testing.T) {
+	cat := nodecatalog.New()
+	srv := New(cat, nil)
+	stream := dialFakeSouslet(t, srv)
+
+	const nodeID = "proxy-close-node"
+	if err := stream.Send(&pb.Envelope{Payload: &pb.Envelope_Snapshot{Snapshot: &pb.NodeSnapshot{NodeId: nodeID}}}); err != nil {
+		t.Fatalf("Send snapshot: %v", err)
+	}
+	waitUntilTrue(t, 2*time.Second, func() bool {
+		view, ok := cat.Node(nodeID)
+		return ok && view.Connected
+	}, fmt.Sprintf("node %q never showed as connected", nodeID))
+
+	ps, err := srv.OpenProxyStream(nodeID)
+	if err != nil {
+		t.Fatalf("OpenProxyStream: %v", err)
+	}
+	if err := ps.Send(&pb.HTTPRequestHead{Method: "GET", Path: "/metrics"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ps.RecvHead()
+		errCh <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let RecvHead actually block; nothing will answer it
+	ps.Close()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("RecvHead returned no error on a stream closed under it")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RecvHead did not unblock within 2s of its stream being closed")
+	}
+	if _, err := ps.RecvChunk(); err == nil {
+		t.Fatal("RecvChunk on a closed stream returned no error")
+	}
+	if !srv.Connected(nodeID) {
+		t.Fatal("closing one stream disconnected the node")
+	}
+}
+
 // TestProxyStreamDoesNotPanicWhenRacingDisconnect is
 // TestSendDoesNotPanicWhenRacingDisconnect's counterpart for the proxy path:
 // a burst of concurrent OpenProxyStream/Send/SendChunk calls while the

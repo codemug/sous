@@ -250,6 +250,57 @@ connection.
 If this fleet ever grows a second node or a hosted provider to fail over to,
 Envoy is the right answer and this becomes the thing behind it.
 
+## Model metrics
+
+vLLM serves Prometheus metrics at `/metrics`, but a `souslet` publishes each
+model on its node's loopback, on a port chosen at deploy time, so no scraper can
+reach them. `sous-api` can, through the same gRPC stream inference travels on.
+Start it with `-metrics-listen` and it serves one scrape for all of them:
+
+```bash
+sous-api ... -metrics-listen 10.0.0.5:9464
+
+curl http://10.0.0.5:9464/metrics
+```
+
+Off by default (empty). No environment variable sets it.
+
+On each scrape, every `vllm`-kind recipe on a connected node (against the node
+its requests are routed to; other kinds, and recipes the catalog does not know,
+are skipped) is asked for its own `/metrics` — concurrently, each with a 5 s
+timeout and an 8 MiB cap. Every sample comes back with two labels added:
+
+- `node="<node id>"` and `recipe="<recipe id>"`. A label of either name the
+  model already exports is renamed `exported_node` / `exported_recipe`, as
+  Prometheus does for clashing target labels.
+- Each metric family is declared once (`# HELP`/`# TYPE`, first seen wins) with
+  every model's samples under it; other comments are dropped.
+
+Plus Sous's own gauges:
+
+| metric | labels | meaning |
+|---|---|---|
+| `sous_model_scrape_up` | `node`, `recipe` | 1 if that model's metrics were fetched and parsed, else 0 |
+| `sous_model_scrape_duration_seconds` | `node`, `recipe` | how long that took |
+| `sous_node_connected` | `node` | 1/0 for every node `sous-api` knows |
+
+The answer is always `200` with whatever succeeded: a model that errors, times
+out, answers non-200 or sends something that is not the text format is a 0 in
+`sous_model_scrape_up` and costs the rest nothing. A disconnected node's models
+are not asked. The request to the node is `GET /metrics` with
+`{"model":"<recipe id>"}` as its body — the shape a v0.22.5 `souslet` already
+forwards — and none of the scraper's headers.
+
+**The metrics listener is unauthenticated, on purpose.** It is a separate
+listener serving exactly `GET /metrics` (anything else is 404/405), never a
+route on the authenticated one. This fleet's other exporters (node-exporter,
+cAdvisor, DCGM) are unauthenticated and tailnet-bound, a scrape config cannot
+easily carry a key that gets rotated, and what this serves is counters and
+histograms — no prompt or completion content. So, like `-listen` and
+`-grpc-listen`, it refuses `0.0.0.0`, `::` and an empty host: **bind it to a
+private (tailnet) address**, because the network boundary is all that protects
+it.
+
 ## Downloading models
 
 Give it a HuggingFace repo id and it fetches the weights into the same cache
