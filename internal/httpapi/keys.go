@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/codemug/sous/internal/apikey"
@@ -19,9 +20,13 @@ var errAdminFromKey = errors.New("an admin key cannot issue another admin key. "
 // issuer names who is making a key request, for the log. A key is named; the
 // password, a session and the token are all just "the operator", because
 // nothing distinguishes them once the middleware has let the request through.
+//
+// QUOTED, because a key's name is whatever its creator typed, newlines
+// included, and this string goes into a log line: unquoted, a key named with a
+// line break in it could write a second, false entry under its own.
 func issuer(r *http.Request) string {
 	if k, ok := auth.FromContext(r.Context()); ok {
-		return "key " + k.Name
+		return "key " + strconv.Quote(k.Name)
 	}
 	return "the operator"
 }
@@ -78,6 +83,12 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 
 	k, secret, err := s.issueKey(r, name, permission, models)
 	if err != nil {
+		// THE REFUSAL IS THE EVENT WORTH A LOG LINE. A key asking for an admin
+		// key is the move this check exists to stop; a refusal nobody can see
+		// afterwards stops the attempt and hides that it was made.
+		if errors.Is(err, errAdminFromKey) {
+			log.Printf("apikey: REFUSED admin key %q requested by %s", name, issuer(r))
+		}
 		if wantsHTML(r) {
 			s.redirect(w, r, "/keys", err.Error(), true)
 			return

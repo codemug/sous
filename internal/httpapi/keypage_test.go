@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -341,5 +344,35 @@ func TestThePermissionCannotBeSmuggledInTheQueryString(t *testing.T) {
 	}
 	if list := browserGet(t, h, "/keys").Body.String(); strings.Contains(list, "chip is-admin") {
 		t.Error("a query-string permission produced an admin key in the list")
+	}
+}
+
+// A key's name is typed by whoever made it and ends up in a log line. A name
+// with a line break in it must not be able to write a second, false entry.
+func TestAKeyNameCannotForgeALogLine(t *testing.T) {
+	h := tokenServer(t)
+	_, admin, _ := issue(t, h, `{"name":"ci\napikey: admin key \"x\" (abcd) issued by the operator","permission":"admin"}`)
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// Anything this key does on the keys API is logged under its name: here, a
+	// refused attempt to mint an admin key, and an ordinary key it may issue.
+	as(t, h, admin, http.MethodPost, "/api/keys", `{"name":"successor","permission":"admin"}`)
+	as(t, h, admin, http.MethodPost, "/api/keys", `{"name":"notebook"}`)
+
+	out := strings.TrimRight(buf.String(), "\n")
+	lines := strings.Split(out, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("two events should be two log lines, got %d:\n%s", len(lines), out)
+	}
+	if !strings.Contains(lines[0], "REFUSED") {
+		t.Errorf("the refused admin-key request was not logged as one: %s", lines[0])
+	}
+	for _, l := range lines {
+		if !strings.Contains(l, "apikey: ") {
+			t.Errorf("a log line that is not ours: %q", l)
+		}
 	}
 }
