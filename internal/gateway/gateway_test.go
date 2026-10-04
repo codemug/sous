@@ -1601,3 +1601,30 @@ func TestNodeModelsAreNotListedWithoutAWayToReachThem(t *testing.T) {
 		t.Fatalf("listed models there is no path to: %v", got)
 	}
 }
+
+// The recipe-id fallback must not list an id another local model already owns
+// as a name: aliases are resolved before recipe ids, so a request for it goes
+// to that other model, and listing it here would list the id twice.
+func TestRecipeIDFallbackYieldsToAnotherModelsName(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{Deployments: []*pb.DeploymentState{{RecipeId: "ornith", Phase: "running"}}})
+	res := &fakeRes{recs: []deploy.Record{{RecipeID: "ornith15", HostPort: 8000}, {RecipeID: "other", HostPort: 8001}}}
+	cat := fakeCat{
+		"ornith15": {ID: "ornith15", ServedAs: []string{"ornith"}},
+		"other":    {ID: "other", ServedAs: []string{"Ornith15"}},
+	}
+	g := &Gateway{Res: res, Cat: cat, Host: "127.0.0.1", Nodes: nodes, GRPC: grpcserver.New(nodes, nil)}
+
+	n := 0
+	for _, m := range listed(t, g, nil) {
+		if strings.EqualFold(m.ID, "ornith15") {
+			n++
+			if m.RecipeID != "other" {
+				t.Errorf("ornith15 is listed for recipe %q, but a request for it resolves to other", m.RecipeID)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ornith15 listed %d times, want once", n)
+	}
+}

@@ -277,6 +277,15 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 		shadowed[m.ID] = true
 	}
 
+	// Names local models are listed by. resolve matches these before recipe
+	// ids, and without regard to case.
+	aliased := map[string]bool{}
+	for _, rt := range rs {
+		for _, n := range rt.Aliases {
+			aliased[strings.ToLower(n)] = true
+		}
+	}
+
 	data := make([]modelObj, 0, len(rs)+len(onNodes))
 	for _, rt := range rs {
 		if len(allow) > 0 && !allowedBy(allow, rt.RecipeID, rt) {
@@ -300,8 +309,9 @@ func (g *Gateway) ListModels(w http.ResponseWriter, r *http.Request) {
 		}
 		// Every name it is listed by went to a node. It still answers to its
 		// recipe id, so it is listed as that rather than left off a list of
-		// models it is one of.
-		if !listed && !shadowed[rt.RecipeID] {
+		// models it is one of - unless that id is another model's name, which
+		// is then who answers to it.
+		if !listed && !shadowed[rt.RecipeID] && !aliased[strings.ToLower(rt.RecipeID)] {
 			data = append(data, modelObj{
 				ID: rt.RecipeID, Object: "model", Created: now, OwnedBy: "sous",
 				Phase: string(rt.Phase), RecipeID: rt.RecipeID,
