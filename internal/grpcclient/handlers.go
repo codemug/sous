@@ -451,6 +451,25 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 	if err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
+	// A THIRD-PARTY IMAGE LISTENS WHERE ITS AUTHOR CHOSE. BuildSpec says 8000
+	// because that is where Sous tells vLLM to listen; for KindContainer
+	// nothing here controls the port - kokoro serves on 8880 - and publishing
+	// the host port to the wrong one makes a container that starts, reports
+	// running, and resets every connection. deploy.Manager has always
+	// corrected this for the single-node path; this path never did, so a
+	// container recipe has not been deployable to a node since nodes existed.
+	//
+	// Same order as there: the recipe's container_port when it says anything
+	// (the only thing that can correct an image whose EXPOSE is wrong), then
+	// the image's own EXPOSE, then BuildSpec's 8000 - an image that exposes
+	// nothing still has to be deployable, and is visibly broken either way.
+	if rec.Kind == recipe.KindContainer {
+		if rec.ContainerPort > 0 {
+			spec.ContainerPort = rec.ContainerPort
+		} else if cp, err := h.Runtime.ImageExposedPort(ctx, rec.Image); err == nil && cp > 0 {
+			spec.ContainerPort = cp
+		}
+	}
 	if h.DropCaches != nil {
 		if err := h.DropCaches(); err != nil {
 			return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: "dropping page cache: " + err.Error()}

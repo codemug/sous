@@ -3,6 +3,7 @@ package grpcclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -521,4 +522,69 @@ func TestALookupThatRacedAnUndeployDoesNotForward(t *testing.T) {
 	if hits.Load() != 0 {
 		t.Fatalf("the undeployed model's port was dialled %d time(s)", hits.Load())
 	}
+}
+
+// ---- a third-party image's own port ---------------------------------------
+
+// exposingRuntime is fakeRuntime whose images declare a port, as kokoro's does.
+type exposingRuntime struct {
+	fakeRuntime
+	exposed map[string]int
+}
+
+func (r *exposingRuntime) ImageExposedPort(_ context.Context, ref string) (int, error) {
+	if p, ok := r.exposed[ref]; ok {
+		return p, nil
+	}
+	return 0, fmt.Errorf("image %s exposes no port", ref)
+}
+
+// A `container` RECIPE'S IMAGE LISTENS WHERE ITS AUTHOR CHOSE. The node deploy
+// path published every model's host port to container port 8000 - right for
+// the kinds Sous writes the command for, wrong for kokoro, which serves on
+// 8880: the container started, warmed up, reported running, and every request
+// to its published port was a connection reset. The old single-node path read
+// the recipe's container_port, then the image's EXPOSE; this path never did.
+func TestDeployPublishesAContainerRecipesOwnPort(t *testing.T) {
+	const img = "ghcr.io/remsky/kokoro-fastapi-gpu:latest"
+	deploy := func(t *testing.T, rt *exposingRuntime, yaml string) engine.Spec {
+		t.Helper()
+		h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+		res := h.HandleDeploy(context.Background(), &pb.DeployCommand{RecipeId: "x", RecipeYaml: yaml, WantPort: 18001})
+		if res.Error != "" {
+			t.Fatalf("HandleDeploy: %s", res.Error)
+		}
+		if len(rt.started) != 1 {
+			t.Fatalf("started %d containers, want 1", len(rt.started))
+		}
+		return rt.started[0]
+	}
+	kokoro := "id: kokoro\nkind: container\nmodality: tts\nimage: " + img + "\n"
+
+	t.Run("the recipe's container_port wins", func(t *testing.T) {
+		spec := deploy(t, &exposingRuntime{exposed: map[string]int{img: 9999}}, kokoro+"container_port: 8880\n")
+		if spec.ContainerPort != 8880 || spec.HostPort != 18001 {
+			t.Fatalf("published %d -> %d, want 18001 -> 8880", spec.HostPort, spec.ContainerPort)
+		}
+	})
+	t.Run("otherwise the image's own exposed port", func(t *testing.T) {
+		spec := deploy(t, &exposingRuntime{exposed: map[string]int{img: 8880}}, kokoro)
+		if spec.ContainerPort != 8880 {
+			t.Fatalf("container port = %d, want the image's 8880", spec.ContainerPort)
+		}
+	})
+	t.Run("an image that exposes nothing still deploys, on 8000", func(t *testing.T) {
+		spec := deploy(t, &exposingRuntime{}, kokoro)
+		if spec.ContainerPort != 8000 {
+			t.Fatalf("container port = %d, want the 8000 default", spec.ContainerPort)
+		}
+	})
+	t.Run("a vLLM recipe is always 8000, whatever it or its image says", func(t *testing.T) {
+		vimg := "vllm/vllm-openai:v0.28.0"
+		spec := deploy(t, &exposingRuntime{exposed: map[string]int{vimg: 9000}},
+			"id: qwen\nkind: vllm\nmodality: text\nmodel: Qwen/Qwen3.8-27B\nimage: "+vimg+"\ncontainer_port: 8880\ndeclared: {weights_gib: 1}\n")
+		if spec.ContainerPort != 8000 {
+			t.Fatalf("container port = %d, want 8000: Sous commands vLLM to listen there", spec.ContainerPort)
+		}
+	})
 }
