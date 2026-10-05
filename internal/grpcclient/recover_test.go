@@ -588,3 +588,35 @@ func TestDeployPublishesAContainerRecipesOwnPort(t *testing.T) {
 		}
 	})
 }
+
+// The change counter is one for the whole node, so a lookup for one model can
+// be invalidated by ANOTHER model's deploy landing while Docker is being read.
+// That request has done nothing wrong and its model has not changed; failing
+// it would turn every deploy into a chance of a 502 for whatever else was
+// being looked up at that instant. The lookup reads Docker again instead.
+func TestALookupThatRacedAnotherModelsDeployStillForwards(t *testing.T) {
+	port, hits := modelServer(t, "hello from dflash2")
+	name := engine.ContainerName("dflash2")
+	rt := &dockerLikeRuntime{fakeRuntime: fakeRuntime{states: map[string]engine.ContainerState{
+		name: {Name: name, Status: "running", HostPort: port},
+	}}}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+	c := &Client{Handlers: h}
+	rt.onStates = func() {
+		res := h.HandleDeploy(context.Background(), &pb.DeployCommand{
+			RecipeId:   "asr",
+			RecipeYaml: "id: asr\nkind: vllm\nmodality: text\nmodel: some/model\nimage: img\ndeclared: {weights_gib: 1}\n",
+		})
+		if res.Error != "" {
+			t.Errorf("HandleDeploy(asr): %s", res.Error)
+		}
+	}
+
+	body, err := proxy(t, c, "dflash2")
+	if err != nil {
+		t.Fatalf("a request for dflash2 failed because asr was deployed at the same moment: %v", err)
+	}
+	if body != "hello from dflash2" || hits.Load() != 1 {
+		t.Fatalf("got %q with %d hits, want dflash2's own answer exactly once", body, hits.Load())
+	}
+}

@@ -295,17 +295,40 @@ func (h *Handlers) adopt(states map[string]engine.ContainerState, before uint64)
 // request rather than dialling somewhere. A cache hit is never re-checked
 // against Docker: that would put a Docker call in front of every request.
 func (h *Handlers) localPort(ctx context.Context, recipeID string) (int, error) {
+	// A FEW ATTEMPTS, because the change counter is one for the whole node: a
+	// lookup for this model is invalidated by any other model's deploy or
+	// undeploy landing while Docker is being read. That says nothing about
+	// this model, and the request has done nothing wrong, so Docker is read
+	// again rather than the request failed. The counter only moves in the
+	// instant a command finishes, so a second read all but always stands.
+	var err error
+	for attempt := 0; attempt < localPortAttempts; attempt++ {
+		var p int
+		var stale bool
+		if p, stale, err = h.lookupPort(ctx, recipeID); !stale {
+			return p, err
+		}
+	}
+	return 0, err
+}
+
+const localPortAttempts = 3
+
+// lookupPort is one attempt of localPort. stale reports that Docker's answer
+// was overtaken by a deploy or undeploy while it was being read, which is the
+// one outcome worth trying again.
+func (h *Handlers) lookupPort(ctx context.Context, recipeID string) (port int, stale bool, err error) {
 	if p, ok := h.portFor(recipeID); ok {
-		return p, nil
+		return p, false, nil
 	}
 	before := h.changeCount()
 	states, err := h.Runtime.States(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("no local deployment for model %q known to this souslet, and Docker could not be asked: %w", recipeID, err)
+		return 0, false, fmt.Errorf("no local deployment for model %q known to this souslet, and Docker could not be asked: %w", recipeID, err)
 	}
 	h.adopt(states, before)
 	if p, ok := h.portFor(recipeID); ok {
-		return p, nil
+		return p, false, nil
 	}
 	// An exact name lookup in Docker's full list, never Docker's own name
 	// filter: that is a substring match, under which "sous-qwen" also finds
@@ -313,19 +336,18 @@ func (h *Handlers) localPort(ctx context.Context, recipeID string) (int, error) 
 	st, ok := states[engine.ContainerName(recipeID)]
 	switch {
 	case !ok:
-		return 0, fmt.Errorf("no local deployment for model %q", recipeID)
+		return 0, false, fmt.Errorf("no local deployment for model %q", recipeID)
 	case !st.Running():
-		return 0, fmt.Errorf("model %q is %s on this node, not running", recipeID, st.Status)
+		return 0, false, fmt.Errorf("model %q is %s on this node, not running", recipeID, st.Status)
 	case st.HostPort == 0:
-		return 0, fmt.Errorf("model %q publishes no host port on this node", recipeID)
+		return 0, false, fmt.Errorf("model %q publishes no host port on this node", recipeID)
 	}
 	// Running and published, yet not adopted: a deploy or undeploy landed
 	// while Docker was being read, so adopt dropped the pass - and this answer
 	// is the same stale one. It is not forwarded on: if what landed was this
 	// model's undeploy, the port it names is being torn down or is already
-	// another model's. The caller sees a retryable failure; the retry reads
-	// Docker again.
-	return 0, fmt.Errorf("model %q changed on this node while it was being looked up; retry", recipeID)
+	// another model's. Reported as stale so localPort reads Docker again.
+	return 0, true, fmt.Errorf("model %q changed on this node while it was being looked up; retry", recipeID)
 }
 
 // footprintFor returns the zero recipe.Footprint for a recipe ID this
