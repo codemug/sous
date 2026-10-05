@@ -286,6 +286,47 @@ func TestDeploySkipsFetchWhenWeightsAreAlreadyCached(t *testing.T) {
 	}
 }
 
+// A RECIPE WITH NO MODEL HAS NO WEIGHTS TO FETCH. A `container` recipe whose
+// image carries its own weights (kokoro) names no model at all, and "is the
+// empty string among this node's cached repos" is always no - so deploy asked
+// the node to download a repository with no name, the node answered that it
+// had failed, and the recipe could not be deployed to any node. It went
+// unseen because the one such deployment in the fleet predated the fetch
+// check; undeploying it on 2026-10-05 made it impossible to bring back.
+func TestDeploySkipsFetchForARecipeThatNamesNoModel(t *testing.T) {
+	nodes := nodecatalog.New()
+	nodes.ReplaceSnapshot("asus-gx10", &pb.NodeSnapshot{
+		NodeId: "asus-gx10", CachedWeightRepos: []string{"Inferact/Qwen3.8-27B-NVFP4"},
+	})
+	gsrv := grpcserver.New(nodes, nil)
+	var sawFetch bool
+	stop := dialFakeSousletRecording(t, gsrv, "asus-gx10", func(env *pb.Envelope) *pb.Envelope {
+		if env.GetFetch() != nil {
+			sawFetch = true
+			// What a real souslet says when asked to fetch "".
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_FetchProgress{
+				FetchProgress: &pb.FetchProgress{Phase: "failed"},
+			}}
+		}
+		if d := env.GetDeploy(); d != nil {
+			return &pb.Envelope{StreamId: env.StreamId, Payload: &pb.Envelope_DeployResult{DeployResult: &pb.DeployResult{RecipeId: "kokoro"}}}
+		}
+		return nil
+	})
+	defer stop()
+
+	res, err := deployToNode(gsrv, nodes, "asus-gx10", "id: kokoro\nkind: container\nimage: ghcr.io/remsky/kokoro-fastapi-gpu:latest\n", 18001, false)
+	if err != nil {
+		t.Fatalf("deployToNode: %v", err)
+	}
+	if res.GetRecipeId() != "kokoro" {
+		t.Fatalf("deployed %q, want kokoro", res.GetRecipeId())
+	}
+	if sawFetch {
+		t.Fatal("asked the node to fetch weights for a recipe that names no model")
+	}
+}
+
 // TestPlanOnNodeUsesTheCatalogSnapshotNotALiveCall proves planOnNode never
 // touches gRPC at all: a node the catalog has never heard of - so there is no
 // live connection to even attempt - still gets a normal "not known" error
