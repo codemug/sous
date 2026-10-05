@@ -249,6 +249,22 @@ func (h *Handlers) adopt(states map[string]engine.ContainerState, before uint64)
 	if h.changes != before {
 		return
 	}
+	// FORGET A PORT WHOSE CONTAINER IS NOT RUNNING. The table used to keep an
+	// entry for as long as the process lived, so a model that exited went on
+	// being routed to - and if another container had since come up on that
+	// port (two created for the same one, which the allocator before this fix
+	// allowed), to the wrong model. Dropping it sends the next request for it
+	// to localPort's Docker lookup, which says what state it is really in; a
+	// later pass adopts it again once it is running.
+	//
+	// Only for a container Docker LISTS as not running. One it does not list
+	// at all is left alone: the entry may be from a deploy whose container
+	// this answer predates by less than the change counter can see.
+	for id := range h.ports {
+		if st, ok := states[engine.ContainerName(id)]; ok && !st.Running() {
+			delete(h.ports, id)
+		}
+	}
 	for name, st := range states {
 		recipeID := strings.TrimPrefix(name, containerNamePrefix)
 		if _, known := h.ports[recipeID]; !known && st.Running() && st.HostPort > 0 {
@@ -304,9 +320,12 @@ func (h *Handlers) localPort(ctx context.Context, recipeID string) (int, error) 
 		return 0, fmt.Errorf("model %q publishes no host port on this node", recipeID)
 	}
 	// Running and published, yet not adopted: a deploy or undeploy landed
-	// while Docker was being read, so adopt dropped the pass. Docker's answer
-	// is still the freshest there is for THIS request; the next pass adopts.
-	return st.HostPort, nil
+	// while Docker was being read, so adopt dropped the pass - and this answer
+	// is the same stale one. It is not forwarded on: if what landed was this
+	// model's undeploy, the port it names is being torn down or is already
+	// another model's. The caller sees a retryable failure; the retry reads
+	// Docker again.
+	return 0, fmt.Errorf("model %q changed on this node while it was being looked up; retry", recipeID)
 }
 
 // footprintFor returns the zero recipe.Footprint for a recipe ID this

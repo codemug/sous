@@ -456,3 +456,69 @@ func TestRecoveryRetriesAfterDockerWasUnavailable(t *testing.T) {
 		t.Fatalf("proxy once Docker is back = (%q, %v)", body, err)
 	}
 }
+
+// A REMEMBERED PORT IS ONLY GOOD WHILE ITS CONTAINER IS RUNNING. Adopted or
+// deployed, a port stayed in the table for as long as the process lived; if the
+// container behind it exited and another container came up on the same port -
+// possible for any pair created under the old allocator, which tested a port
+// only by binding it - requests for the first model were answered by the
+// second. Every snapshot pass now drops the port of a model that is not
+// running, so the request finds out from Docker instead.
+func TestARememberedPortIsForgottenWhenItsContainerStopsRunning(t *testing.T) {
+	port, hits := modelServer(t, "hello from dflash2")
+	kokoro, dflash2 := engine.ContainerName("kokoro"), engine.ContainerName("dflash2")
+	rt := &dockerLikeRuntime{fakeRuntime: fakeRuntime{states: map[string]engine.ContainerState{
+		kokoro: {Name: kokoro, Status: "running", HostPort: port},
+	}}}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+	c := &Client{Handlers: h}
+	h.Snapshot(context.Background(), "asus-gx10", 121.6, 24)
+	if p, ok := h.portFor("kokoro"); !ok || p != port {
+		t.Fatalf("portFor(kokoro) = (%d, %v), want it recovered on %d", p, ok, port)
+	}
+
+	// kokoro exits; a second container created for the same port takes it.
+	rt.states[kokoro] = engine.ContainerState{Name: kokoro, Status: "exited", HostPort: port}
+	rt.states[dflash2] = engine.ContainerState{Name: dflash2, Status: "running", HostPort: port}
+	h.Snapshot(context.Background(), "asus-gx10", 121.6, 24)
+
+	body, err := proxy(t, c, "kokoro")
+	if err == nil {
+		t.Fatalf("a request for kokoro, which has exited, was answered: %q", body)
+	}
+	if !strings.Contains(err.Error(), "not running") {
+		t.Errorf("error = %v, want it to say kokoro is not running", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("a request for kokoro reached another model's server %d time(s)", hits.Load())
+	}
+	// The model that IS on that port is still served.
+	if body, err := proxy(t, c, "dflash2"); err != nil || body != "hello from dflash2" {
+		t.Fatalf("dflash2: %q, %v", body, err)
+	}
+}
+
+// A lookup that raced an undeploy must not forward on the answer it read
+// before the undeploy landed: the port it names is being torn down, or is
+// already someone else's.
+func TestALookupThatRacedAnUndeployDoesNotForward(t *testing.T) {
+	port, hits := modelServer(t, "hello from dflash2")
+	name := engine.ContainerName("dflash2")
+	rt := &dockerLikeRuntime{fakeRuntime: fakeRuntime{states: map[string]engine.ContainerState{
+		name: {Name: name, Status: "running", HostPort: port},
+	}}}
+	h := &Handlers{Runtime: rt, ModelDir: t.TempDir()}
+	c := &Client{Handlers: h}
+	rt.onStates = func() {
+		if res := h.HandleUndeploy(context.Background(), &pb.UndeployCommand{RecipeId: "dflash2"}); res.Error != "" {
+			t.Errorf("HandleUndeploy: %s", res.Error)
+		}
+	}
+
+	if body, err := proxy(t, c, "dflash2"); err == nil {
+		t.Fatalf("a request that raced the model's undeploy was forwarded and answered: %q", body)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("the undeployed model's port was dialled %d time(s)", hits.Load())
+	}
+}
