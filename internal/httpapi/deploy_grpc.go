@@ -80,7 +80,11 @@ func deployToNode(gsrv *grpcserver.Server, cat *nodecatalog.Catalog, nodeID stri
 		return nil, fmt.Errorf("invalid recipe: %w", err)
 	}
 
-	if view, ok := cat.Node(nodeID); ok && !view.CachedWeightRepos[rec.Model] {
+	// Only a recipe that names a model has weights to fetch. One that names
+	// none - a container whose image carries its own - would otherwise always
+	// look uncached ("" is in no node's list) and be sent to fetch a
+	// repository with no name, which fails, so it could never be deployed.
+	if view, ok := cat.Node(nodeID); ok && rec.Model != "" && !view.CachedWeightRepos[rec.Model] {
 		if err := fetchWeights(gsrv, nodeID, rec.Model); err != nil {
 			return nil, err
 		}
