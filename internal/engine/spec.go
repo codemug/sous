@@ -13,6 +13,7 @@ package engine
 import (
 	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/codemug/sous/internal/recipe"
 )
@@ -33,7 +34,32 @@ type Spec struct {
 	HostPort      int
 	Binds         []string
 	GPU           bool
+	// Labels carry facts about the deployment that must outlive the process
+	// that created it - see ModelLabel.
+	Labels map[string]string
 }
+
+// Labels every deployment container carries, in the same "sous." namespace
+// as fetch.RepoLabel ("sous.repo") on job containers.
+//
+// WHY ON THE CONTAINER. A container outlives the process that created it - the
+// restart policy brings models back after a node reboot whether or not
+// anything is up to remember them - so anything a later process needs to know
+// about a running model has to live where the model does. souslet kept a
+// model's footprint (the capacity planner's input) and repo (the weight-delete
+// guard's input) only in memory, and after every restart reported footprints
+// of 0 and would have let a running model's weights be deleted. The footprint
+// is the recipe's DECLARED one, the same figure souslet has always reported.
+//
+// ModelLabel is a label, not something parsed back out of the command line,
+// because only vLLM recipes put the repo there, and because a HuggingFace repo
+// id is case-sensitive - the same reason fetch keeps it in RepoLabel rather
+// than in a container name.
+const (
+	ModelLabel   = "sous.model"
+	WeightsLabel = "sous.weights_gib"
+	KVLabel      = "sous.kv_gib"
+)
 
 func BuildSpec(r recipe.Recipe, hostPort int, modelDir string) (Spec, error) {
 	if err := r.Validate(); err != nil {
@@ -55,6 +81,15 @@ func BuildSpec(r recipe.Recipe, hostPort int, modelDir string) (Spec, error) {
 		// what grants it the device. The old comment outlived the decision it
 		// described, which is exactly how a stale example becomes a bug.
 		GPU: r.Declared.WeightsGiB > 0,
+		Labels: map[string]string{
+			// 'f', -1: the shortest form that parses back to the same float,
+			// so DeclaredFootprint reads exactly what the recipe declared.
+			WeightsLabel: strconv.FormatFloat(r.Declared.WeightsGiB, 'f', -1, 64),
+			KVLabel:      strconv.FormatFloat(r.Declared.KVGiB, 'f', -1, 64),
+		},
+	}
+	if r.Model != "" {
+		s.Labels[ModelLabel] = r.Model
 	}
 	for k, v := range r.Env {
 		s.Env = append(s.Env, fmt.Sprintf("%s=%s", k, v))

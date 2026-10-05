@@ -94,7 +94,9 @@ type Handlers struct {
 	// rec.Model in hand the moment a deploy happens; remembering it here
 	// costs nothing extra and needs no round trip. Same lifecycle, same
 	// lock as footprints and ports: populated by a successful HandleDeploy,
-	// cleared by HandleUndeploy.
+	// cleared by HandleUndeploy - and, for a container this process did not
+	// deploy, adopted from its engine.ModelLabel (see adopt), so a restarted
+	// souslet goes on guarding a running model's weights.
 	currentlyDeployed map[string]string
 
 	// ports remembers each currently-deployed recipe's local host port,
@@ -111,7 +113,28 @@ type Handlers struct {
 	// forwarding path (internal/gateway/gateway.go's rewriteModel), which
 	// the node-routed path does not use - so keying this map by recipe ID
 	// is exactly what a proxied request's declared model matches against.
+	//
+	// A CACHE OF DOCKER, NOT THE RECORD. This map used to be the only place a
+	// port lived, so every souslet restart - a node reboot included, which
+	// Docker's restart policy brings every model back from on its old port -
+	// left a process that reported host_port 0 for every deployment and
+	// failed every proxied request with "no local deployment" until each
+	// model was undeployed and redeployed (production, 2026-09-11 and
+	// 2026-10-05). A container this process did not deploy is now adopted
+	// from Docker's own answer (see adopt): on every snapshot - the first of
+	// which goes out on connect, before any request can arrive - and on a
+	// portFor miss in the proxy path (see localPort).
 	ports map[string]int
+
+	// changes counts every remember/forget above. A reconciliation pass reads
+	// Docker WITHOUT holding footprintsMu - holding it would stall every
+	// proxied request behind a Docker call - so by the time it has an answer,
+	// a deploy or undeploy may have landed and made that answer stale. adopt
+	// compares this against the count taken before the read and drops the
+	// whole pass if anything moved, rather than writing a container an
+	// undeploy has just removed back into the maps. Commands are minutes
+	// apart and snapshots seconds apart, so a dropped pass costs one tick.
+	changes uint64
 }
 
 // rememberFootprint records a successfully deployed recipe's declared
@@ -126,6 +149,7 @@ func (h *Handlers) rememberFootprint(recipeID string, f recipe.Footprint) {
 		h.footprints = make(map[string]recipe.Footprint)
 	}
 	h.footprints[recipeID] = f
+	h.changes++
 }
 
 // forgetFootprint drops a recipe's cached declared footprint once it is no
@@ -135,6 +159,7 @@ func (h *Handlers) forgetFootprint(recipeID string) {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
 	delete(h.footprints, recipeID)
+	h.changes++
 }
 
 // rememberModel records a successfully deployed recipe's model repo under
@@ -147,6 +172,7 @@ func (h *Handlers) rememberModel(recipeID, model string) {
 		h.currentlyDeployed = make(map[string]string)
 	}
 	h.currentlyDeployed[recipeID] = model
+	h.changes++
 }
 
 // forgetModel drops a recipe's remembered model once it is no longer
@@ -155,6 +181,7 @@ func (h *Handlers) forgetModel(recipeID string) {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
 	delete(h.currentlyDeployed, recipeID)
+	h.changes++
 }
 
 // rememberPort records a successfully deployed recipe's local host port
@@ -167,6 +194,7 @@ func (h *Handlers) rememberPort(recipeID string, port int) {
 		h.ports = make(map[string]int)
 	}
 	h.ports[recipeID] = port
+	h.changes++
 }
 
 // forgetPort drops a recipe's cached port once it is no longer deployed -
@@ -175,11 +203,13 @@ func (h *Handlers) forgetPort(recipeID string) {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
 	delete(h.ports, recipeID)
+	h.changes++
 }
 
 // portFor returns the local host port a recipe is currently deployed on, if
-// this process deployed it (through HandleDeploy, in its current run) and
-// has not since undeployed it.
+// this process deployed it (through HandleDeploy, in its current run) or has
+// adopted it from Docker since, and has not since undeployed it. A pure read
+// of the cache: localPort is what asks Docker on a miss.
 func (h *Handlers) portFor(recipeID string) (int, bool) {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
@@ -187,10 +217,103 @@ func (h *Handlers) portFor(recipeID string) (int, bool) {
 	return p, ok
 }
 
+// changeCount reads changes, for a reconciliation pass to hand back to adopt.
+func (h *Handlers) changeCount() uint64 {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	return h.changes
+}
+
+// adopt fills in what this process does not know about a container from what
+// Docker says about it - the recovery a restarted souslet needs, since its
+// maps start empty while every model it ran before is still up. before is
+// changeCount() as read BEFORE states was fetched; if any deploy or undeploy
+// has landed since, states may be stale and the pass is dropped whole (see
+// changes). Only ever fills gaps: an entry HandleDeploy made is the same fact
+// Docker reports, and overwriting it would only open a window for a stale
+// answer to win.
+//
+// THE PORT IS ADOPTED ONLY FROM A RUNNING CONTAINER, because adopting it is
+// what makes the proxy path route there. A stopped or restarting container is
+// not listening, and its port may not even be its own any more: the allocator
+// before this fix tested ports only by binding, which a stopped container
+// does not do, so it could hand a stopped model's port to a later deploy -
+// routing to it would then deliver one model's requests to another. Such a
+// container is still reported by Snapshot (Phase says what it is) and its port
+// is still held back from new deploys (heldPorts); the first pass that finds
+// it running adopts it. Footprints are not adopted at all: Snapshot reads them
+// straight from the labels, which no pass can make stale.
+func (h *Handlers) adopt(states map[string]engine.ContainerState, before uint64) {
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	if h.changes != before {
+		return
+	}
+	for name, st := range states {
+		recipeID := strings.TrimPrefix(name, containerNamePrefix)
+		if _, known := h.ports[recipeID]; !known && st.Running() && st.HostPort > 0 {
+			if h.ports == nil {
+				h.ports = make(map[string]int)
+			}
+			h.ports[recipeID] = st.HostPort
+		}
+		// The model is adopted whatever the status: a stopped model is still
+		// deployed (Snapshot still reports it, sous-api still places it), and
+		// the restart policy will want its weights back.
+		if _, known := h.currentlyDeployed[recipeID]; !known {
+			if model := st.Labels[engine.ModelLabel]; model != "" {
+				if h.currentlyDeployed == nil {
+					h.currentlyDeployed = make(map[string]string)
+				}
+				h.currentlyDeployed[recipeID] = model
+			}
+		}
+	}
+}
+
+// localPort is the port a proxied request for recipeID is forwarded to. A
+// cache hit is answered from memory, as before. A miss - after a restart,
+// a model the last snapshot could not adopt because Docker was out of reach
+// or the container was not running yet - asks Docker once, adopts what it
+// says, and otherwise says precisely why there is nowhere to send the
+// request rather than dialling somewhere. A cache hit is never re-checked
+// against Docker: that would put a Docker call in front of every request.
+func (h *Handlers) localPort(ctx context.Context, recipeID string) (int, error) {
+	if p, ok := h.portFor(recipeID); ok {
+		return p, nil
+	}
+	before := h.changeCount()
+	states, err := h.Runtime.States(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("no local deployment for model %q known to this souslet, and Docker could not be asked: %w", recipeID, err)
+	}
+	h.adopt(states, before)
+	if p, ok := h.portFor(recipeID); ok {
+		return p, nil
+	}
+	// An exact name lookup in Docker's full list, never Docker's own name
+	// filter: that is a substring match, under which "sous-qwen" also finds
+	// "sous-qwen-big".
+	st, ok := states[engine.ContainerName(recipeID)]
+	switch {
+	case !ok:
+		return 0, fmt.Errorf("no local deployment for model %q", recipeID)
+	case !st.Running():
+		return 0, fmt.Errorf("model %q is %s on this node, not running", recipeID, st.Status)
+	case st.HostPort == 0:
+		return 0, fmt.Errorf("model %q publishes no host port on this node", recipeID)
+	}
+	// Running and published, yet not adopted: a deploy or undeploy landed
+	// while Docker was being read, so adopt dropped the pass. Docker's answer
+	// is still the freshest there is for THIS request; the next pass adopts.
+	return st.HostPort, nil
+}
+
 // footprintFor returns the zero recipe.Footprint for a recipe ID this
 // process has no record of - an honest "unknown" (e.g. a container that
 // predates this souslet process's current run, so it was never deployed
-// through HandleDeploy), never a fabricated figure.
+// through HandleDeploy), never a fabricated figure. Snapshot falls back to
+// the container's own labels for those.
 func (h *Handlers) footprintFor(recipeID string) recipe.Footprint {
 	h.footprintsMu.Lock()
 	defer h.footprintsMu.Unlock()
@@ -226,18 +349,61 @@ func (h *Handlers) bindHost() string {
 // DeployResult.HostPort stayed 0, the snapshot's DeploymentState.HostPort
 // stayed 0, and portFor returned 0, so the proxy path built
 // http://127.0.0.1:0/... and failed.
-func (h *Handlers) resolvePort(want int) (int, error) {
+//
+// Binding alone is not enough to call a port free here, though: see
+// heldPorts for the ports that are spoken for with nothing bound to them.
+func (h *Handlers) resolvePort(ctx context.Context, want int) (int, error) {
 	alloc := h.Ports
 	if alloc.Low == 0 && alloc.High == 0 {
 		alloc = ports.Allocator{Low: defaultPortLow, High: defaultPortHigh}
 	}
+	held, err := h.heldPorts(ctx)
+	if err != nil {
+		return 0, err
+	}
 	if want == 0 {
-		return alloc.Free(h.bindHost())
+		return alloc.FreeExcept(h.bindHost(), held)
+	}
+	if held[want] {
+		return 0, fmt.Errorf("port %d belongs to an existing model container on this node, running or not", want)
 	}
 	if !alloc.IsFree(h.bindHost(), want) {
 		return 0, fmt.Errorf("port %d is already in use on this node", want)
 	}
 	return want, nil
+}
+
+// heldPorts is every host port a model container on this node publishes or
+// was created to publish, WHATEVER ITS STATE, plus every port this process
+// has remembered. Asked of Docker at the moment of allocation, so it does not
+// depend on any earlier recovery pass having succeeded.
+//
+// The bind probe already skips a port a RUNNING container holds. It cannot see
+// one whose container is stopped or between restarts: nothing is bound, the
+// probe succeeds, and the port used to be handed straight to the next deploy -
+// leaving two containers wanting one port the moment Docker restarted the
+// first.
+//
+// A Docker error fails the deploy rather than falling back to binding alone:
+// it is exactly when Docker is out of reach that a restarting model's port
+// cannot be seen, and the deploy needs Docker to start its container anyway.
+func (h *Handlers) heldPorts(ctx context.Context) (map[int]bool, error) {
+	states, err := h.Runtime.States(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing this node's model containers, to keep clear of their ports: %w", err)
+	}
+	held := make(map[int]bool, len(states))
+	for _, st := range states {
+		if st.HostPort > 0 {
+			held[st.HostPort] = true
+		}
+	}
+	h.footprintsMu.Lock()
+	defer h.footprintsMu.Unlock()
+	for _, p := range h.ports {
+		held[p] = true
+	}
+	return held, nil
 }
 
 // HandleDeploy starts a container from a recipe sent whole on the wire, so
@@ -249,12 +415,16 @@ func (h *Handlers) resolvePort(want int) (int, error) {
 // and the Ports field's doc comment - and the resolved port, never the
 // requested one, is what gets remembered, reported back in DeployResult, and
 // carried in every subsequent NodeSnapshot.
+//
+// The container also carries the recipe's declared footprint and model repo
+// as labels (engine.BuildSpec), so a souslet restarted after this one can
+// read back what this one remembers below.
 func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.DeployResult {
 	var rec recipe.Recipe
 	if err := yaml.Unmarshal([]byte(cmd.RecipeYaml), &rec); err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: "invalid recipe: " + err.Error()}
 	}
-	port, err := h.resolvePort(int(cmd.WantPort))
+	port, err := h.resolvePort(ctx, int(cmd.WantPort))
 	if err != nil {
 		return &pb.DeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
 	}
@@ -282,6 +452,11 @@ func (h *Handlers) HandleDeploy(ctx context.Context, cmd *pb.DeployCommand) *pb.
 // so a redundant undeploy of something already gone reports success here
 // too, matching the "missing record is success" philosophy that made
 // single-node Sous's Undeploy idempotent.
+//
+// The forgets below cover an entry adopted from Docker exactly as they cover
+// one HandleDeploy made - the maps do not tell them apart - and bump changes,
+// so a recovery pass that read Docker before the Stop cannot write the
+// container back.
 func (h *Handlers) HandleUndeploy(ctx context.Context, cmd *pb.UndeployCommand) *pb.UndeployResult {
 	if err := h.Runtime.Stop(ctx, engine.ContainerName(cmd.RecipeId)); err != nil {
 		return &pb.UndeployResult{RecipeId: cmd.RecipeId, Error: err.Error()}
@@ -363,8 +538,22 @@ const containerNamePrefix = "sous-"
 // keeps no persistent store to refine against - an accepted simplification,
 // not a regression). A recipe ID with no cache entry (never deployed
 // through this handler in this process's current run - e.g. a container
-// left over from before souslet last restarted) reports 0, which is an
-// honest "unknown", not a claim that the deployment has no footprint.
+// left over from before souslet last restarted) reports the same declared
+// figures from the container's own labels (engine.BuildSpec writes them), or
+// 0 for a container created before those labels existed, which is an honest
+// "unknown", not a claim that the deployment has no footprint.
+//
+// HostPort is Docker's own answer (engine.ContainerState.HostPort) whatever
+// the Phase, since it says where the deployment is published, and Phase says
+// whether anything is listening there. The ports cache is only the fallback
+// for a container Docker gives no port for.
+//
+// The same Docker answer is then handed to adopt, which is how a restarted
+// souslet recovers its routing table: the snapshot sent on connect - before
+// any command or proxied request can arrive on that connection - is the
+// startup recovery, and every later tick retries it, so Docker being out of
+// reach at startup costs one snapshot interval, not a crash loop or a
+// redeploy.
 //
 // CachedWeightRepos comes from scanning ModelDir/hub directly (see
 // weights.go's scanWeightRepos, relocated from internal/larder/larder.go's
@@ -377,17 +566,22 @@ const containerNamePrefix = "sous-"
 // States() error above - a disk read glitch should not take a node's entire
 // heartbeat down.
 func (h *Handlers) Snapshot(ctx context.Context, nodeID string, poolGiB, reserveGiB float64) *pb.NodeSnapshot {
-	states, _ := h.Runtime.States(ctx)
+	before := h.changeCount()
+	states, err := h.Runtime.States(ctx)
+	if err == nil {
+		h.adopt(states, before)
+	}
 	deployments := make([]*pb.DeploymentState, 0, len(states))
 	for name, st := range states {
 		recipeID := strings.TrimPrefix(name, containerNamePrefix)
 		footprint := h.footprintFor(recipeID)
-		// HostPort comes from the same ports cache HandleDeploy fills in and
-		// the proxy path reads (portFor): the port this souslet actually
-		// resolved and started the container on. A recipe this process did
-		// not deploy in its current run reports 0, which is an honest
-		// "unknown" - the same convention WeightsGib/KvGib already use here.
-		port, _ := h.portFor(recipeID)
+		if footprint == (recipe.Footprint{}) {
+			footprint, _ = st.DeclaredFootprint() // zero when unlabelled: unknown, as before
+		}
+		port := st.HostPort
+		if port == 0 {
+			port, _ = h.portFor(recipeID)
+		}
 		deployments = append(deployments, &pb.DeploymentState{
 			RecipeId:   recipeID,
 			HostPort:   int32(port),
