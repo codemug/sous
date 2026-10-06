@@ -152,3 +152,44 @@ func TestModelDirIsBindMounted(t *testing.T) {
 		t.Fatalf("model dir not bind mounted: %v", s.Binds)
 	}
 }
+
+// The labels are what a restarted souslet reads a model's footprint and repo
+// back from: they are the only copy that survives the process.
+func TestSpecLabelsTheDeclaredFootprintAndModel(t *testing.T) {
+	r := recipe.Recipe{
+		ID: "qwen38", Kind: recipe.KindVLLM, Modality: recipe.ModalityText,
+		Model: "Inferact/Qwen3.8-27B-NVFP4", Image: "vllm/vllm-openai@sha256:abc",
+		Declared: recipe.Footprint{WeightsGiB: 24.87, KVGiB: 6.5},
+	}
+	s, err := BuildSpec(r, 18003, "/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		ModelLabel:   "Inferact/Qwen3.8-27B-NVFP4",
+		WeightsLabel: "24.87",
+		KVLabel:      "6.5",
+	}
+	for k, v := range want {
+		if s.Labels[k] != v {
+			t.Errorf("label %s = %q, want %q", k, s.Labels[k], v)
+		}
+	}
+	// HuggingFace repo ids are case-sensitive; a label keeps the case a
+	// container name would have to lose.
+	if s.Labels[ModelLabel] != r.Model {
+		t.Fatalf("model label %q does not round-trip %q", s.Labels[ModelLabel], r.Model)
+	}
+}
+
+func TestSpecWithNoModelCarriesNoModelLabel(t *testing.T) {
+	r := recipe.Recipe{ID: "kokoro", Kind: recipe.KindContainer,
+		Modality: recipe.ModalityTTS, Image: "ghcr.io/remsky/kokoro-fastapi-cpu:latest"}
+	s, err := BuildSpec(r, 8004, "/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Labels[ModelLabel]; ok {
+		t.Fatalf("a recipe with no model was labelled with one: %v", s.Labels)
+	}
+}

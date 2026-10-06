@@ -204,3 +204,12 @@ func TestBindsAndRestartPolicy(t *testing.T) {
 		t.Fatalf("want unless-stopped, got %q", hostCfg.RestartPolicy.Name)
 	}
 }
+
+func TestSpecLabelsReachTheContainerConfig(t *testing.T) {
+	s := Spec{Name: "n", Image: "i", ContainerPort: 8000,
+		Labels: map[string]string{ModelLabel: "Inferact/Qwen3.8-27B-NVFP4"}}
+	cfg, _ := toDockerConfig(s, "127.0.0.1", "cdi")
+	if cfg.Labels[ModelLabel] != "Inferact/Qwen3.8-27B-NVFP4" {
+		t.Fatalf("labels lost: %v", cfg.Labels)
+	}
+}

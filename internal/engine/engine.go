@@ -46,6 +46,7 @@ func toDockerConfig(s Spec, bindHost, gpuDriver string) (*container.Config, *con
 		Cmd:          s.Cmd,
 		Env:          s.Env,
 		ExposedPorts: nat.PortSet{cp: struct{}{}},
+		Labels:       s.Labels,
 	}
 	if len(s.Entrypoint) > 0 {
 		cfg.Entrypoint = s.Entrypoint

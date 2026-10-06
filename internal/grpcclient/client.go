@@ -377,17 +377,18 @@ func (c *Client) handleProxyRequest(ctx context.Context, stream pb.Souslet_Conne
 // already-committed, unmodified schema); this task cannot add one, so it
 // wires against the SAME "learn the model from the body" mechanism
 // internal/gateway/gateway.go's own Proxy already uses locally, and against
-// Handlers.portFor (backed by the port state HandleDeploy already tracks -
-// see handlers.go's rememberPort/forgetPort) rather than inventing a second
-// port-tracking mechanism.
+// Handlers.localPort (backed by the port state HandleDeploy already tracks -
+// see handlers.go's rememberPort/forgetPort - and, on a miss, by Docker's own
+// answer, which is what keeps a model reachable across a souslet restart)
+// rather than inventing a second port-tracking mechanism.
 func (c *Client) forwardToLocalContainer(ctx context.Context, head *pb.HTTPRequestHead, body []byte) (*http.Response, error) {
 	name := modelNameFromProxiedBody(head, body)
 	if name == "" {
 		return nil, fmt.Errorf("proxied request named no model")
 	}
-	port, ok := c.Handlers.portFor(name)
-	if !ok {
-		return nil, fmt.Errorf("no local deployment for model %q", name)
+	port, err := c.Handlers.localPort(ctx, name)
+	if err != nil {
+		return nil, err
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, head.GetPath())

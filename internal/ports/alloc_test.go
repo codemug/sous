@@ -69,3 +69,31 @@ func TestFreeReturnsLowestAvailable(t *testing.T) {
 		t.Fatalf("returned port %d is not actually free", got)
 	}
 }
+
+// A port a stopped or restarting container was created with is bound by
+// nothing until Docker starts it again, so the bind probe calls it free. The
+// caller knows better and says so.
+func TestFreeExceptSkipsPortsTheCallerKnowsAreTaken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	low := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() // free again: only the taken set keeps it from being chosen
+
+	a := Allocator{Low: low, High: low + 3}
+	got, err := a.FreeExcept("127.0.0.1", map[int]bool{low: true, low + 1: true})
+	if err != nil {
+		t.Skipf("no free port in the test window: %v", err)
+	}
+	if got == low || got == low+1 {
+		t.Fatalf("allocated %d, which the caller said is taken", got)
+	}
+}
+
+func TestFreeExceptErrorsWhenEveryPortIsTaken(t *testing.T) {
+	a := Allocator{Low: 41000, High: 41001}
+	if _, err := a.FreeExcept("127.0.0.1", map[int]bool{41000: true, 41001: true}); err == nil {
+		t.Fatal("a range with every port taken must error")
+	}
+}
